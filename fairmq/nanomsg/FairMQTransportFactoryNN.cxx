@@ -70,13 +70,12 @@ FairMQPollerPtr FairMQTransportFactoryNN::CreatePoller(const FairMQSocket& cmdSo
 
 void FairMQTransportFactoryNN::Shutdown()
 {
-    // nothing to do for nanomsg, transport is ready to be terminated any time.
+    int linger = 1000; // implement workaround for broken nanomsg LINGER option.
+    std::this_thread::sleep_for(std::chrono::milliseconds(linger));
 }
 
 void FairMQTransportFactoryNN::Terminate()
 {
-    int linger = 1000; // implement workaround for broken nanomsg LINGER option.
-    std::this_thread::sleep_for(std::chrono::milliseconds(linger));
     nn_term();
 }
 
