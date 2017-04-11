@@ -16,6 +16,8 @@
 #include "../options/FairMQProgOptions.h"
 
 #include <nanomsg/nn.h>
+#include <thread>
+#include <chrono>
 
 using namespace std;
 
@@ -73,6 +75,8 @@ void FairMQTransportFactoryNN::Shutdown()
 
 void FairMQTransportFactoryNN::Terminate()
 {
+    int linger = 1000; // implement workaround for broken nanomsg LINGER option.
+    std::this_thread::sleep_for(std::chrono::milliseconds(linger));
     nn_term();
 }
 
