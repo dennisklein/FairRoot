@@ -9,18 +9,11 @@
 #ifndef FAIR_MQ_EVENTMANAGER_H
 #define FAIR_MQ_EVENTMANAGER_H
 
-#include <memory>
 #include <mutex>
 #include <string>
-#include <tuple>
-#include <typeindex>
-#include <typeinfo>
-#include <unordered_map>
+#include <type_traits>
 #include <utility>
-#include <vector>
 
-#include <boost/any.hpp>
-#include <boost/functional/hash.hpp>
 #include <boost/signals2.hpp>
 
 namespace fair
@@ -48,7 +41,9 @@ struct Event
  *
  * Events can be emitted based on event type and callback signature.
  *
- * The event manager is thread-safe.
+ * The event manager is thread-safe, as long as different threads use different subscriber ids or (inclusive OR) callback signatures.
+ *
+ * Double subscriptions are not supported.
  */
 class EventManager
 {
@@ -59,80 +54,63 @@ class EventManager
     using Signal = boost::signals2::signal<void(typename E::KeyType, Args...)>;
 
     template<typename E, typename ...Args>
-    auto Subscribe(const std::string& subscriber, Callback<E, Args...> callback) -> void
+    static auto Subscribe(const std::string& subscriber, Callback<E, Args...> callback) -> void
     {
-        const std::type_index event_type_index{typeid(E)};
-        const std::type_index callback_type_index{typeid(Callback<E, Args...>)};
-        const auto signalsKey = std::make_pair(event_type_index, callback_type_index);
-        const auto connectionsKey = std::make_pair(subscriber, signalsKey);
-
-        const auto connection = GetSignal<E, Args...>(signalsKey)->connect(callback);
-
-        {
-            std::lock_guard<std::mutex> lock{fMutex};
-
-            if (fConnections.find(connectionsKey) != fConnections.end())
-            {
-                fConnections.at(connectionsKey).disconnect();
-                fConnections.erase(connectionsKey);
-            }
-            fConnections.insert({connectionsKey, connection});
-        }
+        Scribe<0, E, Args...>(true, subscriber, callback);
     }
 
     template<typename E, typename ...Args>
-    auto Unsubscribe(const std::string& subscriber) -> void
+    static auto Unsubscribe(const std::string& subscriber) -> void
     {
-        const std::type_index event_type_index{typeid(E)};
-        const std::type_index callback_type_index{typeid(Callback<E, Args...>)};
-        const auto signalsKey = std::make_pair(event_type_index, callback_type_index);
-        const auto connectionsKey = std::make_pair(subscriber, signalsKey);
-
-        std::lock_guard<std::mutex> lock{fMutex};
-
-        fConnections.at(connectionsKey).disconnect();
-        fConnections.erase(connectionsKey);
+        Scribe<0, E, Args...>(false, subscriber);
     }
 
     template<typename E, typename ...Args>
-    auto Emit(typename E::KeyType& key, Args&&... args) const -> void
+    static auto Emit(typename E::KeyType& key, Args&&... args) -> void
     {
-        const std::type_index event_type_index{typeid(E)};
-        const std::type_index callback_type_index{typeid(Callback<E, Args...>)};
-        const auto signalsKey = std::make_pair(event_type_index, callback_type_index);
-
-        (*GetSignal<E, Args...>(signalsKey))(key, std::forward<Args>(args)...);
+        GetSignal<E, Args...>()(key, std::forward<Args>(args)...);
     }
 
   private:
-    using SignalsKey   = std::pair<std::type_index, std::type_index>;
-                                // event          , callback
-    using SignalsValue = boost::any;
-    using SignalsMap   = std::unordered_map<SignalsKey, SignalsValue, boost::hash<SignalsKey>>;
-    mutable SignalsMap fSignals;
+    static constexpr int fkMaxSubscriptions{100};
 
-    using ConnectionsKey   = std::pair<std::string, SignalsKey>;
-                                    // subscriber , event/callback
-    using ConnectionsValue = boost::signals2::connection;
-    using ConnectionsMap   = std::unordered_map<ConnectionsKey, ConnectionsValue, boost::hash<ConnectionsKey>>;
-    ConnectionsMap fConnections;
-
-    mutable std::mutex fMutex;
-
-    template<typename E, typename ...Args>
-    auto GetSignal(const SignalsKey& key) const -> std::shared_ptr<Signal<E, Args...>>
+    // acts as a map from string -> (connection, E, Args) with linear search time
+    template<int N, typename E, typename ...Args>
+    static auto Scribe(bool Connecting, const std::string& subscriber, Callback<E, Args...> callback = {}) -> void
     {
-        std::lock_guard<std::mutex> lock{fMutex};
+        static std::string name{subscriber};
 
-        if (fSignals.find(key) == fSignals.end())
+        if (name == subscriber)
         {
-            // wrapper is needed because boost::signals2::signal is neither copyable nor movable
-            // and I don't know how else to insert it into the map
-            auto signal = std::make_shared<Signal<E, Args...>>();
-            fSignals.insert(std::make_pair(key, signal));
-        }
+            static boost::signals2::connection connection;
 
-        return boost::any_cast<std::shared_ptr<Signal<E, Args...>>>(fSignals.at(key));
+            if (Connecting)
+            {
+                assert(!connection.connected());
+                connection = GetSignal<E,Args...>().connect(callback);
+            }
+            else
+            {
+                assert(connection.connected());
+                connection.disconnect();
+            }
+        }
+        else
+        {
+            constexpr auto bounded = N > fkMaxSubscriptions ? fkMaxSubscriptions : N+1;
+            assert(N <= fkMaxSubscriptions);
+
+            Scribe<bounded, E, Args...>(Connecting, subscriber, callback);
+        }
+    }
+
+    // acts as map from (E, Args) -> Signal
+    template<typename E, typename ...Args>
+    static auto GetSignal() -> Signal<E, Args...>&
+    {
+        static Signal<E, Args...> signal;
+
+        return signal;
     }
 }; /* class EventManager */
 

@@ -41,7 +41,7 @@ TEST(EventManager, Basics)
 
     mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
     // double subscription will automatically unsubscribe first
-    mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
+    // mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
     mgr.Emit<TestEvent>(TestEvent::KeyType{"test"}, 42);
     ASSERT_EQ(call_counter, 1);
     ASSERT_EQ(value, 42);
