@@ -20,7 +20,6 @@ struct TestEvent : fair::mq::Event<std::string> {};
 
 TEST(EventManager, Basics)
 {
-    EventManager mgr{};
     int call_counter = 0;
     int call_counter2 = 0;
     int value = 0;
@@ -39,22 +38,20 @@ TEST(EventManager, Basics)
         }
     };
 
-    mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
-    // double subscription will automatically unsubscribe first
-    // mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
-    mgr.Emit<TestEvent>(TestEvent::KeyType{"test"}, 42);
+    EventManager::Subscribe<TestEvent, int>("foo_subscriber", callback);
+    EventManager::Emit<TestEvent>(TestEvent::KeyType{"test"}, 42);
     ASSERT_EQ(call_counter, 1);
     ASSERT_EQ(value, 42);
 
-    mgr.Unsubscribe<TestEvent, int>("foo_subscriber");
-    mgr.Emit<TestEvent>(TestEvent::KeyType{"test"}, 13);
+    EventManager::Unsubscribe<TestEvent, int>("foo_subscriber");
+    EventManager::Emit<TestEvent>(TestEvent::KeyType{"test"}, 13);
     ASSERT_EQ(call_counter, 1);
 
-    mgr.Subscribe<TestEvent, int>("foo_subscriber", callback);
-    mgr.Subscribe<TestEvent, string>("foo_subscriber", callback2);
+    EventManager::Subscribe<TestEvent, int>("foo_subscriber", callback);
+    EventManager::Subscribe<TestEvent, string>("foo_subscriber", callback2);
     // two different callbacks:
-    mgr.Emit<TestEvent>(TestEvent::KeyType{"test"}, 9000);
-    mgr.Emit<TestEvent>(TestEvent::KeyType{"test"}, string{"over 9000"});
+    EventManager::Emit<TestEvent>(TestEvent::KeyType{"test"}, 9000);
+    EventManager::Emit<TestEvent>(TestEvent::KeyType{"test"}, string{"over 9000"});
     ASSERT_EQ(call_counter, 2);
     ASSERT_EQ(value, 9000);
     ASSERT_EQ(call_counter2, 1);

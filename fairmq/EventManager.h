@@ -74,7 +74,7 @@ class EventManager
   private:
     static constexpr int fkMaxSubscriptions{100};
 
-    // acts as a map from string -> (connection, E, Args) with linear search time
+    // acts as a map from (subscriber, E, Args) -> connection with linear search time
     template<int N, typename E, typename ...Args>
     static auto Scribe(bool Connecting, const std::string& subscriber, Callback<E, Args...> callback = {}) -> void
     {
