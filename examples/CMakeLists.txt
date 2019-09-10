@@ -18,6 +18,7 @@ If(Geant3_FOUND)
     add_subdirectory(simulation/Tutorial1)
   EndIf()
   add_subdirectory(simulation/Tutorial2)
+  add_subdirectory(advanced/geane)
 
   add_subdirectory(simulation/Tutorial4)
   If(FairMQ_FOUND AND Boost_FOUND)
