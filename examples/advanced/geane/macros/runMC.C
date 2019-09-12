@@ -5,21 +5,23 @@
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
-int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT=true)
+
+enum class pdgCode : Int_t {
+  eplus = 11,
+  pion = 211,
+  proton = 2212
+};
+
+int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT = true)
 {
-
+  // -----   Parameters   ---------------------------------------------------
   TString dir = getenv("VMCWORKDIR");
-  TString tutdir = dir + "/simulation/geane";
 
-  TString tut_geomdir = dir + "/common/geometry";
-  gSystem->Setenv("GEOMPATH",tut_geomdir.Data());
+  TString tutGeomDir = dir + "/common/geometry";
+  gSystem->Setenv("GEOMPATH", tutGeomDir.Data());
 
-  TString tut_configdir = dir + "/common/gconfig";
-  gSystem->Setenv("CONFIG_DIR",tut_configdir.Data());
-
-  TString partName[] = {"pions","eplus","proton"};
-  Int_t   partPdgC[] = {    211,     11,    2212};
-  Int_t chosenPart  = 0;
+  TString tutConfigDir = dir + "/common/gconfig";
+  gSystem->Setenv("CONFIG_DIR",tutConfigDir.Data());
 
   Double_t momentum = 2.;
 
@@ -27,96 +29,77 @@ int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT=true)
 
   TString outDir = "./";
 
-  // Output file name
-  TString outFile = Form("%s/geane.mc.root",
-                         outDir.Data());
+  TString outFile = Form("%s/geane.mc.root", outDir.Data()); // Output file name
 
-  // Parameter file name
-  TString parFile = Form("%s/geane.par.root",
-			 outDir.Data());
+  TString parFile = Form("%s/geane.par.root", outDir.Data()); // Parameter file name
 
   TString geoFile = "geofile_" + mcEngine + "_full.root";
 
-  // In general, the following parts need not be touched
-  // ========================================================================
-
-  // ----    Debug option   -------------------------------------------------
   gDebug = 0;
-  // ------------------------------------------------------------------------
-
-  // -----   Timer   --------------------------------------------------------
-  TStopwatch timer;
-  timer.Start();
-  // ------------------------------------------------------------------------
 
   // -----   Create simulation run   ----------------------------------------
-  FairRunSim* run = new FairRunSim();
+  FairRunSim* run = new FairRunSim(); // singleton! FIXME
+  // FairRunSim* run = FairRunSim::Instance(); // should be this
   run->SetName(mcEngine);              // Transport engine
-  //  run->SetSimulationConfig(new FairVMCConfig());
+  // run->SetSimulationConfig(new FairVMCConfig());
   run->SetIsMT(isMT);                  // Multi-threading mode (Geant4 only)
-  run->SetSink(new FairRootFileSink(outFile));          // Output file
-  FairRuntimeDb* rtdb = run->GetRuntimeDb();
-  // ------------------------------------------------------------------------
+  run->SetSink(new FairRootFileSink(outFile));
 
   // -----   Create media   -------------------------------------------------
-  run->SetMaterials("media.geo");       // Materials
-  // ------------------------------------------------------------------------
+  run->SetMaterials("media.geo");
 
   // -----   Create geometry   ----------------------------------------------
-
-  FairModule* cave= new FairCave("CAVE");
+  unique_ptr<FairModule> cave(new FairCave("CAVE"));
   cave->SetGeometryFileName("cave_vacuum.geo");
-  run->AddModule(cave);
+  run->AddModule(cave.release());
 
-  FairTutGeaneDet*  det = new FairTutGeaneDet("TutGeaneDetector", kTRUE);
+  unique_ptr<FairTutGeaneDet> det(new FairTutGeaneDet("TutGeaneDetector", kTRUE));
   det->SetGeometryFileName("pixel.geo");
-//  det->SetMisalignDetector(kTRUE);
-  run->AddModule(det);
-  // ------------------------------------------------------------------------
+  run->AddModule(det.release());
 
   // -----   Create PrimaryGenerator   --------------------------------------
-  FairPrimaryGenerator* primGen = new FairPrimaryGenerator();
-  FairBoxGenerator* boxGen = new FairBoxGenerator(partPdgC[chosenPart], 1);
+  unique_ptr<FairPrimaryGenerator> primGen(new FairPrimaryGenerator());
 
-  boxGen->SetThetaRange (   theta,   theta+0.01);
-  boxGen->SetPRange     (momentum,momentum+0.01);
-  boxGen->SetPhiRange   (0.,360.);
-  boxGen->SetDebug(kTRUE);
+  unique_ptr<FairBoxGenerator> boxGen(new FairBoxGenerator(static_cast<Int_t>(pdgCode::pion), 1));
+  boxGen->SetThetaRange (   theta,    theta+0.01);
+  boxGen->SetPRange     (momentum, momentum+0.01);
+  boxGen->SetPhiRange   (0., 360.);
+  boxGen->SetDebug      (kTRUE);
 
-  primGen->AddGenerator(boxGen);
+  primGen->AddGenerator(boxGen.release());
 
-  FairConstField *fMagField=new FairConstField();
-  fMagField->SetField(0.,0.,20.); // values are in kG
-  fMagField->SetFieldRegion(-150, 150, -150, 150, -250, 250);// values are in cm (xmin,xmax,ymin,ymax,zmin,zmax)
-  run->SetField(fMagField);
+  run->SetGenerator(primGen.release());
 
-  run->SetGenerator(primGen);
-  // ------------------------------------------------------------------------
+  // -----   Create magnetic field   ----------------------------------------
+  unique_ptr<FairConstField> magField(new FairConstField());
+  magField->SetField      (0., 0., 20.); // values are in kG
+  magField->SetFieldRegion(-150, 150, -150, 150, -250, 250);// values are in cm (xmin,xmax,ymin,ymax,zmin,zmax)
+
+  run->SetField(magField.release());
 
   // -----   Initialize simulation run   ------------------------------------
-  UInt_t randomSeed = 123456;
-  TRandom3 random(randomSeed);
-  gRandom = &random;
-
   run->Init();
-  // ------------------------------------------------------------------------
 
   // -----   Runtime database   ---------------------------------------------
-
+  FairRuntimeDb* rtdb = run->GetRuntimeDb();
   Bool_t kParameterMerged = kTRUE;
-  FairParRootFileIo* parOut = new FairParRootFileIo(kParameterMerged);
+  unique_ptr<FairParRootFileIo> parOut(new FairParRootFileIo(kParameterMerged));
   parOut->open(parFile.Data());
-  rtdb->setOutput(parOut);
+  rtdb->setOutput(parOut.release());
   rtdb->saveOutput();
   rtdb->print();
-  // ------------------------------------------------------------------------
 
-  // -----   Start run   ----------------------------------------------------
+  // -----   Run simulation   -----------------------------------------------
+  gRandom->SetSeed(123456);
+  // gRandom.SetSeed(); // Use this to get a random seed
+
+  TStopwatch timer;
+  timer.Start();
   run->Run(nEvents);
-  run->CreateGeometryFile(geoFile);
-  // ------------------------------------------------------------------------
+  timer.Stop();
 
-  // -----   Finish   -------------------------------------------------------
+  // -----   Summary   -------------------------------------------------------
+  run->CreateGeometryFile(geoFile);
 
   cout << endl << endl;
 
@@ -128,7 +111,6 @@ int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT=true)
   cout << maxMemory;
   cout << "</DartMeasurement>" << endl;
 
-  timer.Stop();
   Double_t rtime = timer.RealTime();
   Double_t ctime = timer.CpuTime();
 
@@ -140,10 +122,9 @@ int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT=true)
   cout << endl << endl;
   cout << "Output file is "    << outFile << endl;
   cout << "Parameter file is " << parFile << endl;
-  cout << "Real time " << rtime << " s, CPU time " << ctime
-       << "s" << endl << endl;
+  cout << "Real time " << rtime << "s, CPU time "
+                       << ctime << "s" << endl << endl;
   cout << "Macro finished successfully." << endl;
 
-  // ------------------------------------------------------------------------
   return 0;
 }
