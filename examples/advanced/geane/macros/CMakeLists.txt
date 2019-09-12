@@ -1,30 +1,31 @@
- ################################################################################
- #    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    #
- #                                                                              #
- #              This software is distributed under the terms of the             # 
- #              GNU Lesser General Public Licence (LGPL) version 3,             #  
- #                  copied verbatim in the file "LICENSE"                       #
- ################################################################################
+################################################################################
+#    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    #
+#                                                                              #
+#              This software is distributed under the terms of the             #
+#              GNU Lesser General Public Licence (LGPL) version 3,             #
+#                  copied verbatim in the file "LICENSE"                       #
+################################################################################
+
 GENERATE_ROOT_TEST_SCRIPT(${CMAKE_CURRENT_SOURCE_DIR}/runMC.C)
 GENERATE_ROOT_TEST_SCRIPT(${CMAKE_CURRENT_SOURCE_DIR}/runGeane.C)
 GENERATE_ROOT_TEST_SCRIPT(${CMAKE_CURRENT_SOURCE_DIR}/runPull.C)
 
-Set(MaxTestTime 60)
+set(MaxTestTime 60)
+set(PassExpr "Macro finished successfully")
 
-Add_Test(runGeaneMC
-         ${CMAKE_BINARY_DIR}/examples/advanced/geane/macros/runMC.sh)
-Set_Tests_Properties(runGeaneMC PROPERTIES TIMEOUT ${MaxTestTime})
-Set_Tests_Properties(runGeaneMC PROPERTIES PASS_REGULAR_EXPRESSION "Macro finished successfully")
+add_test(runGeaneMC ${CMAKE_CURRENT_BINARY_DIR}/runMC.sh)
+set_tests_properties(runGeaneMC PROPERTIES
+  TIMEOUT ${MaxTestTime}
+  PASS_REGULAR_EXPRESSION ${PassExpr})
 
-Add_Test(runGeane
-         ${CMAKE_BINARY_DIR}/examples/advanced/geane/macros/runGeane.sh)
-Set_Tests_Properties(runGeane PROPERTIES DEPENDS runGeaneMC)
-Set_Tests_Properties(runGeane PROPERTIES TIMEOUT ${MaxTestTime})
-Set_Tests_Properties(runGeane PROPERTIES PASS_REGULAR_EXPRESSION "Macro finished successfully")
+add_test(runGeane ${CMAKE_CURRENT_BINARY_DIR}/runGeane.sh)
+set_tests_properties(runGeane PROPERTIES
+  DEPENDS runGeaneMC
+  TIMEOUT ${MaxTestTime}
+  PASS_REGULAR_EXPRESSION ${PassExpr})
 
-Add_Test(runGeanePull
-         ${CMAKE_BINARY_DIR}/examples/advanced/geane/macros/runPull.sh)
-Set_Tests_Properties(runGeanePull PROPERTIES DEPENDS runGeane)
-Set_Tests_Properties(runGeanePull PROPERTIES TIMEOUT ${MaxTestTime})
-Set_Tests_Properties(runGeanePull PROPERTIES PASS_REGULAR_EXPRESSION "Macro finished successfully")
-
+add_test(runGeanePull ${CMAKE_CURRENT_BINARY_DIR}/runPull.sh)
+set_tests_properties(runGeanePull PROPERTIES
+  DEPENDS runGeane
+  TIMEOUT ${MaxTestTime}
+  PASS_REGULAR_EXPRESSION ${PassExpr})
