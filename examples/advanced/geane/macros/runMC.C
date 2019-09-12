@@ -12,6 +12,34 @@ enum class pdgCode : Int_t {
   proton = 2212
 };
 
+void printSummary(TStopwatch& timer, const TString& parFile, const TString& outFile)
+{
+  cout << endl << endl;
+
+  // Extract the maximal used memory an add is as Dart measurement
+  // This line is filtered by CTest and the value send to CDash
+  FairSystemInfo sysInfo;
+  Float_t maxMemory=sysInfo.GetMaxMemory();
+  cout << "<DartMeasurement name=\"MaxMemory\" type=\"numeric/double\">";
+  cout << maxMemory;
+  cout << "</DartMeasurement>" << endl;
+
+  Double_t rtime = timer.RealTime();
+  Double_t ctime = timer.CpuTime();
+
+  Float_t cpuUsage=ctime/rtime;
+  cout << "<DartMeasurement name=\"CpuLoad\" type=\"numeric/double\">";
+  cout << cpuUsage;
+  cout << "</DartMeasurement>" << endl;
+
+  cout << endl << endl;
+  cout << "Output file is "    << outFile << endl;
+  cout << "Parameter file is " << parFile << endl;
+  cout << "Real time " << rtime << "s, CPU time "
+                       << ctime << "s" << endl << endl;
+  cout << "Macro finished successfully." << endl;
+}
+
 int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT = true)
 {
   // -----   Parameters   ---------------------------------------------------
@@ -101,30 +129,7 @@ int runMC(Int_t nEvents = 1000, TString mcEngine = "TGeant3", Bool_t isMT = true
   // -----   Summary   -------------------------------------------------------
   run->CreateGeometryFile(geoFile);
 
-  cout << endl << endl;
-
-  // Extract the maximal used memory an add is as Dart measurement
-  // This line is filtered by CTest and the value send to CDash
-  FairSystemInfo sysInfo;
-  Float_t maxMemory=sysInfo.GetMaxMemory();
-  cout << "<DartMeasurement name=\"MaxMemory\" type=\"numeric/double\">";
-  cout << maxMemory;
-  cout << "</DartMeasurement>" << endl;
-
-  Double_t rtime = timer.RealTime();
-  Double_t ctime = timer.CpuTime();
-
-  Float_t cpuUsage=ctime/rtime;
-  cout << "<DartMeasurement name=\"CpuLoad\" type=\"numeric/double\">";
-  cout << cpuUsage;
-  cout << "</DartMeasurement>" << endl;
-
-  cout << endl << endl;
-  cout << "Output file is "    << outFile << endl;
-  cout << "Parameter file is " << parFile << endl;
-  cout << "Real time " << rtime << "s, CPU time "
-                       << ctime << "s" << endl << endl;
-  cout << "Macro finished successfully." << endl;
+  printSummary(timer, parFile, outFile);
 
   return 0;
 }
