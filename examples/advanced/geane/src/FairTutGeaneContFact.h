@@ -1,31 +1,31 @@
 /********************************************************************************
  *    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
  *                                                                              *
- *              This software is distributed under the terms of the             * 
- *              GNU Lesser General Public Licence (LGPL) version 3,             *  
+ *              This software is distributed under the terms of the             *
+ *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
 #ifndef FAIRTUTGEANECONTFACT_H_
 #define FAIRTUTGEANECONTFACT_H_
 
-#include "FairContFact.h" // for FairContFact, etc
+#include "FairContFact.h"
 
-#include "Rtypes.h" // for ClassDef
+#include <Rtypes.h> // for ClassDef
 
-class FairParSet;
-
+// Factory for all FairTutGeane parameter containers
 class FairTutGeaneContFact : public FairContFact
 {
+  public:
+    FairTutGeaneContFact();
+
+    /// @return Transfers ownership of the returned object to the caller
+    FairParSet* createContainer(FairContainer*) override;
+
   private:
     void setAllContainers();
 
-  public:
-    FairTutGeaneContFact();
-    ~FairTutGeaneContFact()
-    {
-    }
-    FairParSet* createContainer(FairContainer*);
-    ClassDef(FairTutGeaneContFact, 0) // Factory for all FairTutGeane parameter containers
+    ClassDefOverride(FairTutGeaneContFact, 0)
 };
 
-#endif /* FAIRTESTDETECTORCONTFACT_H_ */
+#endif /* FAIRTUTGEANECONTFACT_H_ */
