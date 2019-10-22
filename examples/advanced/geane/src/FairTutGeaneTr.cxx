@@ -14,80 +14,32 @@
 
 #include "FairTutGeaneTr.h"
 
-#include "TClonesArray.h"
-#include "TGeant3TGeo.h"
-#include "TGeant3.h"
-#include "TVector3.h"
-#include "TTree.h"
-#include "TDatabasePDG.h"
-
 #include "FairRootManager.h"
 #include "FairLogger.h"
 #include "FairTrackParP.h"
 #include "FairTutGeanePoint.h"
+#include "FairGeanePro.h"
 
-// -----   Default constructor   -------------------------------------------
+#include <TGeant3TGeo.h>
+#include <TGeant3.h>
+#include <TVector3.h>
+#include <TTree.h>
+#include <TDatabasePDG.h>
+
 FairTutGeaneTr::FairTutGeaneTr()
     : FairTask("FairTutGeaneTr")
-    , gMC3(0)
-    , fPointArray(0)
-    , fPoint1(0)
-    , fPoint2(0)
-    , fTrackParIni(0)
-    , fTrackParFinal(0)
-    , fTrackParGeane(0)
-    , fTrackParWrong(0)
     , fEvent(0)
     , fPro(0)
-{ }
-// -------------------------------------------------------------------------
+{}
 
-// -----   Destructor   ----------------------------------------------------
-FairTutGeaneTr::~FairTutGeaneTr()
+InitStatus FairTutGeaneTr::Init()
 {
-  Reset();
-  if ( fTrackParIni ) {
-    fTrackParIni->Delete();
-    delete fTrackParIni;
-  }
-  if ( fTrackParGeane ) {
-    fTrackParGeane->Delete();
-    delete fTrackParGeane;
-  }
-  if ( fTrackParWrong ) {
-    fTrackParWrong->Delete();
-    delete fTrackParWrong;
-  }
-  if ( fTrackParFinal ) {
-    fTrackParFinal->Delete();
-    delete fTrackParFinal;
-  }
-}
-// -------------------------------------------------------------------------
+    auto iomgr(FairRootManager::Instance());
 
-// -----   Public method Init   --------------------------------------------
-InitStatus FairTutGeaneTr::Init() {
-
-     // Get RootManager
-    FairRootManager* ioman = FairRootManager::Instance();
-    if ( ! ioman ) {
-        LOG(error) << "FairTutGeaneTr::Init: RootManager not instantised!";
-        return kFATAL;
-    }
-
-    fTrackParIni = new TClonesArray("FairTrackParP");
-    ioman->Register("GeaneTrackIni","Geane", fTrackParIni, kTRUE);
-
-    fTrackParFinal = new TClonesArray("FairTrackParP");
-    ioman->Register("GeaneTrackFinal","Geane", fTrackParFinal, kTRUE);
-
-    fTrackParGeane = new TClonesArray("FairTrackParP");
-    ioman->Register("GeaneTrackPar","Geane", fTrackParGeane, kTRUE);
-
-    fTrackParWrong = new TClonesArray("FairTrackParP");
-    ioman->Register("GeaneTrackParWrongQ","Geane", fTrackParWrong, kTRUE);
-
-    // Get input array
+    ioman->Register("GeaneTrackIni", fTrackParIni, kTRUE);
+    ioman->Register("GeaneTrackFinal", fTrackParFinal, kTRUE);
+    ioman->Register("GeaneTrackPar", fTrackParGeane, kTRUE);
+    ioman->Register("GeaneTrackParWrongQ", fTrackParWrong, kTRUE);
 
     fPointArray = static_cast<TClonesArray*>(ioman->GetObject("FairTutGeanePoint"));
 
@@ -98,13 +50,12 @@ InitStatus FairTutGeaneTr::Init() {
     TVector3 planePoint(0.,0.,20.);
     TVector3 planeVectJ(1.,0.,0.);
     TVector3 planeVectK(0.,1.,0.);
-    
+
     fPro->PropagateToPlane(planePoint,planeVectJ,planeVectK);
 
     return kSUCCESS;
 
 }
-// -------------------------------------------------------------------------
 
 // -----   Public method Exec   --------------------------------------------
 void FairTutGeaneTr::Exec(Option_t*) {
@@ -115,30 +66,32 @@ void FairTutGeaneTr::Exec(Option_t*) {
     Int_t NoOfEntries=fPointArray->GetEntriesFast();
     LOG(debug) << "fPointArray has " << NoOfEntries << " entries";
     for (Int_t i=0; i<NoOfEntries; i++)	{
-        fPoint1 = static_cast<FairTutGeanePoint*>(fPointArray->At(i));
-        if ( fPoint1->GetZ() > 6. ) continue;
+        FairTutGeanePoint* point1;
+        FairTutGeanePoint* point2;
+        point1 = static_cast<FairTutGeanePoint*>(fPointArray->At(i));
+        if ( point1->GetZ() > 6. ) continue;
         LOG(debug) << "first loop for " << i << "from "<< NoOfEntries << " entries ";
-        Int_t trId=fPoint1->GetTrackID();
-        fPoint2=0;
+        Int_t trId=point1->GetTrackID();
+        point2=0;
         for (Int_t k=0; k<NoOfEntries; k++)	{
-            fPoint2 = static_cast<FairTutGeanePoint*>(fPointArray->At(k));
-            if ( fPoint2->GetZ() < 15. ) continue;
+            point2 = static_cast<FairTutGeanePoint*>(fPointArray->At(k));
+            if ( point2->GetZ() < 15. ) continue;
             LOG(debug) << "second loop for " << k;
-            if(fPoint2->GetTrackID()==trId) break;
+            if(point2->GetTrackID()==trId) break;
         }
 
-        if(fPoint2==0) break;
+        if(point2==0) break;
 
-        TVector3 StartPos   (fPoint1->GetX(),fPoint1->GetY(),fPoint1->GetZ());
+        TVector3 StartPos   (point1->GetX(),point1->GetY(),point1->GetZ());
         //    TVector3 StartPos(0.,0.,0.);
         TVector3 StartPosErr(0,0,0);
-        TVector3 StartMom   (fPoint1->GetPx(),fPoint1->GetPy(),fPoint1->GetPz());
+        TVector3 StartMom   (point1->GetPx(),point1->GetPy(),point1->GetPz());
         //    TVector3 StartMom(1.,0.1,0.1);
         TVector3 StartMomErr(0,0,0);
 
-        TVector3 EndPos   (fPoint2->GetX(),fPoint2->GetY(),fPoint2->GetZ());
+        TVector3 EndPos   (point2->GetX(),point2->GetY(),point2->GetZ());
         TVector3 EndPosErr(0,0,0);
-        TVector3 EndMom   (fPoint2->GetPx(),fPoint2->GetPy(),fPoint2->GetPz());
+        TVector3 EndMom   (point2->GetPx(),point2->GetPy(),point2->GetPz());
         TVector3 EndMomErr(0,0,0);
 
         Int_t PDGCode= -13;

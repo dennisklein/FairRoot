@@ -15,53 +15,47 @@
 #ifndef FAIRTUTGEANETR_H
 #define FAIRTUTGEANETR_H 1
 
+class FairGeanePro;
+class FairTutGeanePoint;
 
 #include "FairTask.h"
-#include "TVector3.h"
-#include "FairGeanePro.h"
 
-class TGeant3;
-class TClonesArray;
-class TTree;
-class TFile;
-class FairTutGeanePoint;
+#include <memory>
+#include <Rtypes.h>
+#include <vector>
 
 class FairTutGeaneTr : public FairTask
 {
  public:
-  /** Default constructor **/
   FairTutGeaneTr();
-
-  /** Destructor **/
+  FairTutGeaneTr(const FairTutGeaneTr&) = delete;
+  FairTutGeaneTr& operator=(const FairTutGeaneTr&) = delete;
+  FairTutGeaneTr(FairTutGeaneTr&&) = delete;
+  FairTutGeaneTr& operator=(FairTutGeaneTr&&) = delete;
   ~FairTutGeaneTr();
 
-  /** Virtual method Init **/
-  virtual InitStatus Init();
+  InitStatus Init() override;
 
-  /** Virtual method Exec **/
-  virtual void Exec(Option_t* opt);
+  void Exec(Option_t* opt) override;
  private:
   void Reset();
 
   /** Finish at the end of run **/
-  virtual void Finish();
+  void Finish() override;
 
   /** Input array of Points **/
-  TClonesArray* fPointArray;
-  FairTutGeanePoint	 *fPoint1;
-  FairTutGeanePoint	 *fPoint2;
+  std::vector<FairTutGeanePoint> fPointArray;
 
   /** Output array of Hits **/
-  TClonesArray* fTrackParIni;   // initial MC track parameters
-  TClonesArray* fTrackParFinal; // final MC track parameters
-  TClonesArray* fTrackParGeane; // calculated track parameters
-  TClonesArray* fTrackParWrong; // demonstrate effect of wrong charge
+  std::vector<FairTrackParP> fTrackParIni;   // initial MC track parameters
+  std::vector<FairTrackParP> fTrackParFinal; // final MC track parameters
+  std::vector<FairTrackParP> fTrackParGeane; // calculated track parameters
+  std::vector<FairTrackParP> fTrackParWrong; // demonstrate effect of wrong charge
 
-  TGeant3 *gMC3;
   Int_t fEvent;
-  FairGeanePro *fPro;
+  std::unique_ptr<FairGeanePro> fPro;
 
-  ClassDef(FairTutGeaneTr,1);
+  ClassDefOverride(FairTutGeaneTr, 1);
 };
 
 #endif //FAIRTUTGEANETR_H

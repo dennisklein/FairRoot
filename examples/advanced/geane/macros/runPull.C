@@ -6,6 +6,8 @@
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
 
+#include <vector>
+
 int runPull(bool drawHist = false)
 {
   gROOT->Reset();
@@ -14,10 +16,12 @@ int runPull(bool drawHist = false)
   TFile f("geane.cal.root");
   TTree* simtree = static_cast<TTree*>(f.Get("cbmsim"));
 
-  TClonesArray* trackParGeane(nullptr);
-  TClonesArray* trackParFinal(nullptr);
-  simtree->SetBranchAddress("GeaneTrackPar",   &trackParGeane);
-  simtree->SetBranchAddress("GeaneTrackFinal", &trackParFinal);
+  std::vector<FairTrackParP>  trackParGeane;
+  std::vector<FairTrackParP>* trackParGeanePtr; // required by TTree::SetBranchAddress
+  std::vector<FairTrackParP>  trackParFinal;
+  std::vector<FairTrackParP>* trackParFinalPtr; // required by TTree::SetBranchAddress
+  simtree->SetBranchAddress("GeaneTrackPar",   &trackParGeanePtr);
+  simtree->SetBranchAddress("GeaneTrackFinal", &trackParFinalPtr);
 
   TH1F hQP("hQP","charge over momentum",100,-10.,10.);
   TH1F hX ("hX", "position X",          100,-10,10);
@@ -31,16 +35,18 @@ int runPull(bool drawHist = false)
 
   for (Int_t i = 0; i < nEvents; ++i) {
     simtree->GetEntry(i);
-    for (Int_t k = 0; k < trackParGeane->GetEntriesFast(); k++)	{
-      auto trkG(static_cast<FairTrackParP*>(trackParGeane->At(k)));
-      auto trkF(static_cast<FairTrackParP*>(trackParFinal->At(k)));
-      if(trkF && trkG) {
-        if(trkG->GetDQp()) hQP.Fill( ( trkF->GetQp() - trkG->GetQp() ) / trkG->GetDQp() );
-        if(trkG->GetDX() ) hX .Fill( ( trkF->GetX()  - trkG->GetX()  ) / trkG->GetDX()  );
-        if(trkG->GetDY() ) hY .Fill( ( trkF->GetY()  - trkG->GetY()  ) / trkG->GetDY()  );
-        if(trkG->GetDPx()) hPx.Fill( ( trkF->GetPx() - trkG->GetPx() ) / trkG->GetDPx() );
-        if(trkG->GetDPy()) hPy.Fill( ( trkF->GetPy() - trkG->GetPy() ) / trkG->GetDPy() );
-        if(trkG->GetDPz()) hPz.Fill( ( trkF->GetPz() - trkG->GetPz() ) / trkG->GetDPz() );
+    for (Int_t k = 0; k < trackParGeane.size(); ++k)	{
+      try {
+        auto trkG(trackParGeane.at(k));
+        auto trkF(trackParFinal.at(k));
+        if(trkG.GetDQp()) hQP.Fill( ( trkF.GetQp() - trkG.GetQp() ) / trkG.GetDQp() );
+        if(trkG.GetDX() ) hX .Fill( ( trkF.GetX()  - trkG.GetX()  ) / trkG.GetDX()  );
+        if(trkG.GetDY() ) hY .Fill( ( trkF.GetY()  - trkG.GetY()  ) / trkG.GetDY()  );
+        if(trkG.GetDPx()) hPx.Fill( ( trkF.GetPx() - trkG.GetPx() ) / trkG.GetDPx() );
+        if(trkG.GetDPy()) hPy.Fill( ( trkF.GetPy() - trkG.GetPy() ) / trkG.GetDPy() );
+        if(trkG.GetDPz()) hPz.Fill( ( trkF.GetPz() - trkG.GetPz() ) / trkG.GetDPz() );
+      } catch (const std::out_of_range& ex) {
+        break;
       }
     }
   }
