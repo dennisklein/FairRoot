@@ -23,6 +23,7 @@ set(sources
   FairTimeStampPointDraw.cxx
   FairXMLNode.cxx
   FairEveAnimationButton.cxx
+  FairEveTransparencyControl.cxx
   tracks/FairEveCut.cxx
   tracks/FairEveGeoTracks.cxx
   tracks/FairEveGeoTracksEditor.cxx

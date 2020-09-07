@@ -9,9 +9,11 @@
 #include "FairEventManagerEditor.h"
 
 #include "FairEventManager.h"   // for FairEventManager
+#include "FairEveTransparencyControl.h"
 #include "FairRootManager.h"    // for FairRootManager
 #include "FairRun.h"
 #include "FairRunAna.h"   // for FairRunAna
+#include "FairSmartPointer.h"
 #include "FairTask.h"
 
 #include <RtypesCore.h>
@@ -52,16 +54,10 @@ FairEventManagerEditor::FairEventManagerEditor(const TGWindow* p,
     , fObject(0)
     , fManager(FairEventManager::Instance())
     , fCurrentEvent(0)
-    , fGlobalTransparency(nullptr)
     , fEventTime(nullptr)
     , fScreenshotOpt(nullptr)
 {
     Init();
-}
-
-void FairEventManagerEditor::SwitchTransparency(Bool_t transparency)
-{
-    fManager->SwitchTransparency(transparency, fGlobalTransparency->GetIntNumber());
 }
 
 void FairEventManagerEditor::SwitchBackground(Bool_t light_background) { fManager->SwitchBackground(light_background); }
@@ -134,24 +130,10 @@ void FairEventManagerEditor::Init()
 
     //=============== graphics =============================
     TGVerticalFrame* scene_conf = CreateEditorTabSubFrame("Graphics");
-    TGHorizontalFrame* transparency_frame = new TGHorizontalFrame(scene_conf);
-    TGCheckButton* Transparency = new TGCheckButton(transparency_frame, "Global transparency");
-    transparency_frame->AddFrame(Transparency, new TGLayoutHints(kLHintsLeft | kLHintsExpandX, 5, 5, 1, 1));
-    Transparency->Connect("Toggled(Bool_t)", this->ClassName(), this, "SwitchTransparency(Bool_t)");
 
-    fGlobalTransparency = new TGNumberEntry(transparency_frame,
-                                            0.,
-                                            6,
-                                            -1,
-                                            TGNumberFormat::kNESInteger,
-                                            TGNumberFormat::kNEANonNegative,
-                                            TGNumberFormat::kNELLimitMinMax,
-                                            0,
-                                            100);
-    fGlobalTransparency->SetIntNumber(80);
-    transparency_frame->AddFrame(fGlobalTransparency, new TGLayoutHints(kLHintsRight, 1, 1, 1, 1));
-    fGlobalTransparency->Connect("ValueSet(Long_t)", "FairEventManagerEditor", this, "SwitchTransparency(Bool_t)");
-    scene_conf->AddFrame(transparency_frame);
+    auto transparency(fair::make_unique<FairEveTransparencyControl>(scene_conf, "Global transparency"));
+    transparency->Connect("SetSignal(Int_t)", fManager->ClassName(), fManager, "SetTransparency(Int_t)");
+    scene_conf->AddFrame(transparency.release(), new TGLayoutHints(kLHintsNormal, 5, 5, 1, 1));
 
     TGCheckButton* backgroundButton = new TGCheckButton(scene_conf, "Light background");
     scene_conf->AddFrame(backgroundButton, new TGLayoutHints(kLHintsRight | kLHintsExpandX, 5, 5, 1, 1));

@@ -38,7 +38,6 @@ class FairEventManagerEditor : public TGedFrame
     TObject* fObject;
     FairEventManager* fManager;
     TGNumberEntry* fCurrentEvent;
-    TGNumberEntry* fGlobalTransparency;
     TGLabel* fEventTime;
     TGComboBox* fScreenshotOpt;
     FairEveAnimationButton* fAnimation;
@@ -54,11 +53,6 @@ class FairEventManagerEditor : public TGedFrame
     virtual void SelectEvent();
     virtual void StartAnimation();
     virtual void Init();
-    /**
-     *
-     * @param transparency true if set hight transparency for detectors
-     */
-    void SwitchTransparency(Bool_t transparency);
     /**
      *
      * @param light_background true if use white background

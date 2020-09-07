@@ -35,6 +35,7 @@
 #pragma link C++ class FairEveTrack;
 #pragma link C++ class FairEveTracks;
 #pragma link C++ class FairGeoTracksDraw;
+#pragma link C++ class FairEveTransparencyControl;
 #pragma link C++ class FairEveAnimationButton;
 
 #endif

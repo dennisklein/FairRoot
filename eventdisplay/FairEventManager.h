@@ -90,7 +90,7 @@ class FairEventManager : public TEveEventManager
      * @param state high transparency enabled if true
      * @param trans global transparency (used if stat == true)
      */
-    virtual void SwitchTransparency(Bool_t state, Int_t trans);
+    virtual void SetTransparency(Int_t trans);
     /**
      * switch background color
      * @param light use white if true

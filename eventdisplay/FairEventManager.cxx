@@ -460,21 +460,12 @@ Int_t FairEventManager::StringToColor(TString color) const
     }
 }
 
-void FairEventManager::SwitchTransparency(Bool_t state, Int_t trans)
+void FairEventManager::SetTransparency(Int_t trans)
 {
-    if (state) {   // high transparency
-        Int_t vis_level = gGeoManager->GetVisLevel();
-        TGeoNode *top = gGeoManager->GetTopNode();
-        SetTransparencyForLayer(top, vis_level, trans);
-    } else {   // normal transparency
-        if (fXMLConfig != "") {
-            LoadXMLSettings();
-        } else {
-            Int_t vis_level = gGeoManager->GetVisLevel();
-            TGeoNode *top = gGeoManager->GetTopNode();
-            SetTransparencyForLayer(top, vis_level, 0);
-        }
+    if (fXMLConfig != "") {
+        LoadXMLSettings();
     }
+    SetTransparencyForLayer(gGeoManager->GetTopNode(), gGeoManager->GetVisLevel(), trans);
     if (gEve->GetGlobalScene()->GetRnrState()) {
         gEve->GetGlobalScene()->SetRnrState(kFALSE);
         gEve->GetGlobalScene()->SetRnrState(kTRUE);
