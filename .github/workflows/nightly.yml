@@ -1,0 +1,29 @@
+name: Nightly
+
+on:
+  schedule:
+    # timezone is UTC
+    - cron:  '45 23 * * *'
+
+jobs:
+  reset-nightly-branches:
+    name: Reset nightly branches
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [master, dev]
+    env:
+      TARGET: '${{ matrix.target }}'
+      FQTARGET: 'origin/${{ matrix.target }}'
+      NIGHTLY: 'nightly_{{ matrix.target }}'
+    steps:
+      - name: Checkout the ${{ env.NIGHTLY }} branch
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          ref: ${{ env.NIGHTLY }}
+      - run: date
+      - name: Reset to the ${{ env.FQTARGET }} branch
+        run: git reset --hard ${{ env.FQTARGET }}
+      - name: Push ${{ env.NIGHTLY }} branch to origin remote
+        run: git push --force origin ${{ env.TARGET }}
