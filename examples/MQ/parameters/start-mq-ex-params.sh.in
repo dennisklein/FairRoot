@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CLIENT="ex-params-client"
+CLIENT="ex-mq-params-client"
 CLIENT+=" --id parmq-client"
 CLIENT+=" --channel-config name=data,type=req,method=connect,address=tcp://localhost:5005,rateLogging=0"
 xterm -geometry 80x23+0+0 -hold -e @CMAKE_CURRENT_BINARY_DIR@/$CLIENT &

@@ -6,6 +6,8 @@
 #                  copied verbatim in the file "LICENSE"                       #
 ################################################################################
 
+include(FairRootExamples)
+
 add_subdirectory(common/passive)
 add_subdirectory(common/mcstack)
 
