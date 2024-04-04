@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -61,26 +61,6 @@ class FairTestDetectorDigi : public FairTimeStamp
                     if (fZ == myDigi->GetZ()) {
                         return true;
                     }
-        }
-        return false;
-    }
-
-    virtual bool operator<(const FairTestDetectorDigi& myDigi) const
-    {
-        if (fX < myDigi.GetX()) {
-            return true;
-        } else if (fX > myDigi.GetX()) {
-            return false;
-        }
-        if (fY < myDigi.GetY()) {
-            return true;
-        } else if (fY > myDigi.GetY()) {
-            return false;
-        }
-        if (fZ < myDigi.GetZ()) {
-            return true;
-        } else if (fZ > myDigi.GetZ()) {
-            return false;
         }
         return false;
     }
