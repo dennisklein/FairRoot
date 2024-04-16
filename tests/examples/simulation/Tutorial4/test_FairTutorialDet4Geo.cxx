@@ -8,7 +8,6 @@
 
 #include <FairTutorialDet4Geo.h>
 #include <catch2/catch_test_macros.hpp>
-
 #include <string>
 
 TEST_CASE("FairTutorialDet4Geo")
@@ -47,8 +46,6 @@ TEST_CASE("FairTutorialDet4Geo")
         REQUIRE(retVal == "tutdet100");
     }
 
-    geo.getModNumInMod("tutdet1");
-
     SECTION("getModNumInMod")
     {
         REQUIRE(geo.getModNumInMod("tutdet1") == 0);
@@ -57,8 +54,7 @@ TEST_CASE("FairTutorialDet4Geo")
 
         REQUIRE(geo.getModNumInMod("tutdet9") == 8);
 
-//      The current code doesn't work for numbers with more than one digit
+        //      The current code doesn't work for numbers with more than one digit
         REQUIRE(geo.getModNumInMod("tutdet10") == 0);
     }
-
 }

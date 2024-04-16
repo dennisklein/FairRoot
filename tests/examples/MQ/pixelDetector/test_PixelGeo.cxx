@@ -8,7 +8,6 @@
 
 #include <PixelGeo.h>
 #include <catch2/catch_test_macros.hpp>
-
 #include <string>
 
 TEST_CASE("PixelGeo")
@@ -47,8 +46,6 @@ TEST_CASE("PixelGeo")
         REQUIRE(retVal == "Pixel100");
     }
 
-    geo.getModNumInMod("Pixel1");
-
     SECTION("getModNumInMod")
     {
         REQUIRE(geo.getModNumInMod("Pixel1") == 0);
@@ -57,8 +54,7 @@ TEST_CASE("PixelGeo")
 
         REQUIRE(geo.getModNumInMod("Pixel9") == 8);
 
-//      The current code doesn't work for numbers with more than one digit
+        //      The current code doesn't work for numbers with more than one digit
         REQUIRE(geo.getModNumInMod("Pixel10") == 0);
     }
-
 }
