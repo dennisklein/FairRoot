@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
+# Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
 #                                                                              #
 #              This software is distributed under the terms of the             #
 #              GNU Lesser General Public Licence (LGPL) version 3,             #
@@ -17,3 +17,4 @@ add_subdirectory(examples/simulation/Tutorial4)
 add_subdirectory(examples/advanced/Tutorial3)
 add_subdirectory(examples/advanced/propagator)
 add_subdirectory(examples/MQ/pixelDetector)
+add_subdirectory(geobase)

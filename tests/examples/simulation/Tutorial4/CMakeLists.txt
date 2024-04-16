@@ -1,5 +1,5 @@
 ################################################################################
-#   Copyright (C) 2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH     #
+#   Copyright (C) 2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH     #
 #                                                                              #
 #              This software is distributed under the terms of the             #
 #              GNU Lesser General Public Licence (LGPL) version 3,             #
@@ -13,5 +13,9 @@ set(exe "${test_prefix}_${suite}")
 add_executable(${exe}
   test_FairTutorialDet4Geo.cxx
 )
-target_link_libraries(${exe} PRIVATE FairRoot::ExSimulation4 Catch2::Catch2WithMain)
+target_link_libraries(${exe} PRIVATE
+  FairRoot::ExSimulation4
+  Catch2::Catch2WithMain
+  FairRoot::GeoBase_checks
+)
 catch_discover_tests(${exe} TEST_PREFIX "${suite}::")
