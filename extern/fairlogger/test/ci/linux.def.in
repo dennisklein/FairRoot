@@ -1,0 +1,8 @@
+Bootstrap: docker
+From: @ARGS_OS@:@ARGS_VERSION@
+
+%files
+    @CMAKE_CURRENT_SOURCE_DIR@/setup-@ARGS_OS@.sh /setup.sh
+
+%post
+    bash /setup.sh @ARGS_VERSION@
