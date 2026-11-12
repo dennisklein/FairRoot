@@ -1,13 +1,35 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairFileSource.h"
+#include "FairParAsciiFileIo.h"
+#include "FairParRootFileIo.h"
+#include "FairRootFileSink.h"
+#include "FairRunAna.h"
+#include "FairRuntimeDb.h"
+#include "FairSystemInfo.h"
+#include "FairTutorialDet2CustomTask.h"
+#include "FairTutorialDet2DigiPar.h"
+#include "FairTutorialDet2Digitizer.h"
+
+#include <TStopwatch.h>
+#include <TString.h>
+#include <TSystem.h>
+#include <iostream>
+#include <memory>
+#endif
+
+using std::cout;
+using std::endl;
+
 void create_digis()
 {
-
     TStopwatch timer;
     timer.Start();
 
@@ -30,7 +52,7 @@ void create_digis()
     FairFileSource* fFileSource = new FairFileSource(inFile);
     fRun->SetSource(fFileSource);
 
-    fRun->SetSink(new FairRootFileSink(outFile));
+    fRun->SetSink(std::make_unique<FairRootFileSink>(outFile));
 
     // Init Simulation Parameters from Root File
     FairRuntimeDb* rtdb = fRun->GetRuntimeDb();
@@ -60,7 +82,8 @@ void create_digis()
 
     rtdb->getContainer("FairTutorialDet2DigiPar")->print();
 
-    FairTutorialDet2DigiPar* DigiPar = (FairTutorialDet2DigiPar*)rtdb->getContainer("FairTutorialDet2DigiPar");
+    auto DigiPar = dynamic_cast<FairTutorialDet2DigiPar*>(rtdb->getContainer("FairTutorialDet2DigiPar"));
+    assert(DigiPar);
 
     DigiPar->setChanged();
     DigiPar->setInputVersion(fRun->GetRunId(), 1);

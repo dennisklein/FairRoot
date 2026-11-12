@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -16,15 +16,11 @@
 
 #include "RootSerializer.h"
 
-#include <FairMQLogger.h>
-#include <TFile.h>
 #include <TObject.h>
-#include <TTree.h>
 #include <cstdlib>
+#include <fairlogger/Logger.h>
 #include <memory>
 #include <vector>
-
-using namespace std;
 
 FairMQPixelFileSink::FairMQPixelFileSink()
     : FairMQDevice()
@@ -33,12 +29,6 @@ FairMQPixelFileSink::FairMQPixelFileSink()
     , fFileName()
     , fTreeName()
     , fFileOption()
-    , fFlowMode(false)
-    , fWrite(false)
-    , fOutFile(nullptr)
-    , fTree(nullptr)
-    , fNObjects(0)
-    , fOutputObjects(new TObject*[1000])
 {}
 
 void FairMQPixelFileSink::InitTask()
@@ -51,48 +41,47 @@ void FairMQPixelFileSink::InitTask()
     fFileOption = "RECREATE";
     fTreeName = "cbmsim";
 
-    if (::getenv("DDS_SESSION_ID")) {
-        std::string DDS_SESSION_ID = ::getenv("DDS_SESSION_ID");
+    if (const char* dds_session_env = ::getenv("DDS_SESSION_ID")) {
+        std::string DDS_SESSION_ID{dds_session_env};
         if (fFileName.length() > 5) {
             DDS_SESSION_ID = "." + DDS_SESSION_ID + ".root";
             fFileName.replace(fFileName.length() - 5, 5, DDS_SESSION_ID.c_str());
         }
     }
 
-    fOutFile = TFile::Open(fFileName.c_str(), fFileOption.c_str());
+    fOutFile.reset(TFile::Open(fFileName.c_str(), fFileOption.c_str()));
 
     OnData(fInputChannelName, &FairMQPixelFileSink::StoreData);
 }
 
-bool FairMQPixelFileSink::StoreData(FairMQParts& parts, int /*index*/)
+bool FairMQPixelFileSink::StoreData(fair::mq::Parts& parts, int /*index*/)
 {
     bool creatingTree = false;
-    std::vector<TObject*> tempObjects;
+    const auto numParts = parts.Size();
+    std::vector<std::unique_ptr<TObject>> cleanup;
+    std::vector<TObject*> objectsForBranches;
+
     if (!fTree) {
         creatingTree = true;
-        fTree = new TTree(fTreeName.c_str(), "/cbmout");
+        fTree = std::make_unique<TTree>(fTreeName.c_str(), "/cbmout");
     }
 
-    for (int ipart = 0; ipart < parts.Size(); ipart++) {
-        fOutputObjects[ipart] = nullptr;
-        Deserialize<RootSerializer>(*parts.At(ipart), fOutputObjects[ipart]);
-        tempObjects.push_back(fOutputObjects[ipart]);
-        if (creatingTree)
-            fTree->Branch(tempObjects.back()->GetName(), tempObjects.back()->ClassName(), &fOutputObjects[ipart]);
-        fTree->SetBranchAddress(tempObjects.back()->GetName(), &fOutputObjects[ipart]);
+    cleanup.reserve(numParts);
+    objectsForBranches.resize(numParts, nullptr);
+    for (decltype(parts.Size()) ipart = 0; ipart < numParts; ipart++) {
+        auto curobj = RootSerializer().DeserializeTo<TObject>(*parts.At(ipart));
+        objectsForBranches.at(ipart) = curobj.get();
+        if (creatingTree) {
+            fTree->Branch(curobj->GetName(), curobj->ClassName(), &objectsForBranches[ipart]);
+        }
+        fTree->SetBranchAddress(curobj->GetName(), &objectsForBranches[ipart]);
+        cleanup.emplace_back(std::move(curobj));
     }
     //   LOG(INFO) << "Finished branches";
     fTree->Fill();
 
-    for (unsigned int ipart = 0; ipart < tempObjects.size(); ipart++) {
-        if (tempObjects[ipart]) {
-            delete tempObjects[ipart];
-        }
-    }
-    tempObjects.clear();
-
-    if (fAckChannelName != "") {
-        unique_ptr<FairMQMessage> msg(NewMessage());
+    if (!fAckChannelName.empty()) {
+        auto msg(NewMessage());
         Send(msg, fAckChannelName);
     }
     return true;
@@ -102,6 +91,8 @@ void FairMQPixelFileSink::ResetTask()
 {
     if (fTree) {
         fTree->Write();
+        // Delete the tree, because we're going to close the file
+        fTree.reset();
     }
 
     if (fOutFile) {
@@ -111,13 +102,4 @@ void FairMQPixelFileSink::ResetTask()
     }
 }
 
-FairMQPixelFileSink::~FairMQPixelFileSink()
-{
-    if (fTree) {
-        delete fTree;
-    }
-
-    if (fOutFile) {
-        delete fOutFile;
-    }
-}
+FairMQPixelFileSink::~FairMQPixelFileSink() = default;

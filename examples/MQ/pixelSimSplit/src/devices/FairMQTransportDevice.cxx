@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *         GNU Lesser General Public Licence version 3 (LGPL) version 3,        *
@@ -19,13 +19,10 @@
 #include "FairMCSplitEventHeader.h"
 #include "FairModule.h"
 #include "FairParSet.h"
-#include "FairRunSim.h"
 #include "FairRuntimeDb.h"
 #include "FairTask.h"
 #include "RootSerializer.h"
 
-#include <FairMQLogger.h>
-#include <FairMQMessage.h>
 #include <TClonesArray.h>
 #include <TCollection.h>
 #include <TList.h>
@@ -34,10 +31,9 @@
 #include <TVirtualMC.h>
 #include <cstring>   // for strcmp
 #include <dlfcn.h>   // dlopen
+#include <fairlogger/Logger.h>
 #include <iostream>
 #include <vector>
-
-using namespace std;
 
 FairMQTransportDevice::FairMQTransportDevice()
     : FairMQRunDevice()
@@ -49,7 +45,6 @@ FairMQTransportDevice::FairMQTransportDevice()
     , fVMC(nullptr)
     , fStack(nullptr)
     , fMCApplication(nullptr)
-    , fRunSim(nullptr)
     , fNofEvents(1)
     , fTransportName("TGeant3")
     , fMaterialsFile("")
@@ -59,7 +54,6 @@ FairMQTransportDevice::FairMQTransportDevice()
     , fTaskArray(nullptr)
     , fFirstParameter(nullptr)
     , fSecondParameter(nullptr)
-    , fSink(nullptr)
     , fMCSplitEventHeader(nullptr)
 {}
 
@@ -71,13 +65,13 @@ void FairMQTransportDevice::Init()
 
 void FairMQTransportDevice::InitTask()
 {
-    fRunSim = new FairRunSim();
+    fRunSim = std::make_unique<FairRunSim>();
 
     fMCSplitEventHeader = new FairMCSplitEventHeader(fRunId, 0, 0, 0);
     fRunSim->SetMCEventHeader(fMCSplitEventHeader);
     fRunSim->SetRunId(fRunSim->GetMCEventHeader()->GetRunID());
 
-    fRunSim->SetSink(fSink);
+    SetupRunSink(*fRunSim);
 
     if (fFirstParameter || fSecondParameter) {
         FairRuntimeDb* rtdb = fRunSim->GetRuntimeDb();
@@ -87,7 +81,7 @@ void FairMQTransportDevice::InitTask()
             rtdb->setSecondInput(fSecondParameter);
     }
 
-    fRunSim->SetName(fTransportName.data());
+    fRunSim->SetName(fTransportName.c_str());
 
     if (fUserConfig.Length() > 0)
         fRunSim->SetUserConfig(fUserConfig);
@@ -95,7 +89,7 @@ void FairMQTransportDevice::InitTask()
         fRunSim->SetUserCuts(fUserCuts);
 
     // -----   Create media   -------------------------------------------------
-    fRunSim->SetMaterials(fMaterialsFile.data());
+    fRunSim->SetMaterials(fMaterialsFile.c_str());
 
     // -----   Magnetic field   -------------------------------------------
     if (fMagneticField)
@@ -141,25 +135,28 @@ void FairMQTransportDevice::InitTask()
     }
 }
 
+void FairMQTransportDevice::ResetTask()
+{
+    fRunSim.reset();
+}
+
 void FairMQTransportDevice::InitializeRun()
 {
-
     // -----   Negotiate the run number   -------------------------------------
     // -----      via the fUpdateChannelName   --------------------------------
     // -----      ask the fParamMQServer   ------------------------------------
     // -----      receive the run number and sampler id   ---------------------
-    std::string* askForRunNumber = new string("ReportSimDevice");
-    FairMQMessagePtr req(NewMessage(
-        const_cast<char*>(askForRunNumber->c_str()),
-        askForRunNumber->length(),
-        [](void* /*data*/, void* object) { delete static_cast<string*>(object); },
-        askForRunNumber));
-    FairMQMessagePtr rep(NewMessage());
+    std::string* askForRunNumber = new std::string("ReportSimDevice");
+    auto req(NewMessage(const_cast<char*>(askForRunNumber->c_str()),
+                        askForRunNumber->length(),
+                        [](void* /*data*/, void* object) { delete static_cast<std::string*>(object); },
+                        askForRunNumber));
+    auto rep(NewMessage());
 
     if (Send(req, fUpdateChannelName) > 0) {
         if (Receive(rep, fUpdateChannelName) > 0) {
-            std::string repString = string(static_cast<char*>(rep->GetData()), rep->GetSize());
-            LOG(info) << " -> " << repString.data();
+            std::string repString{static_cast<char*>(rep->GetData()), rep->GetSize()};
+            LOG(info) << " -> " << repString;
             fRunId = stoi(repString);
             fMCSplitEventHeader->SetRunID(fRunId);
             repString = repString.substr(repString.find_first_of('_') + 1, repString.length());
@@ -206,13 +203,12 @@ bool FairMQTransportDevice::ConditionalRun()
     if (!fRunConditional)
         return false;
 
-    std::string* requestString = new string("RequestData");
-    FairMQMessagePtr req(NewMessage(
-        const_cast<char*>(requestString->c_str()),
-        requestString->length(),
-        [](void* /*data*/, void* object) { delete static_cast<string*>(object); },
-        requestString));
-    FairMQParts parts;
+    std::string* requestString = new std::string("RequestData");
+    auto req(NewMessage(const_cast<char*>(requestString->c_str()),
+                        requestString->length(),
+                        [](void* /*data*/, void* object) { delete static_cast<std::string*>(object); },
+                        requestString));
+    fair::mq::Parts parts;
     //    FairMQMessagePtr rep(NewMessage());
 
     if (Send(req, fGeneratorChannelName) > 0) {
@@ -226,20 +222,20 @@ bool FairMQTransportDevice::ConditionalRun()
 // bool FairMQTransportDevice::TransportData(FairMQMessagePtr& mPtr, int /*index*/)
 // {
 //     TClonesArray* chunk = nullptr;
-//     Deserialize<RootSerializer>(*mPtr, chunk);
+//     RootSerializer().Deserialize(*mPtr, chunk);
 //     fStack->SetParticleArray(chunk);
 //     fVMC->ProcessRun(1);
 
 //     return true;
 // }
 
-bool FairMQTransportDevice::TransportData(FairMQParts& mParts, int /*index*/)
+bool FairMQTransportDevice::TransportData(fair::mq::Parts& mParts, int /*index*/)
 {
     TClonesArray* chunk = nullptr;
     FairMCSplitEventHeader* meh = nullptr;
-    for (int ipart = 0; ipart < mParts.Size(); ipart++) {
+    for (auto& part : mParts) {
         TObject* obj = nullptr;
-        Deserialize<RootSerializer>(*mParts.At(ipart), obj);
+        RootSerializer().Deserialize(*part, obj);
         if (strcmp(obj->GetName(), "MCEvent") == 0)
             meh = dynamic_cast<FairMCSplitEventHeader*>(obj);
         else if (strcmp(obj->GetName(), "TParticles") == 0)
@@ -267,7 +263,7 @@ void FairMQTransportDevice::UpdateParameterServer()
     while ((cont = static_cast<FairParSet*>(next()))) {
         std::string ridString = std::string("RUNID") + std::to_string(fRunSim->GetRunId()) + std::string("RUNID")
                                 + std::string(cont->getDescription());
-        cont->setDescription(ridString.data());
+        cont->setDescription(ridString.c_str());
         SendObject(cont, fUpdateChannelName);
     }
 

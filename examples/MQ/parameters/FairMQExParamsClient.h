@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -15,19 +15,20 @@
 #ifndef FAIRMQEXPARAMSCLIENT_H
 #define FAIRMQEXPARAMSCLIENT_H
 
-#include <FairMQDevice.h>
+#include "FairMQ.h"   // for fair::mq::Device
+
 #include <cstdint>   // uint64_t
 #include <string>
 
-class FairMQExParamsClient : public FairMQDevice
+class FairMQExParamsClient : public fair::mq::Device
 {
   public:
     FairMQExParamsClient();
-    virtual ~FairMQExParamsClient();
+    ~FairMQExParamsClient() override;
 
   protected:
-    virtual bool ConditionalRun();
-    virtual void InitTask();
+    bool ConditionalRun() override;
+    void InitTask() override;
 
   private:
     int fRunId;

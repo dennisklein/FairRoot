@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2017 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2017-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *         GNU Lesser General Public Licence version 3 (LGPL) version 3,        *
@@ -24,42 +24,41 @@
 
 class FairEventHeader;
 class FairMQRunDevice;
-class TObject;
-class TTree;
 
 class FairOnlineSink : public FairSink
 {
   public:
-    FairOnlineSink();
-    virtual ~FairOnlineSink() {}
+    FairOnlineSink() = default;
+    ~FairOnlineSink() override = default;
+    FairOnlineSink& operator=(const FairOnlineSink&) = delete;
 
-    virtual Bool_t InitSink() { return kTRUE; }
-    virtual void Close() {}
-    virtual void Reset() {}
+    Bool_t InitSink() override { return kTRUE; }
+    void Close() override {}
+    void Reset() override {}
 
-    virtual Sink_Type GetSinkType() { return kONLINESINK; }
+    Sink_Type GetSinkType() override { return kONLINESINK; }
 
     virtual void FillEventHeader(FairEventHeader* /* feh */) {}
 
-    virtual void SetOutTree(TTree* /* fTree */) { return; }
+    void SetOutTree(TTree* /* fTree */) override {}
 
-    virtual void Fill();
+    void Fill() override;
 
-    virtual Int_t Write(const char* /* name=0 */, Int_t /* option=0 */, Int_t /* bufsize=0 */) { return -1; }
+    Int_t Write(const char* /* name=0 */, Int_t /* option=0 */, Int_t /* bufsize=0 */) override { return -1; }
 
-    virtual void RegisterImpl(const char*, const char*, void*);
-    virtual void RegisterAny(const char* brname, const std::type_info& oi, const std::type_info& pi, void* obj);
+    void RegisterImpl(const char*, const char*, void*) override;
+    void RegisterAny(const char* brname, const std::type_info& oi, const std::type_info& pi, void* obj) override;
 
-    virtual void WriteFolder() {}
-    virtual bool CreatePersistentBranchesAny() { return false; }
+    void WriteFolder() override {}
+    bool CreatePersistentBranchesAny() override { return false; }
 
-    virtual void WriteObject(TObject* /* f */, const char*, Int_t /* option = 0 */) {}
-    virtual void WriteGeometry() {}
+    void WriteObject(TObject* /* f */, const char*, Int_t /* option = 0 */) override {}
+    void WriteGeometry() override {}
 
     virtual void SetMQRunDevice(FairMQRunDevice* mrs) { fMQRunDevice = mrs; }
     virtual FairMQRunDevice* GetMQRunDevice() { return fMQRunDevice; }
 
-    virtual FairSink* CloneSink();
+    FairSink* CloneSink() override;
 
     bool IsPersistentBranchAny(const char* name);
 
@@ -70,13 +69,13 @@ class FairOnlineSink : public FairSink
     T GetPersistentBranchAny(const char* name) const;
 
   private:
-    FairMQRunDevice* fMQRunDevice;
+    FairMQRunDevice* fMQRunDevice{nullptr};
 
     // private helper function to emit a warning
     void EmitPersistentBranchWrongTypeWarning(const char* brname, const char* typen1, const char* typen2) const;
 
-    FairOnlineSink(const FairOnlineSink&);
-    FairOnlineSink& operator=(const FairOnlineSink&);
+    /// internal helper function for CloneSink()
+    FairOnlineSink(const FairOnlineSink&) = default;
 };
 
 // try to retrieve an object address from the registered branches/names
@@ -88,7 +87,7 @@ T FairOnlineSink::GetPersistentBranchAny(const char* brname) const
     auto iter = fPersistentBranchesMap.find(brname);
     if (iter != fPersistentBranchesMap.end()) {
         // verify type consistency
-        if (typeid(P).hash_code() != iter->second->origtypeinfo.hash_code()) {
+        if (typeid(P) != iter->second->origtypeinfo) {
             EmitPersistentBranchWrongTypeWarning(brname, typeid(P).name(), iter->second->origtypeinfo.name());
             return nullptr;
         }

@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2019-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -9,22 +9,16 @@
 #define FAIRTUTPROPCONTFACT_H_
 
 #include "FairContFact.h"   // for FairContFact, etc
-#include "Rtypes.h"         // for ClassDef
-
-class FairParSet;
 
 class FairTutPropContFact : public FairContFact
 {
-  private:
-    void setAllContainers();
-
   public:
     FairTutPropContFact();
-    ~FairTutPropContFact() {}
-    FairParSet* createContainer(FairContainer*);
+    ~FairTutPropContFact() override = default;
+    FairParSet* createContainer(FairContainer*) override;
 
     // Factory for all FairTutProp parameter containers
-    ClassDef(FairTutPropContFact, 0);
+    ClassDefOverride(FairTutPropContFact, 0);
 };
 
 #endif /* FAIRTUTPROPCONTFACT_H_ */

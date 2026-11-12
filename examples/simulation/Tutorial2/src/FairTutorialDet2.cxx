@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -22,8 +22,6 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
-
-FairTutorialDet2Geo* FairTutorialDet2::fgGeo;   //!
 
 FairTutorialDet2::FairTutorialDet2()
     : FairDetector("TutorialDet", kTRUE, kTutDet)
@@ -70,15 +68,6 @@ FairTutorialDet2::~FairTutorialDet2()
         fFairTutorialDet2PointCollection->Delete();
         delete fFairTutorialDet2PointCollection;
     }
-}
-
-void FairTutorialDet2::Initialize()
-{
-    FairDetector::Initialize();
-    /*
-  FairRuntimeDb* rtdb= FairRun::Instance()->GetRuntimeDb();
-  FairTutorialDet2GeoPar* par=(FairTutorialDet2GeoPar*)(rtdb->getContainer("FairTutorialDet2GeoPar"));
-*/
 }
 
 Bool_t FairTutorialDet2::ProcessHits(FairVolume* vol)
@@ -159,7 +148,7 @@ void FairTutorialDet2::ConstructGeometry()
       just copy this and use it for your detector, otherwise you can
       implement here you own way of constructing the geometry. */
 
-    ConstructASCIIGeometry<FairTutorialDet2Geo, FairTutorialDet2GeoPar>(fgGeo, "FairTutorialDet2GeoPar");
+    ConstructASCIIGeometry<FairTutorialDet2Geo, FairTutorialDet2GeoPar>("FairTutorialDet2GeoPar");
 }
 
 FairTutorialDet2Point* FairTutorialDet2::AddHit(Int_t trackID,
@@ -179,6 +168,7 @@ FairTutorialDet2Point* FairTutorialDet2::AddHit(Int_t trackID,
     return new (clref[size]) FairTutorialDet2Point(trackID, detID, pos, mom, time, length, eLoss);
 }
 
-FairModule* FairTutorialDet2::CloneModule() const { return new FairTutorialDet2(*this); }
-
-ClassImp(FairTutorialDet2);
+FairModule* FairTutorialDet2::CloneModule() const
+{
+    return new FairTutorialDet2(*this);
+}

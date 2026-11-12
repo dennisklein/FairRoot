@@ -1,13 +1,22 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
-void run_rad(Int_t nEvents = 100, TString mcEngine = "TGeant3")
-{
 
+#include <TStopwatch.h>
+#include <TString.h>
+#include <TSystem.h>
+#include <iostream>
+#include <memory>
+
+using std::cout;
+using std::endl;
+
+void run_rad(Int_t nEvents = 100, TString mcEngine = "TGeant4")
+{
     TString dir = gSystem->Getenv("VMCWORKDIR");
     TString tutdir = dir + "/simulation/rutherford/macros";
 
@@ -49,38 +58,38 @@ void run_rad(Int_t nEvents = 100, TString mcEngine = "TGeant3")
     logger->SetLogVerbosityLevel("HIGH");
 
     // -----   Create simulation run   ----------------------------------------
-    FairRunSim* run = new FairRunSim();
-    run->SetName(mcEngine);                        // Transport engine
-    run->SetSink(new FairRootFileSink(outFile));   // Output file
-    FairRuntimeDb* rtdb = run->GetRuntimeDb();
+    FairRunSim run{};
+    run.SetName(mcEngine);   // Transport engine
+    run.SetSink(std::make_unique<FairRootFileSink>(outFile));
+    FairRuntimeDb* rtdb = run.GetRuntimeDb();
     // ------------------------------------------------------------------------
 
     // -----   Create media   -------------------------------------------------
-    run->SetMaterials("media.geo");   // Materials
+    run.SetMaterials("media.geo");   // Materials
     // ------------------------------------------------------------------------
 
     //----Start the radiation length manager ----------------------------------
 
-    run->SetRadLenRegister(kTRUE);
+    run.SetRadLenRegister(kTRUE);
 
     // -----   Create geometry   ----------------------------------------------
 
     FairModule* cave = new FairCave("CAVE");
     cave->SetGeometryFileName("cave_vacuum.geo");
-    run->AddModule(cave);
+    run.AddModule(cave);
 
     FairModule* target = new FairTarget("Target");
     target->SetGeometryFileName("target_rutherford.geo");
-    run->AddModule(target);
+    run.AddModule(target);
 
     FairDetector* rutherford = new FairRutherford("RutherfordDetector", kFALSE);
     rutherford->SetGeometryFileName("rutherford.geo");
-    run->AddModule(rutherford);
+    run.AddModule(rutherford);
     // ------------------------------------------------------------------------
 
     // -----   Create PrimaryGenerator   --------------------------------------
     FairPrimaryGenerator* primGen = new FairPrimaryGenerator();
-    run->SetGenerator(primGen);
+    run.SetGenerator(primGen);
 
     FairBoxGenerator* boxGen1 = new FairBoxGenerator(0, 1);
     boxGen1->SetPRange(.005, .005);
@@ -91,10 +100,10 @@ void run_rad(Int_t nEvents = 100, TString mcEngine = "TGeant3")
 
     // ------------------------------------------------------------------------
 
-    run->SetStoreTraj(kTRUE);
+    run.SetStoreTraj(kTRUE);
 
     // -----   Run initialisation   -------------------------------------------
-    run->Init();
+    run.Init();
     // ------------------------------------------------------------------------
 
     // Set cuts for storing the trajectories.
@@ -122,9 +131,9 @@ void run_rad(Int_t nEvents = 100, TString mcEngine = "TGeant3")
     // ------------------------------------------------------------------------
 
     // -----   Start run   ----------------------------------------------------
-    run->Run(nEvents);
+    run.Run(nEvents);
     // ------------------------------------------------------------------------
-    run->CreateGeometryFile(geoFile);
+    run.CreateGeometryFile(geoFile);
 
     // -----   Finish   -------------------------------------------------------
 

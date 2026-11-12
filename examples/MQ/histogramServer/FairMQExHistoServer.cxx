@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -40,10 +40,10 @@ void FairMQExHistoServer::InitTask()
     }
 }
 
-bool FairMQExHistoServer::ReceiveData(FairMQMessagePtr& msg, int index)
+bool FairMQExHistoServer::ReceiveData(fair::mq::MessagePtr& msg, int index)
 {
     TObject* tempObject = nullptr;
-    Deserialize<RootSerializer>(*msg, tempObject);
+    RootSerializer().Deserialize(*msg, tempObject);
 
     if (TString(tempObject->ClassName()).EqualTo("TObjArray")) {
         std::lock_guard<std::mutex> lk(mtx);

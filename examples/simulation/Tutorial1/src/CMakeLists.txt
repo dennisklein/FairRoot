@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (C) 2014-2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
+# Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
 #                                                                              #
 #              This software is distributed under the terms of the             #
 #              GNU Lesser General Public Licence (LGPL) version 3,             #
@@ -28,35 +28,35 @@ set_target_properties(${target} PROPERTIES ${PROJECT_LIBRARY_PROPERTIES})
 target_include_directories(${target} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-
-  # TODO: DELETE ME ONCE USING root targets
-  ${ROOT_INCLUDE_DIR}
 )
 
-target_link_directories(${target} PUBLIC
-  ${ROOT_LIBRARY_DIR}
-)
-
-target_link_libraries(${target} PUBLIC
+target_link_libraries(${target}
+  PUBLIC
   FairRoot::Base # FairRunIdGenerator
-  FairRoot::FairTools # FairLogger
-  FairRoot::FairFastSim
+  FairRoot::FastSim
   FairRoot::ParBase
-  FairRoot::ExPassive
-  FairRoot::ExMCStack
-  FairRoot::Gen
+  FairRoot::GeoBase
+  FairRoot::Generators # must be public because of macro compilation
+  FairRoot::ExPassive  # must be public because of macro compilation
 
   Boost::program_options
 
-  Core
-  Physics
-  Geom
+  ROOT::Core
+  ROOT::Physics
+
+  PRIVATE
+  FairRoot::ExMCStack
+
+  FairRoot::Tools # FairLogger
+
+  ROOT::Geom
   ${VMCLIB}
 )
 
 fairroot_target_root_dictionary(${target}
   HEADERS ${headers}
   LINKDEF Tutorial1LinkDef.h
+  EXTRA_INCLUDE_DIRS ${CMAKE_INSTALL_FULL_INCLUDEDIR}
 )
 
 install(TARGETS ${target} LIBRARY DESTINATION ${PROJECT_INSTALL_LIBDIR})

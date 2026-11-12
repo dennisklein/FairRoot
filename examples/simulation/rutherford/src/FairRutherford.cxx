@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -19,41 +19,18 @@
 #include <TVirtualMC.h>        // for TVirtualMC
 #include <TVirtualMCStack.h>   // for TVirtualMCStack
 
-FairRutherfordGeo* FairRutherford::fgGeo = nullptr;
-
 FairRutherford::FairRutherford()
     : FairDetector("FairRutherford", kTRUE, kFairRutherford)
-    , fTrackID(-1)
-    , fVolumeID(-1)
-    , fPos()
-    , fMom()
-    , fTime(-1.)
-    , fLength(-1.)
-    , fELoss(-1)
     , fFairRutherfordPointCollection(new TClonesArray("FairRutherfordPoint"))
 {}
 
 FairRutherford::FairRutherford(const char* name, Bool_t active)
     : FairDetector(name, active, kFairRutherford)
-    , fTrackID(-1)
-    , fVolumeID(-1)
-    , fPos()
-    , fMom()
-    , fTime(-1.)
-    , fLength(-1.)
-    , fELoss(-1)
     , fFairRutherfordPointCollection(new TClonesArray("FairRutherfordPoint"))
 {}
 
 FairRutherford::FairRutherford(const FairRutherford& rhs)
     : FairDetector(rhs)
-    , fTrackID(-1)
-    , fVolumeID(-1)
-    , fPos()
-    , fMom()
-    , fTime(-1.)
-    , fLength(-1.)
-    , fELoss(-1)
     , fFairRutherfordPointCollection(new TClonesArray("FairRutherfordPoint"))
 {}
 
@@ -63,15 +40,6 @@ FairRutherford::~FairRutherford()
         fFairRutherfordPointCollection->Delete();
         delete fFairRutherfordPointCollection;
     }
-}
-
-void FairRutherford::Initialize()
-{
-    FairDetector::Initialize();
-    /*
-  FairRuntimeDb* rtdb= FairRun::Instance()->GetRuntimeDb();
-  FairRutherfordGeoPar* par=(FairRutherfordGeoPar*)(rtdb->getContainer("FairRutherfordGeoPar"));
-*/
 }
 
 Bool_t FairRutherford::ProcessHits(FairVolume* vol)
@@ -107,7 +75,7 @@ Bool_t FairRutherford::ProcessHits(FairVolume* vol)
                fELoss);
 
         // Increment number of FairRutherford points in TParticle
-        FairStack* stack = static_cast<FairStack*>(TVirtualMC::GetMC()->GetStack());
+        auto stack = static_cast<FairStack*>(TVirtualMC::GetMC()->GetStack());
         stack->AddPoint(kFairRutherford);
     }
 
@@ -145,7 +113,7 @@ void FairRutherford::ConstructGeometry()
       just copy this and use it for your detector, otherwise you can
       implement here you own way of constructing the geometry. */
 
-    ConstructASCIIGeometry<FairRutherfordGeo, FairRutherfordGeoPar>(fgGeo, "FairRutherfordGeoPar");
+    ConstructASCIIGeometry<FairRutherfordGeo, FairRutherfordGeoPar>("FairRutherfordGeoPar");
 }
 
 FairRutherfordPoint* FairRutherford::AddHit(Int_t trackID,
@@ -162,6 +130,7 @@ FairRutherfordPoint* FairRutherford::AddHit(Int_t trackID,
         FairRutherfordPoint(trackID, detID, pos, mom, time, length, eLoss, pos.Mag(), pos.Phi(), pos.Theta());
 }
 
-FairModule* FairRutherford::CloneModule() const { return new FairRutherford(*this); }
-
-ClassImp(FairRutherford);
+FairModule* FairRutherford::CloneModule() const
+{
+    return new FairRutherford(*this);
+}

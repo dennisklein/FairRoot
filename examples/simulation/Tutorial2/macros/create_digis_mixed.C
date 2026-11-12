@@ -1,13 +1,39 @@
+/********************************************************************************
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
+ *                                                                              *
+ *              This software is distributed under the terms of the             *
+ *              GNU Lesser General Public Licence (LGPL) version 3,             *
+ *                  copied verbatim in the file "LICENSE"                       *
+ ********************************************************************************/
+
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairMixedSource.h"
+#include "FairParAsciiFileIo.h"
+#include "FairParRootFileIo.h"
+#include "FairRootFileSink.h"
+#include "FairRunAna.h"
+#include "FairRuntimeDb.h"
+#include "FairSystemInfo.h"
+#include "FairTutorialDet2CustomTask.h"
+#include "FairTutorialDet2DigiPar.h"
+#include "FairTutorialDet2Digitizer.h"
+
+#include <TStopwatch.h>
+#include <TString.h>
+#include <TSystem.h>
+#include <iostream>
+#include <memory>
+#endif
+
+using std::cout;
+using std::endl;
+
 void create_digis_mixed()
 {
-
     TStopwatch timer;
     timer.Start();
 
     gDebug = 0;
-
-    TString dir = getenv("VMCWORKDIR");
-    TString tutdir = dir + "/simulation/Tutorial2";
 
     TString BGinFile = "./tutorial2_pions.mc_p2.000_t0_n130.bg.root";
     TString SG1inFile = "./tutorial2_pions.mc_p2.000_t0_n10.sg1.root";
@@ -16,7 +42,7 @@ void create_digis_mixed()
     /** Choice of the parameter file should be consistence with the call to
        UseRunIdFromBG or UseRunIdFromSG*/
 
-    TString parFile = "./tutorial2_pions.params_p2.000_t0_n10.root";
+    TString parFile = "./tutorial2_pions.params_p2.000_t0_n10.sg1.root";
 
     TString outFile = "./digis.mix.mc.root";
 
@@ -24,11 +50,11 @@ void create_digis_mixed()
     cout << "Background    File: " << BGinFile << endl;
     cout << "First  Signal File: " << SG1inFile << endl;
     cout << "Second signal File: " << SG2inFile << endl;
-    cout << "ParamFile: " << parFile << endl;
-    cout << "OutFile: " << outFile << endl;
+    cout << "ParamFile:          " << parFile << endl;
+    cout << "OutFile:            " << outFile << endl;
     cout << "******************************" << endl;
 
-    FairRunAna* fRun = new FairRunAna();
+    auto fRun = std::make_unique<FairRunAna>();
 
     //** Create a mixed source and set BG file *//
     FairMixedSource* fMixedSource = new FairMixedSource(BGinFile.Data(), 0);
@@ -44,7 +70,7 @@ void create_digis_mixed()
 
     fRun->SetSource(fMixedSource);
 
-    fRun->SetSink(new FairRootFileSink(outFile));
+    fRun->SetSink(std::make_unique<FairRootFileSink>(outFile));
 
     //----- Mix using entries  ----------------------------------------
 
@@ -89,7 +115,8 @@ void create_digis_mixed()
 
     rtdb->getContainer("FairTutorialDet2DigiPar")->print();
 
-    FairTutorialDet2DigiPar* DigiPar = (FairTutorialDet2DigiPar*)rtdb->getContainer("FairTutorialDet2DigiPar");
+    auto DigiPar = dynamic_cast<FairTutorialDet2DigiPar*>(rtdb->getContainer("FairTutorialDet2DigiPar"));
+    assert(DigiPar);
 
     DigiPar->setChanged();
     DigiPar->setInputVersion(fRun->GetRunId(), 1);

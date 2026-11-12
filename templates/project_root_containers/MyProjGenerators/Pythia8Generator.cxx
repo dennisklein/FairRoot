@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -17,8 +17,6 @@
 //#include "FairGenerator.h"
 
 #include "Pythia8Generator.h"
-
-using namespace Pythia8;
 
 // -----   Default constructor   -------------------------------------------
 Pythia8Generator::Pythia8Generator()
@@ -170,5 +168,3 @@ void Pythia8Generator::GetPythiaInstance(int arg)
     cout << "canDecay " << fPythia.particleData.canDecay(arg) << " " << fPythia.particleData.mayDecay(arg) << endl;
 }
 // -------------------------------------------------------------------------
-
-ClassImp(Pythia8Generator);

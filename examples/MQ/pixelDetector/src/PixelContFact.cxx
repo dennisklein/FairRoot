@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -8,46 +8,30 @@
 
 #include "PixelContFact.h"
 
-#include "FairRuntimeDb.h"   // for FairRuntimeDb
-#include "PixelDigiPar.h"    // for PixelDigiPar
-#include "PixelGeoPar.h"     // for PixelGeoPar
+#include "PixelDigiPar.h"
+#include "PixelGeoPar.h"
 
 #include <TList.h>     // for TList
 #include <TString.h>   // for TString
 #include <cstring>     // for strcmp
 
-class FairParSet;
-
-ClassImp(PixelContFact);
-
 static PixelContFact gPixelContFact;
 
 PixelContFact::PixelContFact()
-    : FairContFact()
+    : FairContFact("PixelContFact", "Factory for parameter containers in libPixel")
 {
     /** Constructor (called when the library is loaded) */
-    fName = "PixelContFact";
-    fTitle = "Factory for parameter containers in libPixel";
-    setAllContainers();
-    FairRuntimeDb::instance()->addContFactory(this);
-}
 
-void PixelContFact::setAllContainers()
-{
     /** Creates the Container objects with all accepted
       contexts and adds them to
       the list of containers for the Pixel library.
   */
 
-    FairContainer* p = new FairContainer("PixelGeoPar", "Pixel Geometry Parameters", "TestDefaultContext");
-    p->addContext("TestNonDefaultContext");
+    auto p = new FairContainer("PixelGeoPar", "Pixel Geometry Parameters", "TestDefaultContext");
+    AddContainer(p);
 
-    containers->Add(p);
-
-    FairContainer* p2 = new FairContainer("PixelDigiParameters", "Pixel digi parameters", "TestDefaultContext");
-    p2->addContext("TestNonDefaultContext");
-
-    containers->Add(p2);
+    auto p2 = new FairContainer("PixelDigiParameters", "Pixel digi parameters", "TestDefaultContext");
+    AddContainer(p2);
 }
 
 FairParSet* PixelContFact::createContainer(FairContainer* c)

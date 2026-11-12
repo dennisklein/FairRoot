@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (C) 2014-2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
+# Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  #
 #                                                                              #
 #              This software is distributed under the terms of the             #
 #              GNU Lesser General Public Licence (LGPL) version 3,             #
@@ -27,7 +27,7 @@ set(sources
   tools/Mille.cc
 )
 
-if(${ROOT_HAS_OPENGL})
+if(ROOT_opengl_FOUND)
   list(APPEND sources
     display/FairTutorialDet4PointDraw.cxx
   )
@@ -47,36 +47,34 @@ target_include_directories(${target} PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/reco>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/tools>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-
-  # TODO: DELETE ME ONCE USING root targets
-  ${ROOT_INCLUDE_DIR}
 )
 
-target_link_directories(${target} PUBLIC
-  ${ROOT_LIBRARY_DIR}
-)
-
-target_link_libraries(${target} PUBLIC
+target_link_libraries(${target}
+  PUBLIC
   FairRoot::Base # FairRunIdGenerator
-  FairRoot::FairTools # FairLogger
-  FairRoot::ExMCStack
   FairRoot::GeoBase
   FairRoot::ParBase
-  FairRoot::Gen
-  $<$<BOOL:${ROOT_HAS_OPENGL}>:FairRoot::EventDisplay>
 
-  Core
-  Physics
-  Geom
+  ROOT::Core
+  ROOT::Physics
+
+  PRIVATE
+  FairRoot::ExMCStack
+  $<$<BOOL:${ROOT_HAS_OPENGL}>:FairRoot::EventDisplay>
+  FairRoot::Tools # FairLogger
+  FairRoot::EventDisplay
+
+  ROOT::Geom
   ${VMCLIB}
-  MathCore
-  Hist
-  $<$<BOOL:${ROOT_HAS_OPENGL}>:Eve>
+  ROOT::MathCore
+  ROOT::Hist
+  $<$<BOOL:${ROOT_opengl_FOUND}>:ROOT::Eve>
 )
 
 fairroot_target_root_dictionary(${target}
   HEADERS ${headers}
   LINKDEF Tutorial4LinkDef.h
+  EXTRA_INCLUDE_DIRS ${CMAKE_INSTALL_FULL_INCLUDEDIR}
 )
 
 install(TARGETS ${target} LIBRARY DESTINATION ${PROJECT_INSTALL_LIBDIR})

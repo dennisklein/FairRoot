@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2019-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -7,38 +7,26 @@
  ********************************************************************************/
 #include "FairTutPropContFact.h"
 
-#include "FairRuntimeDb.h"       // for FairRuntimeDb
 #include "FairTutPropGeoPar.h"   // for FairTutPropGeoPar
 #include "TList.h"               // for TList
 #include "TString.h"             // for TString
 
 #include <string.h>   // for strcmp, NULL
 
-class FairParSet;
-
 static FairTutPropContFact gFairTutPropContFact;
 
 FairTutPropContFact::FairTutPropContFact()
-    : FairContFact()
+    : FairContFact("FairTutPropContFact", "Factory for parameter containers in libFairTutProp")
 {
     /** Constructor (called when the library is loaded) */
-    fName = "FairTutPropContFact";
-    fTitle = "Factory for parameter containers in libFairTutProp";
-    setAllContainers();
-    FairRuntimeDb::instance()->addContFactory(this);
-}
 
-void FairTutPropContFact::setAllContainers()
-{
     /** Creates the Container objects with all accepted
         contexts and adds them to
         the list of containers for the FairTutProp library.
     */
 
-    FairContainer* p = new FairContainer("FairTutPropGeoPar", "FairTutProp Geometry Parameters", "TestDefaultContext");
-    p->addContext("TestNonDefaultContext");
-
-    containers->Add(p);
+    auto p = new FairContainer("FairTutPropGeoPar", "FairTutProp Geometry Parameters", "TestDefaultContext");
+    AddContainer(p);
 }
 
 FairParSet* FairTutPropContFact::createContainer(FairContainer* c)
@@ -55,5 +43,3 @@ FairParSet* FairTutPropContFact::createContainer(FairContainer* c)
 
     return nullptr;
 }
-
-ClassImp(FairTutPropContFact);

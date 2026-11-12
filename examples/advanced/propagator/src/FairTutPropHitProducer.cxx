@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2020 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2020-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -57,7 +57,7 @@ InitStatus FairTutPropHitProducer::Init()
     FairRootManager* ioman = FairRootManager::Instance();
 
     // Get a pointer to the previous already existing data level
-    fPointsArray = static_cast<TClonesArray*>(ioman->GetObject(fPointsArrayName.data()));
+    fPointsArray = static_cast<TClonesArray*>(ioman->GetObject(fPointsArrayName.c_str()));
     fTracksArray = static_cast<TClonesArray*>(ioman->GetObject("MCTrack"));
     if (!fPointsArray || !fTracksArray) {
         LOG(error) << "No InputDataLevelName array!";
@@ -67,7 +67,7 @@ InitStatus FairTutPropHitProducer::Init()
 
     // Create the TClonesArray for the output data and register
     // it in the IO manager
-    ioman->Register(fHitsArrayName.data(), "TutProp", fHitsArray, kTRUE);
+    ioman->Register(fHitsArrayName.c_str(), "TutProp", fHitsArray, kTRUE);
 
     // Do whatever else is needed at the initilization stage
     // Create histograms to be filled
@@ -133,6 +133,7 @@ void FairTutPropHitProducer::Exec(Option_t* /*option*/)
     }
 }
 
-void FairTutPropHitProducer::Finish() { LOG(debug) << "Finish of FairTutPropHitProducer"; }
-
-ClassImp(FairTutPropHitProducer);
+void FairTutPropHitProducer::Finish()
+{
+    LOG(debug) << "Finish of FairTutPropHitProducer";
+}

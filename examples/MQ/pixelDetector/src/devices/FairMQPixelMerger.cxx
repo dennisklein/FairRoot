@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -17,12 +17,12 @@
 #include "PixelEventHeader.h"
 #include "RootSerializer.h"
 
-#include <FairMQLogger.h>
 #include <TClonesArray.h>
 #include <TObject.h>
 #include <cstring>   // strcmp
+#include <fairlogger/Logger.h>
 
-using namespace std;
+using std::pair;
 
 FairMQPixelMerger::FairMQPixelMerger()
     : fInputChannelName("data-in")
@@ -40,7 +40,7 @@ FairMQPixelMerger::FairMQPixelMerger()
 
 void FairMQPixelMerger::Init() { OnData(fInputChannelName, &FairMQPixelMerger::MergeData); }
 
-bool FairMQPixelMerger::MergeData(FairMQParts& parts, int /*index*/)
+bool FairMQPixelMerger::MergeData(fair::mq::Parts& parts, int /*index*/)
 {
     bool printInfo = false;
     int nofReceivedParts = 0;   // if set to -1, the data seems to be duplicated
@@ -52,9 +52,9 @@ bool FairMQPixelMerger::MergeData(FairMQParts& parts, int /*index*/)
     int nofArrays = 0;
     // LOG(debug) <<
     // "******************************************************************************************************";
-    for (int ipart = 0; ipart < parts.Size(); ipart++) {
+    for (auto& part : parts) {
         tempObject = nullptr;
-        Deserialize<RootSerializer>(*parts.At(ipart), tempObject);
+        RootSerializer().Deserialize(*part, tempObject);
         if (strcmp(tempObject->GetName(), "EventHeader.") == 0) {
             fEventHeader = (PixelEventHeader*)tempObject;
             // LOG(debug) << "GOT PART [" << fEventHeader->GetRunId() << "][" << fEventHeader->GetMCEntryNumber() <<
@@ -140,15 +140,15 @@ bool FairMQPixelMerger::MergeData(FairMQParts& parts, int /*index*/)
             fObjectMap.erase(fRet.first, fRet.second);
         }
 
-        FairMQMessagePtr messageTCA[10];
-        FairMQParts partsOut;
+        fair::mq::MessagePtr messageTCA[10];
+        fair::mq::Parts partsOut;
 
-        FairMQMessagePtr messFEH(NewMessage());
-        Serialize<RootSerializer>(*messFEH, fEventHeader);
+        auto messFEH(NewMessage());
+        RootSerializer().Serialize(*messFEH, fEventHeader);
         partsOut.AddPart(std::move(messFEH));
         for (int iarray = 0; iarray < nofArrays; iarray++) {
             messageTCA[iarray] = NewMessage();
-            Serialize<RootSerializer>(*messageTCA[iarray], tempArrays[iarray]);
+            RootSerializer().Serialize(*messageTCA[iarray], tempArrays[iarray]);
             partsOut.AddPart(std::move(messageTCA[iarray]));
         }
         Send(partsOut, fOutputChannelName);

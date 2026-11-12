@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -20,14 +20,12 @@
 #include "PixelDigi.h"
 #include "PixelPayload.h"
 
-#include <FairMQLogger.h>
 #include <Rtypes.h>   // for Int_t, Long64_t
 #include <TClonesArray.h>
 #include <TObject.h>
 #include <cstring>
+#include <fairlogger/Logger.h>
 #include <utility>   // move
-
-using namespace std;
 
 FairMQPixelSamplerBin::FairMQPixelSamplerBin()
     : FairMQDevice()
@@ -79,7 +77,7 @@ void FairMQPixelSamplerBin::PreRun()
 {
     LOG(info) << "FairMQPixelSampler::PreRun() started!";
 
-    fAckListener = thread(&FairMQPixelSamplerBin::ListenForAcks, this);
+    fAckListener = std::thread(&FairMQPixelSamplerBin::ListenForAcks, this);
 }
 
 bool FairMQPixelSamplerBin::ConditionalRun()
@@ -93,31 +91,30 @@ bool FairMQPixelSamplerBin::ConditionalRun()
     if (readEventReturn != 0)
         return false;
 
-    FairMQParts parts;
+    fair::mq::Parts parts;
 
     for (int iobj = 0; iobj < fNObjects; iobj++) {
         if (strcmp(fInputObjects[iobj]->GetName(), "EventHeader.") == 0) {
             PixelPayload::EventHeader* header = new PixelPayload::EventHeader();
-            header->fRunId = ((FairEventHeader*)fInputObjects[iobj])->GetRunId();
-            header->fMCEntryNo = ((FairEventHeader*)fInputObjects[iobj])->GetMCEntryNumber();
+            header->fRunId = static_cast<FairEventHeader*>(fInputObjects[iobj])->GetRunId();
+            header->fMCEntryNo = static_cast<FairEventHeader*>(fInputObjects[iobj])->GetMCEntryNumber();
             header->fPartNo = 0;
-            FairMQMessagePtr msgHeader(
-                NewMessage(header, sizeof(PixelPayload::EventHeader), [](void* data, void* /*hint*/) {
-                    delete static_cast<PixelPayload::EventHeader*>(data);
-                }));
+            auto msgHeader(NewMessage(header, sizeof(PixelPayload::EventHeader), [](void* data, void* /*hint*/) {
+                delete static_cast<PixelPayload::EventHeader*>(data);
+            }));
             parts.AddPart(std::move(msgHeader));
             // LOG(debug) << "-----------------------------";
             // LOG(debug) << "first part has size = " << sizeof(PixelPayload::EventHeader);
         } else {
-            Int_t nofEntries = ((TClonesArray*)fInputObjects[iobj])->GetEntries();
+            Int_t nofEntries = static_cast<TClonesArray*>(fInputObjects[iobj])->GetEntries();
             size_t digisSize = nofEntries * sizeof(PixelPayload::Digi);
 
-            FairMQMessagePtr msgTCA(NewMessage(digisSize));
+            auto msgTCA(NewMessage(digisSize));
 
             PixelPayload::Digi* digiPayload = static_cast<PixelPayload::Digi*>(msgTCA->GetData());
 
             for (int idigi = 0; idigi < nofEntries; idigi++) {
-                PixelDigi* digi = static_cast<PixelDigi*>(((TClonesArray*)fInputObjects[iobj])->At(idigi));
+                auto digi = static_cast<PixelDigi*>(static_cast<TClonesArray*>(fInputObjects[iobj])->At(idigi));
                 if (!digi) {
                     continue;
                 }
@@ -155,7 +152,7 @@ void FairMQPixelSamplerBin::ListenForAcks()
     if (fAckChannelName != "") {
         Long64_t numAcks = 0;
         do {
-            FairMQMessagePtr ack(NewMessage());
+            auto ack(NewMessage());
             if (Receive(ack, fAckChannelName) >= 0) {
                 numAcks++;
             }

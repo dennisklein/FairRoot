@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -7,43 +7,28 @@
  ********************************************************************************/
 #include "FairTutorialDet2ContFact.h"
 
-#include "FairRuntimeDb.h"
 #include "FairTutorialDet2DigiPar.h"
 #include "FairTutorialDet2GeoPar.h"
 
 #include <cstring>   // strcmp
 
-ClassImp(FairTutorialDet2ContFact);
-
 static FairTutorialDet2ContFact gFairTutorialDet2ContFact;
 
 FairTutorialDet2ContFact::FairTutorialDet2ContFact()
+    : FairContFact("FairTutorialDet2ContFact", "Factory for parameter containers in libTutorial1")
 {
     /** Constructor (called when the library is loaded) */
-    fName = "FairTutorialDet2ContFact";
-    fTitle = "Factory for parameter containers in libTutorial1";
-    setAllContainers();
-    FairRuntimeDb::instance()->addContFactory(this);
-}
 
-void FairTutorialDet2ContFact::setAllContainers()
-{
     /** Creates the Container objects with all accepted
       contexts and adds them to
       the list of containers for the Tutorial1 library.
   */
 
-    FairContainer* p1 =
-        new FairContainer("FairTutorialDet2GeoPar", "FairTutorialDet2 Geometry Parameters", "TestDefaultContext");
-    p1->addContext("TestNonDefaultContext");
+    auto p1 = new FairContainer("FairTutorialDet2GeoPar", "FairTutorialDet2 Geometry Parameters", "TestDefaultContext");
+    AddContainer(p1);
 
-    containers->Add(p1);
-
-    FairContainer* p2 =
-        new FairContainer("FairTutorialDet2DigiPar", "Tutorial Det Digi Parameters", "TestDefaultContext");
-    p2->addContext("TestNonDefaultContext");
-
-    containers->Add(p2);
+    auto p2 = new FairContainer("FairTutorialDet2DigiPar", "Tutorial Det Digi Parameters", "TestDefaultContext");
+    AddContainer(p2);
 }
 
 FairParSet* FairTutorialDet2ContFact::createContainer(FairContainer* c)

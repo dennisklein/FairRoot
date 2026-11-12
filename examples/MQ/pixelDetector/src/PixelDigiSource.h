@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -17,53 +17,50 @@
 #define PIXELDIGISOURCE_H_
 
 #include "FairSource.h"
+#include "PixelEventHeader.h"
 
 #include <Rtypes.h>
+#include <TClonesArray.h>
 #include <TString.h>
 #include <fstream>
-
-class TClonesArray;
-
-class PixelEventHeader;
-class FairEventHeader;
 
 class PixelDigiSource : public FairSource
 {
   public:
     PixelDigiSource(TString inputFileName = "test.dat");
-    virtual ~PixelDigiSource();
+    ~PixelDigiSource() override = default;
 
-    Bool_t Init();
+    Bool_t Init() override;
 
-    Int_t ReadEvent(UInt_t i = 0);
-    void Close();
-    void Reset();
-    Bool_t SpecifyRunId()
+    Int_t ReadEvent(UInt_t i = 0) override;
+    void Close() override;
+    void Reset() override;
+    Bool_t SpecifyRunId() override
     {
         ReadEvent(0);
         return true;
     };
 
-    virtual Source_Type GetSourceType() { return kFILE; }
+    Source_Type GetSourceType() override { return kFILE; }
 
-    virtual void SetParUnpackers() {}
+    void SetParUnpackers() override {}
 
-    virtual Bool_t InitUnpackers() { return kTRUE; }
+    Bool_t InitUnpackers() override { return kTRUE; }
 
-    virtual Bool_t ReInitUnpackers() { return kTRUE; }
+    Bool_t ReInitUnpackers() override { return kTRUE; }
 
     /**Check the maximum event number we can run to*/
-    virtual Int_t CheckMaxEventNo(Int_t EvtEnd = 0);
+    Int_t CheckMaxEventNo(Int_t EvtEnd = 0) override;
 
-    virtual void FillEventHeader(FairEventHeader* feh);
+    void FillEventHeader(FairEventHeader* feh) override;
 
     void SetInputFileName(const TString& tstr) { fInputFileName = tstr; }
 
-    virtual Bool_t ActivateObject(TObject** obj, const char* BrName);
+    Bool_t ActivateObject(TObject** obj, const char* BrName) override;
 
   private:
-    PixelEventHeader* fEventHeader;
-    TClonesArray* fDigis; /** Output array of PixelDigi **/
+    PixelEventHeader fEventHeader{};
+    TClonesArray fDigis; /** Output array of PixelDigi **/
     Int_t fNDigis;
 
     Int_t fTNofEvents;
@@ -81,7 +78,7 @@ class PixelDigiSource : public FairSource
     PixelDigiSource(const PixelDigiSource&);
     PixelDigiSource& operator=(const PixelDigiSource&);
 
-    ClassDef(PixelDigiSource, 1);
+    ClassDefOverride(PixelDigiSource, 1);
 };
 
 #endif /* defined(PIXELDIGISOURCE_H_) */

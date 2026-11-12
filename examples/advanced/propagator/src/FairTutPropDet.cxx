@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2019-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -61,8 +61,6 @@ FairTutPropDet::~FairTutPropDet()
         delete fFairTutPropPointCollection;
     }
 }
-
-void FairTutPropDet::Initialize() { FairDetector::Initialize(); }
 
 Bool_t FairTutPropDet::ProcessHits(FairVolume* vol)
 {
@@ -127,7 +125,7 @@ void FairTutPropDet::Register()
     */
 
     FairRootManager::Instance()->Register(
-        fPointsArrayName.data(), "FairTutPropDet", fFairTutPropPointCollection, kTRUE);
+        fPointsArrayName.c_str(), "FairTutPropDet", fFairTutPropPointCollection, kTRUE);
 }
 
 TClonesArray* FairTutPropDet::GetCollection(Int_t iColl) const
@@ -146,8 +144,7 @@ void FairTutPropDet::ConstructGeometry()
         just copy this and use it for your detector, otherwise you can
         implement here you own way of constructing the geometry. */
 
-    FairTutPropGeo* Geo = new FairTutPropGeo();
-    ConstructASCIIGeometry<FairTutPropGeo, FairTutPropGeoPar>(Geo, "FairTutPropGeoPar");
+    ConstructASCIIGeometry<FairTutPropGeo, FairTutPropGeoPar>("FairTutPropGeoPar");
 }
 
 FairTutPropPoint* FairTutPropDet::AddHit(Int_t trackID,
@@ -161,5 +158,3 @@ FairTutPropPoint* FairTutPropDet::AddHit(Int_t trackID,
     Int_t size = fFairTutPropPointCollection->GetEntriesFast();
     return new ((*fFairTutPropPointCollection)[size]) FairTutPropPoint(trackID, detID, pos, mom, time, length, eLoss);
 }
-
-ClassImp(FairTutPropDet);

@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -17,11 +17,9 @@
 #include "FairMQExParamsParOne.h"
 #include "RootSerializer.h"
 
-#include <FairMQLogger.h>
 #include <chrono>
+#include <fairlogger/Logger.h>
 #include <thread>   // this_thread::sleep_for
-
-using namespace std;
 
 FairMQExParamsClient::FairMQExParamsClient()
     : fRunId(0)
@@ -34,7 +32,7 @@ FairMQExParamsClient::~FairMQExParamsClient() {}
 
 void FairMQExParamsClient::InitTask()
 {
-    fParameterName = fConfig->GetValue<string>("parameter-name");
+    fParameterName = fConfig->GetValue<std::string>("parameter-name");
     fMaxIterations = fConfig->GetValue<uint64_t>("max-iterations");
     fRunId = 2000;
 }
@@ -45,14 +43,14 @@ bool FairMQExParamsClient::ConditionalRun()
 
     // NewSimpleMessage creates a copy of the data and takes care of its destruction (after the transfer takes place).
     // Should only be used for small data because of the cost of an additional copy
-    FairMQMessagePtr req(NewSimpleMessage(fParameterName + "," + to_string(fRunId)));
-    FairMQMessagePtr rep(NewMessage());
+    auto req(NewSimpleMessage(fParameterName + "," + std::to_string(fRunId)));
+    auto rep(NewMessage());
 
     if (Send(req, "data") > 0) {
         if (Receive(rep, "data") >= 0) {
             if (rep->GetSize() != 0) {
                 FairMQExParamsParOne* par = nullptr;
-                Deserialize<RootSerializer>(*rep, par);
+                RootSerializer().Deserialize(*rep, par);
                 LOG(info) << "Received parameter from the server:";
                 par->print();
                 delete par;
@@ -69,7 +67,7 @@ bool FairMQExParamsClient::ConditionalRun()
         return false;
     }
 
-    this_thread::sleep_for(chrono::seconds(1));
+    std::this_thread::sleep_for(std::chrono::seconds(1));
 
     return true;
 }

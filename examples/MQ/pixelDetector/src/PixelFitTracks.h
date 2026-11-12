@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -18,10 +18,10 @@
 #include "FairTask.h"
 
 #include <Rtypes.h>
+#include <TClonesArray.h>
+#include <TList.h>
 
-class TClonesArray;
 class PixelDigiPar;
-class TList;
 
 class PixelFitTracks : public FairTask
 {
@@ -36,10 +36,10 @@ class PixelFitTracks : public FairTask
     PixelFitTracks(const char* name, Int_t iVerbose);
 
     /** Destructor **/
-    virtual ~PixelFitTracks();
+    ~PixelFitTracks() override;
 
     /** Execution **/
-    virtual void Exec(Option_t* opt);
+    void Exec(Option_t* opt) override;
 
     virtual void GetParList(TList* tempList);
     virtual void InitMQ(TList* tempList);
@@ -71,24 +71,18 @@ class PixelFitTracks : public FairTask
                               Double_t& errA1);
 
     /** Get parameter containers **/
-    virtual void SetParContainers();
+    void SetParContainers() override;
 
     /** Intialisation **/
-    virtual InitStatus Init();
-
-    /** Reinitialisation **/
-    virtual InitStatus ReInit();
-
-    /** Reset eventwise counters **/
-    void Reset();
+    InitStatus Init() override;
 
     /** Finish at the end of each event **/
-    virtual void Finish();
+    void Finish() override;
 
     PixelFitTracks(const PixelFitTracks&);
     PixelFitTracks& operator=(const PixelFitTracks&);
 
-    ClassDef(PixelFitTracks, 1);
+    ClassDefOverride(PixelFitTracks, 1);
 };
 
 #endif

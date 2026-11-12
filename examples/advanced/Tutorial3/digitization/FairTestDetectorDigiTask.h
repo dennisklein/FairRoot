@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -13,8 +13,7 @@
 #include "FairTask.h"    // for FairTask, InitStatus
 class TBuffer;
 class TClass;
-class TClonesArray;  // lines 15-15
-class TMemberInspector;
+class TClonesArray;
 
 class FairTestDetectorDigiTask : public FairTask
 {
@@ -23,13 +22,13 @@ class FairTestDetectorDigiTask : public FairTask
     FairTestDetectorDigiTask();
 
     /** Destructor **/
-    ~FairTestDetectorDigiTask();
+    ~FairTestDetectorDigiTask() override;
 
     /** Virtual method Init **/
-    virtual InitStatus Init();
+    InitStatus Init() override;
 
     /** Virtual method Exec **/
-    virtual void Exec(Option_t* opt);
+    void Exec(Option_t* opt) override;
 
     void SetTimeResolution(Double_t timeInNs) { fTimeResolution = timeInNs; }
     Double_t GetTimeResolution() { return fTimeResolution; }
@@ -46,7 +45,7 @@ class FairTestDetectorDigiTask : public FairTask
     FairTestDetectorDigiTask(const FairTestDetectorDigiTask&);
     FairTestDetectorDigiTask& operator=(const FairTestDetectorDigiTask&);
 
-    ClassDef(FairTestDetectorDigiTask, 1);
+    ClassDefOverride(FairTestDetectorDigiTask, 1);
 };
 
 #endif /* FAIRTESTDETECTORDIGITASK_H_ */

@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -72,8 +72,6 @@ Pixel::~Pixel()
         delete fPixelPointCollection;
     }
 }
-
-void Pixel::Initialize() { FairDetector::Initialize(); }
 
 Bool_t Pixel::ProcessHits(FairVolume* vol)
 {
@@ -160,16 +158,12 @@ void Pixel::ConstructGeometry()
       just copy this and use it for your detector, otherwise you can
       implement here you own way of constructing the geometry. */
 
-    PixelGeo* Geo = new PixelGeo();
-    ConstructASCIIGeometry<PixelGeo, PixelGeoPar>(Geo, "PixelGeoPar");
+    ConstructASCIIGeometry<PixelGeo, PixelGeoPar>("PixelGeoPar");
 }
 
 Bool_t Pixel::IsSensitive(const std::string& name)
 {
-    if (name.find("Pixel") != std::string::npos) {
-        return kTRUE;
-    }
-    return kFALSE;
+    return name.find("Pixel") != std::string::npos;
 }
 
 PixelPoint* Pixel::AddHit(Int_t trackID,
@@ -200,5 +194,3 @@ extern "C" void ExternCreateDetector()
     run->AddModule(det);
     cout << "-- ExternCreateDetector(" << det->GetName() << ") DONE --" << endl;
 }
-
-ClassImp(Pixel);

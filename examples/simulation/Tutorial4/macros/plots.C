@@ -1,36 +1,63 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
-plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
+
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairFileSource.h"
+#include "FairMCEventHeader.h"
+#include "FairMCTrack.h"
+#include "FairParRootFileIo.h"
+#include "FairRootFileSink.h"
+#include "FairRunAna.h"
+#include "FairRuntimeDb.h"
+#include "FairSystemInfo.h"
+#include "FairTutorialDet4Hit.h"
+#include "FairTutorialDet4Point.h"
+#endif
+
+#include <TClonesArray.h>
+#include <TH1F.h>
+#include <TH2F.h>
+#include <TStopwatch.h>
+#include <TString.h>
+#include <iostream>
+#include <memory>
+
+using std::cout;
+using std::endl;
+
+int plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "align_TGeant3")
 {
+    TStopwatch timer;
+
+    TString outDir = "./data/";
 
     // Input data definitions
     //-----User Settings:-----------------------------------------------
-    TString MCFile = "testrun_" + mcEngine + ".root";
-    TString ParFile = "testparams_" + mcEngine + ".root";
-    TString RecoFile = "testreco_" + mcEngine + ".root";
-    ;
+    TString MCFile = outDir + "testrun_" + mcEngine + ".root";
+    TString ParFile = outDir + "testparams_" + mcEngine + ".root";
+    TString RecoFile = outDir + "testreco_" + mcEngine + ".root";
 
     // -----   Reconstruction run   -------------------------------------------
     FairRunAna *fRun = new FairRunAna();
     FairFileSource *fFileSource = new FairFileSource(MCFile);
+    fFileSource->AddFriend(RecoFile.Data());
     fRun->SetSource(fFileSource);
-    fRun->AddFriend(RecoFile.Data());
 
     FairRuntimeDb *rtdb = fRun->GetRuntimeDb();
     FairParRootFileIo *parInput1 = new FairParRootFileIo();
     parInput1->open(ParFile.Data());
     rtdb->setFirstInput(parInput1);
 
-    TFile *f1 = TFile::Open(MCFile);
-    TFile *f2 = TFile::Open(RecoFile);
+    std::unique_ptr<TFile> f1{TFile::Open(MCFile)};
+    std::unique_ptr<TFile> f2{TFile::Open(RecoFile)};
 
-    TTree *t1 = f1->Get("cbmsim");
-    TTree *t2 = f2->Get("cbmsim");
+    std::unique_ptr<TTree> t1{f1->Get<TTree>("cbmsim")};
+    std::unique_ptr<TTree> t2{f2->Get<TTree>("cbmsim")};
 
     FairMCEventHeader *MCEventHeader = new FairMCEventHeader();
     TClonesArray *MCTracks = new TClonesArray("FairMCTrack");
@@ -42,13 +69,12 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
     t1->SetBranchAddress("TutorialDetPoint", &TutorialDetPoints);
     t2->SetBranchAddress("TutorialDetHit", &TutorialDetHits);
 
-    FairMCTrack *MCTrack;
     FairTutorialDet4Point *Point;
     FairTutorialDet4Hit *Hit;
 
     // histograms
-    fRun->SetSink(new FairRootFileSink("test.ana.root"));
-    TFile *fHist = fRun->GetOutputFile();
+    fRun->SetSink(new FairRootFileSink(Form("%stest.ana.root", outDir.Data())));
+    auto fHist = static_cast<FairRootFileSink *>(fRun->GetSink())->GetRootFile();
 
     Float_t xrange = 80.;
     Float_t yrange = 80.;
@@ -62,11 +88,8 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
     TH1F *pointy = new TH1F("pointy", "Hit; posy;", 200., -80., 80.);
 
     Int_t nMCTracks, nPoints, nHits;
-    Float_t x_point, y_point, z_point, tof_point, SMtype_point, mod_point, cel_point, gap_point;
     Float_t x_poi, y_poi, z_poi;
-    Float_t SMtype_poi, mod_poi, cel_poi, gap_poi;
-    Float_t p_MC, px_MC, py_MC, pz_MC;
-    Float_t x_hit, y_hit, z_hit, dy_hit;
+    Float_t x_hit, y_hit, z_hit;
 
     Int_t nevent = t1->GetEntries();
 
@@ -88,14 +111,14 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
 
         cout << " Event" << iev << ":";
         cout << nMCTracks << " MC tracks ";
-        cout << nPoints << "  points ";
-        cout << nHits << " Hits " << endl;
+        cout << nPoints << " points ";
+        cout << nHits << " hits " << endl;
 
         // Hit loop
         for (Int_t j = 0; j < nHits; j++) {
-            Hit = (FairTutorialDet4Hit *)TutorialDetHits->At(j);
+            Hit = static_cast<FairTutorialDet4Hit *>(TutorialDetHits->At(j));
             Int_t l = Hit->GetRefIndex();
-            Point = (FairTutorialDet4Point *)TutorialDetPoints->At(l);
+            Point = static_cast<FairTutorialDet4Point *>(TutorialDetPoints->At(l));
 
             // Point info
             x_poi = Point->GetX();
@@ -106,7 +129,6 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
             x_hit = Hit->GetX();
             y_hit = Hit->GetY();
             z_hit = Hit->GetZ();
-            dy_hit = Hit->GetDy();
             //    Int_t flg_hit = Hit->GetFlag();
 
             Float_t delta_x = x_poi - x_hit;
@@ -125,24 +147,20 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
 
     }   // event loop end
 
+    auto pullx_Ent = pullx->GetEntries();
+    auto pullx_Mea = pullx->GetMean();
+    auto pully_Mea = pully->GetMean();
+    auto pullz_Mea = pullz->GetMean();
+    auto pullx_Dev = pullx->GetStdDev();
+    auto pully_Dev = pully->GetStdDev();
+    auto pullz_Dev = pullz->GetStdDev();
+    cout << "Mean (" << pullx_Mea << ", " << pully_Mea << ", " << pullz_Mea << ") " << endl;
+
     // save histos to file
     // TFile *fHist = TFile::Open("data/auaumbias.hst.root","RECREATE");
     cout << "Processing done, outflag =" << iout << endl;
     if (iout == 1) {
         fHist->Write();
-        if (0) {   // explicit writing
-            TIter next(gDirectory->GetList());
-            TH1 *h;
-            TObject *obj;
-            while (obj = (TObject *)next()) {
-                if (obj->InheritsFrom(TH1::Class())) {
-                    h = (TH1 *)obj;
-                    cout << "Write histo " << h->GetTitle() << endl;
-                    h->Write();
-                }
-            }
-        }
-        fHist->ls();
         fHist->Close();
     }
 
@@ -168,10 +186,18 @@ plots(Int_t nEvents = 1000, Int_t iout = 1, TString mcEngine = "TGeant3")
     cout << "</DartMeasurement>" << endl;
 
     cout << endl << endl;
-    cout << "Output file is " << outFile << endl;
-    cout << "Parameter file is " << parFile << endl;
+    cout << "Output file is " << fHist->GetName() << endl;
+    cout << "Parameter file is " << ParFile << endl;
     cout << "Real time " << rtime << " s, CPU time " << ctime << "s" << endl << endl;
-    cout << "Macro finished successfully." << endl;
 
+    if (nevent >= 10 && pullx_Ent > nevent * 35 && abs(pullx_Dev - 0.1) < 0.03 && abs(pully_Dev - 0.1) < 0.04)
+        cout << "Macro finished successfully. Number of events (" << nevent << "), hist entries (" << pullx_Ent
+             << ") and deviation (" << pullx_Dev << ", " << pully_Dev << ", " << pullz_Dev << ") inside limits."
+             << endl;
+    else
+        cout << "Macro failed. Number of events (" << nevent << "), hist entries (" << pullx_Ent << ") or deviation ("
+             << pullx_Dev << ", " << pully_Dev << ", " << pullz_Dev << ") too far off." << endl;
     // ------------------------------------------------------------------------
+
+    return 0;
 }

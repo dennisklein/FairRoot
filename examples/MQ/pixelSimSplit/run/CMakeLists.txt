@@ -37,38 +37,34 @@ set(fairroot_bin_dir ${CMAKE_BINARY_DIR}/bin)
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/scripts/splitMC-topology.xml ${CMAKE_CURRENT_BINARY_DIR}/splitMC-topology.xml)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-splitMC.sh.in   ${CMAKE_CURRENT_BINARY_DIR}/test-splitMC.sh @ONLY)
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-splitMQ.sh.in   ${CMAKE_CURRENT_BINARY_DIR}/test-splitMQ.sh)
-
-set(exe_dependencies
-  FairRoot::ExSimMQ
-  FairMQ::FairMQ
-  Boost::program_options
-)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-splitMQ.sh.in   ${CMAKE_CURRENT_BINARY_DIR}/test-splitMQ.sh @ONLY)
 
 add_executable(pixel-sim-chunk-merger runMQChunkMerger.cxx)
-target_link_libraries(pixel-sim-chunk-merger PRIVATE ${exe_dependencies})
+target_link_libraries(pixel-sim-chunk-merger PRIVATE FairRoot::ExSimMQ FairRoot::FairMQ)
 
 add_executable(pixel-sim-gen runMQGen.cxx)
 target_link_libraries(pixel-sim-gen PRIVATE
-  ${exe_dependencies}
+  FairRoot::ExSimMQ
+  FairRoot::FairMQ
   FairRoot::Base # FairModule, FairPrimaryGenerator
-  FairRoot::Gen # FairBoxGenerator
-  Core # TSystem
-  MathCore # TRandom
+  FairRoot::Generators # FairBoxGenerator
+
+  ROOT::Core # TSystem
+  ROOT::MathCore # TRandom
 )
-target_link_directories(pixel-sim-gen PRIVATE ${ROOT_LIBRARY_DIR})
 
 add_executable(pixel-sim-transport runMQTrans.cxx)
 target_link_libraries(pixel-sim-transport PRIVATE
-  ${exe_dependencies}
+  FairRoot::ExSimMQ
+  FairRoot::FairMQ
   FairRoot::Base # FairModule, FairPrimaryGenerator
   FairRoot::ParBase # FairParAsciiFileIo
   FairRoot::ExPassive # FairCave
   FairRoot::ExPixel
-  Core # TSystem
-  MathCore # TRandom
+
+  ROOT::Core # TSystem
+  ROOT::MathCore # TRandom
 )
-target_link_directories(pixel-sim-transport PRIVATE ${ROOT_LIBRARY_DIR})
 
 install(TARGETS pixel-sim-chunk-merger pixel-sim-gen pixel-sim-transport
   RUNTIME DESTINATION ${PROJECT_INSTALL_DATADIR}/examples/MQ/pixelSimSplit/bin
@@ -76,17 +72,20 @@ install(TARGETS pixel-sim-chunk-merger pixel-sim-gen pixel-sim-transport
 
 set(maxTestTime 90)
 
-add_test(ex_MQ_pixel_split ${CMAKE_CURRENT_BINARY_DIR}/test-splitMQ.sh)
+add_test(NAME ex_MQ_pixel_split
+         COMMAND ${CMAKE_CURRENT_BINARY_DIR}/test-splitMQ.sh)
 set_tests_properties(ex_MQ_pixel_split PROPERTIES
   TIMEOUT ${maxTestTime}
-  PASS_REGULAR_EXPRESSION "Shell script finished successfully"
 )
 
-if(DDS_VERSION VERSION_GREATER_EQUAL 3.5
-   AND FairMQ_VERSION VERSION_GREATER_EQUAL 1.4.23)
-  add_test(pixelSplitDDS ${CMAKE_CURRENT_BINARY_DIR}/test-splitMC.sh)
-  set_tests_properties(pixelSplitDDS PROPERTIES
-    TIMEOUT ${maxTestTime}
-    PASS_REGULAR_EXPRESSION "Shell script finished successfully"
-  )
+if(TARGET FairMQ::fairmq-dds-command-ui)
+  if(DDS_VERSION VERSION_GREATER_EQUAL 3.5
+     AND FairMQ_VERSION VERSION_GREATER_EQUAL 1.4.23)
+    add_test(NAME ex_MQ_pixel_split_DDS
+             COMMAND ${CMAKE_CURRENT_BINARY_DIR}/test-splitMC.sh)
+    set_tests_properties(ex_MQ_pixel_split_DDS PROPERTIES
+      TIMEOUT ${maxTestTime}
+      PASS_REGULAR_EXPRESSION "Shell script finished successfully"
+    )
+  endif()
 endif()

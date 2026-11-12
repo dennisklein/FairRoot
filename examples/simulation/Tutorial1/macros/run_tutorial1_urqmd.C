@@ -1,13 +1,22 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
+#include <TStopwatch.h>
+#include <TString.h>
+#include <TSystem.h>
+#include <iostream>
+#include <memory>
+
+using std::cout;
+using std::endl;
+
 void run_tutorial1_urqmd(Int_t nEvents = 2, TString mcEngine = "TGeant3")
 {
-
     TString dir = getenv("VMCWORKDIR");
     TString tutdir = dir + "/simulation//Tutorial1";
 
@@ -44,25 +53,25 @@ void run_tutorial1_urqmd(Int_t nEvents = 2, TString mcEngine = "TGeant3")
     // ------------------------------------------------------------------------
 
     // -----   Create simulation run   ----------------------------------------
-    FairRunSim* run = new FairRunSim();
-    run->SetName(mcEngine);                        // Transport engine
-    run->SetSink(new FairRootFileSink(outFile));   // Output file
-    FairRuntimeDb* rtdb = run->GetRuntimeDb();
+    FairRunSim run{};
+    run.SetName(mcEngine);   // Transport engine
+    run.SetSink(std::make_unique<FairRootFileSink>(outFile));
+    FairRuntimeDb* rtdb = run.GetRuntimeDb();
     // ------------------------------------------------------------------------
 
     // -----   Create media   -------------------------------------------------
-    run->SetMaterials("media.geo");   // Materials
+    run.SetMaterials("media.geo");   // Materials
     // ------------------------------------------------------------------------
 
     // -----   Create geometry   ----------------------------------------------
 
     FairModule* cave = new FairCave("CAVE");
     cave->SetGeometryFileName("cave_vacuum.geo");
-    run->AddModule(cave);
+    run.AddModule(cave);
 
     FairDetector* tutdet = new FairTutorialDet1("TUTDET", kTRUE);
     tutdet->SetGeometryFileName("double_sector.geo");
-    run->AddModule(tutdet);
+    run.AddModule(tutdet);
     // ------------------------------------------------------------------------
 
     // -----   Create PrimaryGenerator   --------------------------------------
@@ -71,11 +80,11 @@ void run_tutorial1_urqmd(Int_t nEvents = 2, TString mcEngine = "TGeant3")
     FairUrqmdGenerator* urqmdGen = new FairUrqmdGenerator(inFile.Data(), Urqmd_Conversion_table.Data());
     primGen->AddGenerator(urqmdGen);
 
-    run->SetGenerator(primGen);
+    run.SetGenerator(primGen);
     // ------------------------------------------------------------------------
 
     // -----   Initialize simulation run   ------------------------------------
-    run->Init();
+    run.Init();
     // ------------------------------------------------------------------------
 
     // -----   Runtime database   ---------------------------------------------
@@ -89,8 +98,8 @@ void run_tutorial1_urqmd(Int_t nEvents = 2, TString mcEngine = "TGeant3")
     // ------------------------------------------------------------------------
 
     // -----   Start run   ----------------------------------------------------
-    run->Run(nEvents);
-    run->CreateGeometryFile(geoFile);
+    run.Run(nEvents);
+    run.CreateGeometryFile(geoFile);
     // ------------------------------------------------------------------------
 
     // -----   Finish   -------------------------------------------------------

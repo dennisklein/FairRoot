@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -18,7 +18,6 @@
 #include "PixelHit.h"
 #include "PixelPayload.h"
 
-#include <FairMQLogger.h>
 #include <TClonesArray.h>
 #include <TFile.h>
 #include <TFolder.h>
@@ -27,8 +26,7 @@
 #include <TObject.h>
 #include <TTree.h>
 #include <TVector3.h>
-
-using namespace std;
+#include <fairlogger/Logger.h>
 
 FairMQPixelFileSinkBin::FairMQPixelFileSinkBin()
     : FairMQDevice()
@@ -63,6 +61,10 @@ void FairMQPixelFileSinkBin::Init()
     fTreeName = "cbmsim";
 
     fOutFile = TFile::Open(fFileName.c_str(), fFileOption.c_str());
+    if (!fOutFile) {
+        LOG(error) << "Could not open file" << fFileName.c_str();
+        return;
+    }
 
     fTree = new TTree(fTreeName.c_str(), "/cbmout");
 
@@ -96,18 +98,21 @@ void FairMQPixelFileSinkBin::Init()
     OnData(fInputChannelName, &FairMQPixelFileSinkBin::StoreData);
 }
 
-bool FairMQPixelFileSinkBin::StoreData(FairMQParts& parts, int /*index*/)
+bool FairMQPixelFileSinkBin::StoreData(fair::mq::Parts& parts, int /*index*/)
 {
-    if (parts.Size() == 0)
+    const auto numParts = parts.Size();
+
+    if (numParts == 0) {
         return true;   // probably impossible, but still check
+    }
 
     // expecting even number of parts in the form: header,data,header,data,header,data and so on...
-    int nPPE = 2;   // nof parts per event
+    constexpr auto nPPE = 2;   // nof parts per event
 
-    if (parts.Size() % nPPE >= 1)
-        LOG(info) << "received " << parts.Size() << " parts, will ignore last part!!!";
+    if (numParts % nPPE >= 1)
+        LOG(info) << "received " << numParts << " parts, will ignore last part!!!";
 
-    for (int ievent = 0; ievent < parts.Size() / nPPE; ievent++) {
+    for (decltype(parts.Size()) ievent = 0; ievent < numParts / nPPE; ievent++) {
         // the first part should be the event header
         PixelPayload::EventHeader* payloadE =
             static_cast<PixelPayload::EventHeader*>(parts.At(nPPE * ievent)->GetData());
@@ -143,7 +148,7 @@ bool FairMQPixelFileSinkBin::StoreData(FairMQParts& parts, int /*index*/)
     }
 
     if (fAckChannelName != "") {
-        FairMQMessagePtr msg(NewMessage());
+        auto msg(NewMessage());
         Send(msg, fAckChannelName);
     }
     return true;

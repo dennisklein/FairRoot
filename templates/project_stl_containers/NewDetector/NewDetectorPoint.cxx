@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -14,7 +14,6 @@ using std::endl;
 // -----   Default constructor   -------------------------------------------
 NewDetectorPoint::NewDetectorPoint()
     : fTrackID(0)
-    , fEventId(0)
     , fPx(0.)
     , fPy(0.)
     , fPz(0.)
@@ -30,7 +29,6 @@ NewDetectorPoint::NewDetectorPoint()
 
 // -----   Standard constructor   ------------------------------------------
 NewDetectorPoint::NewDetectorPoint(Int_t trackID,
-                                   uint32_t evtId,
                                    Int_t detID,
                                    TVector3 pos,
                                    TVector3 mom,
@@ -38,7 +36,6 @@ NewDetectorPoint::NewDetectorPoint(Int_t trackID,
                                    Double_t length,
                                    Double_t eLoss)
     : fTrackID(trackID)
-    , fEventId(evtId)
     , fPx(mom.X())
     , fPy(mom.Y())
     , fPz(mom.Z())
@@ -66,5 +63,3 @@ void NewDetectorPoint::Print(const Option_t* /*opt*/) const
          << endl;
 }
 // -------------------------------------------------------------------------
-
-ClassImp(NewDetectorPoint);

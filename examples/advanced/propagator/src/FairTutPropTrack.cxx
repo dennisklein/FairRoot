@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2020 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2020-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -10,8 +10,6 @@
 
 #include "FairLogger.h"
 #include "FairRootManager.h"
-
-ClassImp(FairTutPropTrack);
 
 FairTutPropTrack::FairTutPropTrack()
     : TObject()
@@ -37,8 +35,8 @@ void FairTutPropTrack::Print()
     LOG(info) << "FirstTrackPar:";
     fTrackParamFirst.Print();
     LOG(info) << "hits:";
-    for (int ih = 0; ih < fHitsIndices.size(); ih++) {
-        LOG(info) << fHitsIndices[ih].first << " / " << fHitsIndices[ih].second;
+    for (const auto &hitind_elem : fHitsIndices) {
+        LOG(info) << hitind_elem.first << " / " << hitind_elem.second;
     }
     LOG(info) << "-------------------";
 }

@@ -1,15 +1,35 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
-void run_tutorial2(Int_t nEvents = 10, TString mcEngine = "TGeant3", Bool_t isMT = true)
-{
 
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairBoxGenerator.h"
+#include "FairCave.h"
+#include "FairDetector.h"
+#include "FairModule.h"
+#include "FairParRootFileIo.h"
+#include "FairPrimaryGenerator.h"
+#include "FairRootFileSink.h"
+#include "FairRunSim.h"
+#include "FairRuntimeDb.h"
+#include "FairSystemInfo.h"
+#include "FairTutorialDet2.h"
+
+#include <RtypesCore.h>
+#include <TRandom.h>
+#include <TStopwatch.h>
+#include <TString.h>
+#include <TSystem.h>
+#include <memory>
+#endif
+
+void run_tutorial2(Int_t nEvents = 10, TString mcEngine = "TGeant4", Bool_t isMT = true, UInt_t initial_seed = 98989)
+{
     TString dir = getenv("VMCWORKDIR");
-    TString tutdir = dir + "/simulation/Tutorial2";
 
     TString tut_geomdir = dir + "/common/geometry";
     gSystem->Setenv("GEOMPATH", tut_geomdir.Data());
@@ -44,7 +64,7 @@ void run_tutorial2(Int_t nEvents = 10, TString mcEngine = "TGeant3", Bool_t isMT
                            nEvents);
 
     // Set the random seed
-    gRandom->SetSeed(98989);
+    gRandom->SetSeed(initial_seed);
 
     // In general, the following parts need not be touched
     // ========================================================================
@@ -59,10 +79,10 @@ void run_tutorial2(Int_t nEvents = 10, TString mcEngine = "TGeant3", Bool_t isMT
     // ------------------------------------------------------------------------
 
     // -----   Create simulation run   ----------------------------------------
-    FairRunSim* run = new FairRunSim();
-    run->SetName(mcEngine);                        // Transport engine
-    run->SetIsMT(isMT);                            // Multi-threading mode (Geant4 only)
-    run->SetSink(new FairRootFileSink(outFile));   // Output file
+    auto run = std::make_unique<FairRunSim>();
+    run->SetName(mcEngine);   // Transport engine
+    run->SetIsMT(isMT);       // Multi-threading mode (Geant4 only)
+    run->SetSink(std::make_unique<FairRootFileSink>(outFile));
     FairRuntimeDb* rtdb = run->GetRuntimeDb();
     // ------------------------------------------------------------------------
 
@@ -112,30 +132,30 @@ void run_tutorial2(Int_t nEvents = 10, TString mcEngine = "TGeant3", Bool_t isMT
 
     // -----   Finish   -------------------------------------------------------
 
-    cout << endl << endl;
+    std::cout << std::endl << std::endl;
 
     // Extract the maximal used memory an add is as Dart measurement
     // This line is filtered by CTest and the value send to CDash
     FairSystemInfo sysInfo;
     Float_t maxMemory = sysInfo.GetMaxMemory();
-    cout << "<DartMeasurement name=\"MaxMemory\" type=\"numeric/double\">";
-    cout << maxMemory;
-    cout << "</DartMeasurement>" << endl;
+    std::cout << "<DartMeasurement name=\"MaxMemory\" type=\"numeric/double\">";
+    std::cout << maxMemory;
+    std::cout << "</DartMeasurement>" << std::endl;
 
     timer.Stop();
     Double_t rtime = timer.RealTime();
     Double_t ctime = timer.CpuTime();
 
     Float_t cpuUsage = ctime / rtime;
-    cout << "<DartMeasurement name=\"CpuLoad\" type=\"numeric/double\">";
-    cout << cpuUsage;
-    cout << "</DartMeasurement>" << endl;
+    std::cout << "<DartMeasurement name=\"CpuLoad\" type=\"numeric/double\">";
+    std::cout << cpuUsage;
+    std::cout << "</DartMeasurement>" << std::endl;
 
-    cout << endl << endl;
-    cout << "Output file is " << outFile << endl;
-    cout << "Parameter file is " << parFile << endl;
-    cout << "Real time " << rtime << " s, CPU time " << ctime << "s" << endl << endl;
-    cout << "Macro finished successfully." << endl;
+    std::cout << std::endl << std::endl;
+    std::cout << "Output file is " << outFile << std::endl;
+    std::cout << "Parameter file is " << parFile << std::endl;
+    std::cout << "Real time " << rtime << " s, CPU time " << ctime << "s" << std::endl << std::endl;
+    std::cout << "Macro finished successfully." << std::endl;
 
     // ------------------------------------------------------------------------
 }

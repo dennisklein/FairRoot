@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *         GNU Lesser General Public Licence version 3 (LGPL) version 3,        *
@@ -17,24 +17,19 @@
 #include "FairModule.h"
 #include "FairParSet.h"
 #include "FairPrimaryGenerator.h"
-#include "FairRunSim.h"
 #include "FairRuntimeDb.h"
 
-#include <FairMQDevice.h>
-#include <FairMQLogger.h>
 #include <TCollection.h>
 #include <TList.h>
 #include <TObjArray.h>
 #include <cstdio>   // printf
-
-using namespace std;
+#include <fairlogger/Logger.h>
 
 FairMQSimDevice::FairMQSimDevice()
     : FairMQRunDevice()
     , fSimDeviceId(0)
     , fUpdateChannelName("updateChannel")
     , fRunInitialized(false)
-    , fRunSim(nullptr)
     , fNofEvents(1)
     , fTransportName("TGeant3")
     , fMaterialsFile("")
@@ -45,14 +40,13 @@ FairMQSimDevice::FairMQSimDevice()
     , fTaskArray(nullptr)
     , fFirstParameter(nullptr)
     , fSecondParameter(nullptr)
-    , fSink(nullptr)
 {}
 
 void FairMQSimDevice::InitTask()
 {
-    fRunSim = new FairRunSim();
+    fRunSim = std::make_unique<FairRunSim>();
 
-    fRunSim->SetSink(fSink);
+    SetupRunSink(*fRunSim);
 
     if (fFirstParameter || fSecondParameter) {
         FairRuntimeDb* rtdb = fRunSim->GetRuntimeDb();
@@ -62,7 +56,7 @@ void FairMQSimDevice::InitTask()
             rtdb->setSecondInput(fSecondParameter);
     }
 
-    fRunSim->SetName(fTransportName.data());
+    fRunSim->SetName(fTransportName.c_str());
     //  fRunSim->SetSimulationConfig(new FairVMCConfig());
     fRunSim->SetIsMT(kFALSE);
 
@@ -72,7 +66,7 @@ void FairMQSimDevice::InitTask()
         fRunSim->SetUserCuts(fUserCuts);
 
     // -----   Create media   -------------------------------------------------
-    fRunSim->SetMaterials(fMaterialsFile.data());
+    fRunSim->SetMaterials(fMaterialsFile.c_str());
 
     // -----   Magnetic field   -------------------------------------------
     if (fMagneticField)
@@ -84,25 +78,29 @@ void FairMQSimDevice::InitTask()
     }
 }
 
+void FairMQSimDevice::ResetTask()
+{
+    fRunSim.reset();
+}
+
 void FairMQSimDevice::InitializeRun()
 {
     // -----   Negotiate the run number   -------------------------------------
     // -----      via the fUpdateChannelName   --------------------------------
     // -----      ask the fParamMQServer   ------------------------------------
     // -----      receive the run number and sampler id   ---------------------
-    std::string* askForRunNumber = new string("ReportSimDevice");
-    FairMQMessagePtr req(NewMessage(
-        const_cast<char*>(askForRunNumber->c_str()),
-        askForRunNumber->length(),
-        [](void* /*data*/, void* object) { delete static_cast<string*>(object); },
-        askForRunNumber));
-    FairMQMessagePtr rep(NewMessage());
+    std::string* askForRunNumber = new std::string("ReportSimDevice");
+    auto req(NewMessage(const_cast<char*>(askForRunNumber->c_str()),
+                        askForRunNumber->length(),
+                        [](void* /*data*/, void* object) { delete static_cast<std::string*>(object); },
+                        askForRunNumber));
+    auto rep(NewMessage());
 
     unsigned int runId = 0;
     if (Send(req, fUpdateChannelName) > 0) {
         if (Receive(rep, fUpdateChannelName) > 0) {
-            std::string repString = string(static_cast<char*>(rep->GetData()), rep->GetSize());
-            LOG(info) << " -> " << repString.data();
+            std::string repString{static_cast<char*>(rep->GetData()), rep->GetSize()};
+            LOG(info) << " -> " << repString;
             runId = stoi(repString);
             repString = repString.substr(repString.find_first_of('_') + 1, repString.length());
             fSimDeviceId = stoi(repString);
@@ -159,17 +157,17 @@ void FairMQSimDevice::UpdateParameterServer()
     while ((cont = static_cast<FairParSet*>(next()))) {
         std::string ridString = std::string("RUNID") + std::to_string(fRunSim->GetRunId()) + std::string("RUNID")
                                 + std::string(cont->getDescription());
-        cont->setDescription(ridString.data());
+        cont->setDescription(ridString.c_str());
         FairMQRunDevice::SendObject(cont, fUpdateChannelName);
     }
 
     printf("FairMQSimDevice::UpdateParameterServer() finished\n");
 }
 
-void FairMQSimDevice::SendBranches()
+void FairMQSimDevice::SendBranches(FairOnlineSink& sink)
 {
     if (NewStatePending()) {
         fRunSim->StopMCRun();
     }
-    FairMQRunDevice::SendBranches();
+    FairMQRunDevice::SendBranches(sink);
 }

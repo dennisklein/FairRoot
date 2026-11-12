@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -28,16 +28,10 @@
 #include <iostream>   // for cout
 #include <string.h>   // for strcmp
 
-using namespace std;
-ClassImp(FairGeoCave);
-
 FairGeoCave::FairGeoCave()
-    : FairGeoSet()
+    : FairGeoSet("cave", 1)
     , name("cave")
-{
-    fName = "cave";
-    maxModules = 1;
-}
+{}
 
 Bool_t FairGeoCave::read(std::fstream& fin, FairGeoMedia* media)
 {
@@ -108,7 +102,7 @@ void FairGeoCave::addRefNodes()
 void FairGeoCave::write(std::fstream& fout)
 {
     // Writes the geometry to file
-    std::ios_base::fmtflags tmp = fout.setf(ios::fixed, ios::floatfield);
+    std::ios_base::fmtflags tmp = fout.setf(std::ios::fixed, std::ios::floatfield);
     FairGeoNode* volu = getVolume(name);
     if (volu) {
         FairGeoBasicShape* sh = volu->getShapePointer();
@@ -129,7 +123,7 @@ void FairGeoCave::print()
         FairGeoBasicShape* sh = volu->getShapePointer();
         FairGeoMedium* med = volu->getMedium();
         if (sh && med) {
-            cout << volu->GetName() << '\n' << sh->GetName() << '\n' << med->GetName() << '\n';
+            std::cout << volu->GetName() << '\n' << sh->GetName() << '\n' << med->GetName() << '\n';
             sh->printPoints(volu);
         }
     }

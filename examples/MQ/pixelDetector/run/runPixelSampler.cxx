@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (C) 2014-2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -8,12 +8,13 @@
 
 #include "PixelDigiBinSource.h"
 #include "PixelDigiSource.h"
-#include "runFairMQDevice.h"
 
 // PixelDetector example
 #include "FairMQPixelSampler.h"
+#include "FairRunFairMQDevice.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -32,12 +33,12 @@ void addCustomOptions(bpo::options_description& options)
     // clang-format on
 }
 
-FairMQDevicePtr getDevice(const FairMQProgOptions& config)
+std::unique_ptr<fair::mq::Device> fairGetDevice(const fair::mq::ProgOptions& config)
 {
     std::string samplerType = config.GetValue<std::string>("sampler-type");
     std::vector<std::string> filename = config.GetValue<std::vector<std::string>>("file-name");
 
-    FairMQPixelSampler* sampler = new FairMQPixelSampler();
+    auto sampler = std::make_unique<FairMQPixelSampler>();
 
     if (samplerType == "FairFileSource") {
     } else if (samplerType == "PixelDigiSource") {
@@ -53,7 +54,7 @@ FairMQDevicePtr getDevice(const FairMQProgOptions& config)
     } else {
         LOG(error) << "Sampler \"" << samplerType
                    << "\" unknown! Set it to \"FairFileSource\" or \"PixelDigiSource\" or \"PixelDigiBinSource\"";
-        return nullptr;
+        return {nullptr};
     }
 
     return sampler;

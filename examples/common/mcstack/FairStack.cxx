@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -33,9 +33,7 @@ FairStack::FairStack(Int_t size)
     , fParticles(new TClonesArray("TParticle", size))
     , fTracks(new TClonesArray("FairMCTrack", size))
     , fStoreMap()
-    , fStoreIter()
     , fIndexMap()
-    , fIndexIter()
     , fPointsMap()
     , fCurrentTrack(-1)
     , fNPrimaries(0)
@@ -211,11 +209,11 @@ void FairStack::FillTrackArray()
     for (Int_t iPart = 0; iPart < fNParticles; iPart++) {
         Bool_t store = kFALSE;
 
-        fStoreIter = fStoreMap.find(iPart);
-        if (fStoreIter == fStoreMap.end()) {
+        auto storeiter = fStoreMap.find(iPart);
+        if (storeiter == fStoreMap.end()) {
             LOG(fatal) << "Particle " << iPart << " not found in storage map! ";
         } else {
-            store = (*fStoreIter).second;
+            store = (*storeiter).second;
         }
 
         if (store) {
@@ -257,11 +255,11 @@ void FairStack::UpdateTrackIndex(TRefArray* detList)
     for (Int_t i = 0; i < fNTracks; i++) {
         FairMCTrack* track = static_cast<FairMCTrack*>(fTracks->At(i));
         Int_t iMotherOld = track->GetMotherId();
-        fIndexIter = fIndexMap.find(iMotherOld);
-        if (fIndexIter == fIndexMap.end()) {
+        auto indexiter = fIndexMap.find(iMotherOld);
+        if (indexiter == fIndexMap.end()) {
             LOG(fatal) << "Particle index " << iMotherOld << " not found in index map!";
         } else {
-            track->SetMotherId((*fIndexIter).second);
+            track->SetMotherId((*indexiter).second);
         }
     }
 
@@ -292,12 +290,12 @@ void FairStack::UpdateTrackIndex(TRefArray* detList)
                 //        " has trackID = " << point->GetTrackID();
                 FastSimUpdateTrackIndex<FairMCPoint>(point, iTrack);
 
-                fIndexIter = fIndexMap.find(iTrack);
-                if (fIndexIter == fIndexMap.end()) {
+                auto indexiter = fIndexMap.find(iTrack);
+                if (indexiter == fIndexMap.end()) {
                     LOG(fatal) << "Particle index " << iTrack << " not found in index map!";
                 } else {
-                    point->SetTrackID((*fIndexIter).second);
-                    point->SetLink(FairLink("MCTrack", (*fIndexIter).second));
+                    point->SetTrackID((*indexiter).second);
+                    point->SetLink(FairLink("MCTrack", (*indexiter).second));
                 }
             }
 
@@ -334,7 +332,7 @@ void FairStack::Print(Option_t*) const
     LOG(info) << "FairStack: Number of primaries        = " << fNPrimaries;
     LOG(info) << "              Total number of particles  = " << fNParticles;
     LOG(info) << "              Number of tracks in output = " << fNTracks;
-    if (gLogger->IsLogNeeded(fair::Severity::DEBUG1)) {
+    if (gLogger->IsLogNeeded(fair::Severity::debug1)) {
         for (Int_t iTrack = 0; iTrack < fNTracks; iTrack++) {
             (static_cast<FairMCTrack*>(fTracks->At(iTrack))->Print(iTrack));
         }
@@ -475,5 +473,3 @@ void FairStack::SelectTracks()
         }
     }
 }
-
-ClassImp(FairStack);

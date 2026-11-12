@@ -1,3 +1,11 @@
+/********************************************************************************
+ * Copyright (C) 2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH       *
+ *                                                                              *
+ *              This software is distributed under the terms of the             *
+ *              GNU Lesser General Public Licence (LGPL) version 3,             *
+ *                  copied verbatim in the file "LICENSE"                       *
+ ********************************************************************************/
+
 /*
  * File:   RooDataGenerator.h
  * Author: winckler
@@ -84,7 +92,7 @@ class MultiVariatePDF
         , fT("t", "t", static_cast<double>(tStart), static_cast<double>(tStart + 1))
         , fTErr("tErr", "tErr", fOpt.fTErr.fMin, fOpt.fTErr.fMax)
         , fMeanT("mu_t", "mean of t-distribution", (static_cast<double>(tStart) + static_cast<double>(tStart + 1)) / 2)
-        , fSigmaT("fSigmaT", "width of t-distribution", 0.1)
+        , fSigmaT("fSigmaT", "width of t-distribution", 0.1, 1e-4, 1000.)
         , fGaussX("fGaussX", "gaussian PDF", fX, RooFit::RooConst(fOpt.fX.fMean), RooFit::RooConst(fOpt.fX.fSigma))
         , fGaussY("fGaussY", "gaussian PDF", fY, RooFit::RooConst(fOpt.fY.fMean), RooFit::RooConst(fOpt.fY.fSigma))
         , fGaussZ("fGaussZ", "gaussian PDF", fZ, RooFit::RooConst(fOpt.fZ.fMean), RooFit::RooConst(fOpt.fZ.fSigma))
@@ -105,7 +113,7 @@ class MultiVariatePDF
     MultiVariatePDF(const MultiVariatePDF&) = delete;
     MultiVariatePDF operator=(const MultiVariatePDF&) = delete;
 
-    ~MultiVariatePDF() {}
+    ~MultiVariatePDF() = default;
 
     RooDataSet* GetGeneratedData(unsigned int n, unsigned int ti)
     {

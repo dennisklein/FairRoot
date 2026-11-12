@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH       *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -13,11 +13,12 @@
  * Created on November 24, 2014, 1:40 PM
  */
 
-#ifndef MYHITDATA_H
-#define MYHITDATA_H
+#ifndef MYHIT_H
+#define MYHIT_H
 
 #include "FairHit.h"   // for FairHit
 
+#include <FairHitBoostSerializationSupport.h>
 #include <Rtypes.h>   // for MyHit::Class, etc
 
 namespace boost {
@@ -32,20 +33,25 @@ class TVector3;
 class MyHit : public FairHit
 {
   public:
-    /** Default constructor **/
-    MyHit();
+    MyHit() = default;
 
-    /** Constructor **/
-    MyHit(Int_t detID, Int_t mcindex, const TVector3& pos, const TVector3& dpos);
+    MyHit(Int_t detID, Int_t mcindex, const TVector3& pos, const TVector3& dpos)
+        : FairHit(detID, pos, dpos, mcindex)
+    {}
+
     MyHit(Int_t detID,
           Int_t mcindex,
           const TVector3& pos,
           const TVector3& dpos,
           Double_t timeStamp,
-          Double_t timeStampError);
+          Double_t timeStampError)
+        : FairHit(detID, pos, dpos, mcindex)
+    {
+        SetTimeStamp(timeStamp);
+        SetTimeStampError(timeStampError);
+    }
 
-    /** Destructor **/
-    virtual ~MyHit();
+    ~MyHit() override = default;
 
     template<class Archive>
     void serialize(Archive& ar, const unsigned int /*version*/)
@@ -56,7 +62,7 @@ class MyHit : public FairHit
   private:
     friend class boost::serialization::access;
 
-    ClassDef(MyHit, 1);
+    ClassDefOverride(MyHit, 1);
 };
 
-#endif /* MYHITDATA_H */
+#endif /* MYHIT_H */

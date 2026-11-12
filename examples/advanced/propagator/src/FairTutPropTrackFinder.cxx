@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2020 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2020-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -55,8 +55,8 @@ InitStatus FairTutPropTrackFinder::Init()
     FairRootManager* ioman = FairRootManager::Instance();
 
     // Get a pointer to the previous already existing data level
-    fHitsArray1 = static_cast<TClonesArray*>(ioman->GetObject(fHitsArray1Name.data()));
-    fHitsArray2 = static_cast<TClonesArray*>(ioman->GetObject(fHitsArray2Name.data()));
+    fHitsArray1 = static_cast<TClonesArray*>(ioman->GetObject(fHitsArray1Name.c_str()));
+    fHitsArray2 = static_cast<TClonesArray*>(ioman->GetObject(fHitsArray2Name.c_str()));
     if (!fHitsArray1 || !fHitsArray2) {
         LOG(error) << "No InputData array!";
         LOG(error) << "FairTutPropTrackFinder will be inactive";
@@ -178,6 +178,7 @@ void FairTutPropTrackFinder::Exec(Option_t* /*option*/)
     }
 }
 
-void FairTutPropTrackFinder::Finish() { LOG(debug) << "Finish of FairTutPropTrackFinder"; }
-
-ClassImp(FairTutPropTrackFinder);
+void FairTutPropTrackFinder::Finish()
+{
+    LOG(debug) << "Finish of FairTutPropTrackFinder";
+}

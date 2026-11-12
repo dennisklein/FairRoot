@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -7,36 +7,24 @@
  ********************************************************************************/
 #include "NewDetectorContFact.h"
 
-#include "FairRuntimeDb.h"
 #include "NewDetectorGeoPar.h"
 
 #include <iostream>
 
-ClassImp(NewDetectorContFact);
-
 static NewDetectorContFact gNewDetectorContFact;
 
 NewDetectorContFact::NewDetectorContFact()
-    : FairContFact()
+    : FairContFact("NewDetectorContFact", "Factory for parameter containers in libNewDetector")
 {
     /** Constructor (called when the library is loaded) */
-    fName = "NewDetectorContFact";
-    fTitle = "Factory for parameter containers in libNewDetector";
-    setAllContainers();
-    FairRuntimeDb::instance()->addContFactory(this);
-}
 
-void NewDetectorContFact::setAllContainers()
-{
     /** Creates the Container objects with all accepted
       contexts and adds them to
       the list of containers for the NewDetector library.
   */
 
-    FairContainer* p = new FairContainer("NewDetectorGeoPar", "NewDetector Geometry Parameters", "TestDefaultContext");
-    p->addContext("TestNonDefaultContext");
-
-    containers->Add(p);
+    auto p = new FairContainer("NewDetectorGeoPar", "NewDetector Geometry Parameters", "TestDefaultContext");
+    AddContainer(p);
 }
 
 FairParSet* NewDetectorContFact::createContainer(FairContainer* c)

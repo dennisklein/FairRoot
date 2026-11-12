@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -35,9 +35,6 @@ class FairTutorialDet2 : public FairDetector
 
     /**       destructor     */
     virtual ~FairTutorialDet2();
-
-    /**      Initialization of the detector is done here    */
-    virtual void Initialize();
 
     /**       this method is called for each step during simulation
      *       (see FairMCApplication::Stepping())
@@ -80,8 +77,6 @@ class FairTutorialDet2 : public FairDetector
     virtual FairModule* CloneModule() const;
 
   private:
-    static FairTutorialDet2Geo* fgGeo;   //!
-
     /** Track information to be stored until the track leaves the
     active volume.
     */

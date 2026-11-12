@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *         GNU Lesser General Public Licence version 3 (LGPL) version 3,        *
@@ -17,20 +17,10 @@
 #include "FairMQRunDevice.h"
 #include "FairRootManager.h"
 
-#include <FairMQLogger.h>
-
-FairOnlineSink::FairOnlineSink()
-    : FairSink()
-    , fMQRunDevice(nullptr)
-{}
-
-FairOnlineSink::FairOnlineSink(const FairOnlineSink&)
-    : FairSink()
-    , fMQRunDevice(nullptr)
-{}
+#include <fairlogger/Logger.h>
 
 //_____________________________________________________________________________
-void FairOnlineSink::RegisterImpl(const char*, const char*, void*) { return; }
+void FairOnlineSink::RegisterImpl(const char*, const char*, void*) {}
 
 //_____________________________________________________________________________
 void FairOnlineSink::RegisterAny(const char* brname, const std::type_info& oi, const std::type_info& pi, void* obj)
@@ -41,10 +31,7 @@ void FairOnlineSink::RegisterAny(const char* brname, const std::type_info& oi, c
 //_____________________________________________________________________________
 bool FairOnlineSink::IsPersistentBranchAny(const char* name)
 {
-    if (fPersistentBranchesMap.find(name) == fPersistentBranchesMap.end()) {
-        return false;
-    }
-    return true;
+    return fPersistentBranchesMap.find(name) != fPersistentBranchesMap.end();
 }
 
 //_____________________________________________________________________________
@@ -62,16 +49,16 @@ void FairOnlineSink::Fill()
     /// Fill the Root tree.
     LOG(debug) << "[" << FairRootManager::Instance()->GetInstanceId() << "] called FairOnlineSink::Fill()!!!!";
 
-    if (fMQRunDevice)
-        fMQRunDevice->SendBranches();
+    if (fMQRunDevice) {
+        fMQRunDevice->SendBranches(*this);
+    }
 }
 
 //_____________________________________________________________________________
 FairSink* FairOnlineSink::CloneSink()
 {
     FairRootManager* tempMan = FairRootManager::Instance();
-    FairOnlineSink* newSink = new FairOnlineSink(*this);
-    newSink->SetMQRunDevice(this->GetMQRunDevice());
+    auto newSink = new FairOnlineSink(*this);
     LOG(info) << "[" << tempMan->GetInstanceId() << "] FairOnlineSink::CloneSink() setting MQRunDevice to "
               << this->GetMQRunDevice();
 

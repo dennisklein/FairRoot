@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -148,8 +148,7 @@ void FairTestDetector::ConstructGeometry()
         just copy this and use it for your detector, otherwise you can
         implement here you own way of constructing the geometry. */
 
-    FairTestDetectorGeo* Geo = new FairTestDetectorGeo();
-    ConstructASCIIGeometry<FairTestDetectorGeo, FairTestDetectorGeoPar>(Geo, "FairTestDetectorGeoPar");
+    ConstructASCIIGeometry<FairTestDetectorGeo, FairTestDetectorGeoPar>("FairTestDetectorGeoPar");
 }
 
 FairTestDetectorPoint* FairTestDetector::AddHit(Int_t trackID,
@@ -169,5 +168,3 @@ FairTestDetectorPoint* FairTestDetector::AddHit(Int_t trackID,
     myPoint->SetLink(FairLink(-1, fEventNr, FairRootManager::Instance()->GetBranchId("MCTrack"), trackID));
     return myPoint;
 }
-
-ClassImp(FairTestDetector);

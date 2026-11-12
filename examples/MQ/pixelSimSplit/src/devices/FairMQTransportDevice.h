@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2017 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2017-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *         GNU Lesser General Public Licence version 3 (LGPL) version 3,        *
@@ -17,18 +17,18 @@
 #define FAIRMQTRANSPORTDEVICE_H_
 
 #include "FairMQRunDevice.h"
+#include "FairRunSim.h"
 
 #include <Rtypes.h>
 #include <TString.h>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 class FairMCSplitEventHeader;
-class FairRunSim;
 class FairField;
 class FairParIo;
 class TObjArray;
-class FairSink;
 class FairMCApplication;
 class FairGenericStack;
 class TVirtualMC;
@@ -37,7 +37,7 @@ class FairMQTransportDevice : public FairMQRunDevice
 {
   public:
     FairMQTransportDevice();
-    virtual ~FairMQTransportDevice();
+    ~FairMQTransportDevice() override;
 
     // ------ FairRunSim setters ------
     void SetNofEvents(int64_t nofev) { fNofEvents = nofev; };
@@ -51,7 +51,6 @@ class FairMQTransportDevice : public FairMQRunDevice
     void SetSecondParameter(FairParIo* par) { fSecondParameter = par; };
     void SetUserConfig(const TString& Config) { fUserConfig = Config; }
     void SetUserCuts(const TString& Cuts) { fUserCuts = Cuts; }
-    void SetSink(FairSink* sink) { fSink = sink; }
     // ------ ---------- -------- ------
 
     void InitializeRun();
@@ -62,13 +61,14 @@ class FairMQTransportDevice : public FairMQRunDevice
     void RunInReqMode(bool tb = true) { fRunConditional = tb; };
 
   protected:
-    bool TransportData(FairMQParts&, int);
-    //  bool TransportData(FairMQMessagePtr&, int);
-    virtual void Init();
-    virtual void InitTask();
-    virtual void PreRun();
-    virtual void PostRun();
-    virtual bool ConditionalRun();
+    bool TransportData(fair::mq::Parts&, int);
+    //  bool TransportData(fair::mq::MessagePtr&, int);
+    void Init() override;
+    void InitTask() override;
+    void ResetTask() override;
+    void PreRun() override;
+    void PostRun() override;
+    bool ConditionalRun() override;
 
   private:
     UInt_t fRunId;
@@ -82,7 +82,7 @@ class FairMQTransportDevice : public FairMQRunDevice
     TVirtualMC* fVMC;
     FairGenericStack* fStack;
     FairMCApplication* fMCApplication;
-    FairRunSim* fRunSim;
+    std::unique_ptr<FairRunSim> fRunSim;
     // ------ FairRunSim settings ------
     int64_t fNofEvents;
     std::string fTransportName;
@@ -95,7 +95,6 @@ class FairMQTransportDevice : public FairMQRunDevice
     FairParIo* fSecondParameter;   // second input (used if not found in first input)
     TString fUserConfig;           //!                  /** Macro for geant configuration*/
     TString fUserCuts;             //!                  /** Macro for geant cuts*/
-    FairSink* fSink;
     // ------ ---------- -------- ------
 
     FairMCSplitEventHeader* fMCSplitEventHeader;

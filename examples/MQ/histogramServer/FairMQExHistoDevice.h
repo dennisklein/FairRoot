@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2022 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -8,23 +8,24 @@
 #ifndef FAIRMQEXHISTODEVICE
 #define FAIRMQEXHISTODEVICE
 
-#include <FairMQDevice.h>
+#include "FairMQ.h"   // for fair::mq::Device
+
 #include <TH1.h>   // for TH1F
 #include <TH2.h>   // for TH2F
 #include <TObjArray.h>
 #include <TRandom3.h>
 
-class FairMQExHistoDevice : public FairMQDevice
+class FairMQExHistoDevice : public fair::mq::Device
 {
   public:
     FairMQExHistoDevice();
-    virtual ~FairMQExHistoDevice();
+    ~FairMQExHistoDevice() override;
 
   protected:
-    virtual void InitTask();
-    virtual void PreRun();
-    virtual void PostRun();
-    virtual bool ConditionalRun();
+    void InitTask() override;
+    void PreRun() override;
+    void PostRun() override;
+    bool ConditionalRun() override;
 
   private:
     FairMQExHistoDevice(const FairMQExHistoDevice&);

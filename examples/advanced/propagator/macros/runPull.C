@@ -1,10 +1,29 @@
 /********************************************************************************
- *    Copyright (C) 2019 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2019-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairTrackParP.h"
+#endif
+
+#include <TCanvas.h>
+#include <TClonesArray.h>
+#include <TF1.h>
+#include <TFile.h>
+#include <TH1F.h>
+#include <TROOT.h>
+#include <TStyle.h>
+#include <TTree.h>
+#include <iostream>
+#include <memory>
+
+using std::cout;
+using std::endl;
+
 int runPull(std::string propName = "rk", bool drawHist = false)
 {
     if (propName != "geane" && propName != "rk") {
@@ -15,32 +34,31 @@ int runPull(std::string propName = "rk", bool drawHist = false)
     gROOT->Reset();
     gStyle->SetOptFit(1);
 
-    TFile *f = new TFile(Form("prop.%s.cal.root", propName.data()));
-    TTree *simtree = (TTree *)f->Get("cbmsim");
+    std::unique_ptr<TFile> f{TFile::Open(Form("prop.%s.cal.root", propName.c_str()))};
+    std::unique_ptr<TTree> simtree{f->Get<TTree>("cbmsim")};
 
-    TClonesArray *fTrackParProp = new TClonesArray("FairTrackParP");
-    TClonesArray *fTrackParIni = new TClonesArray("FairTrackParP");
-    TClonesArray *fTrackParFinal = new TClonesArray("FairTrackParP");
+    TClonesArray* fTrackParProp = new TClonesArray("FairTrackParP");
+    TClonesArray* fTrackParFinal = new TClonesArray("FairTrackParP");
 
     Double_t maxDist = 0.1;
-    TH1F *hQP = new TH1F("hQP", "charge over momentum", 200, -maxDist, maxDist);
-    TH1F *hX = new TH1F("hX", "position X", 200, -maxDist, maxDist);
-    TH1F *hY = new TH1F("hY", "position Y", 200, -maxDist, maxDist);
-    TH1F *hPx = new TH1F("hPx", "momentum X", 200, -maxDist, maxDist);
-    TH1F *hPy = new TH1F("hPy", "momentum Y", 200, -maxDist, maxDist);
-    TH1F *hPz = new TH1F("hPz", "momentum Z", 200, -maxDist, maxDist);
+    TH1F* hQP = new TH1F("hQP", "charge over momentum", 200, -maxDist, maxDist);
+    TH1F* hX = new TH1F("hX", "position X", 200, -maxDist, maxDist);
+    TH1F* hY = new TH1F("hY", "position Y", 200, -maxDist, maxDist);
+    TH1F* hPx = new TH1F("hPx", "momentum X", 200, -maxDist, maxDist);
+    TH1F* hPy = new TH1F("hPy", "momentum Y", 200, -maxDist, maxDist);
+    TH1F* hPz = new TH1F("hPz", "momentum Z", 200, -maxDist, maxDist);
 
     simtree->SetBranchAddress("PropTrackFinal", &fTrackParFinal);
     simtree->SetBranchAddress("PropTrackPar", &fTrackParProp);
-    FairTrackParP *fTrkF;
-    FairTrackParP *fTrkG;
+    FairTrackParP* fTrkF;
+    FairTrackParP* fTrkG;
     Int_t Nevents = simtree->GetEntriesFast();
     cout << Nevents << endl;
     for (Int_t i = 0; i < Nevents; i++) {
         simtree->GetEntry(i);
         for (Int_t k = 0; k < fTrackParProp->GetEntriesFast(); k++) {
-            fTrkF = (FairTrackParP *)fTrackParFinal->At(k);
-            fTrkG = (FairTrackParP *)fTrackParProp->At(k);
+            fTrkF = (FairTrackParP*)fTrackParFinal->At(k);
+            fTrkG = (FairTrackParP*)fTrackParProp->At(k);
             if (fTrkF && fTrkG) {
                 hQP->Fill(fTrkF->GetQp() - fTrkG->GetQp());
                 hX->Fill(fTrkF->GetX() - fTrkG->GetX());
@@ -58,7 +76,7 @@ int runPull(std::string propName = "rk", bool drawHist = false)
         }
     }
     if (drawHist) {
-        TCanvas *c = new TCanvas("c", "c", 900, 600);
+        TCanvas* c = new TCanvas("c", "c", 900, 600);
         c->Divide(3, 2);
         c->cd(1);
         hQP->Draw();
@@ -82,7 +100,7 @@ int runPull(std::string propName = "rk", bool drawHist = false)
         c->cd();
     }
 
-    TF1 *fitX = new TF1("fitX", "gaus", -5., 5.);
+    TF1* fitX = new TF1("fitX", "gaus", -5., 5.);
     hX->Fit("fitX", "QN");
 
     if (fitX->GetParameter(1) > -1.e-3 && fitX->GetParameter(1) < 1.e-3 && fitX->GetParameter(2) > 0.

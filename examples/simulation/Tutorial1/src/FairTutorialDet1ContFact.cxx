@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -7,41 +7,26 @@
  ********************************************************************************/
 #include "FairTutorialDet1ContFact.h"
 
-#include "FairRuntimeDb.h"            // for FairRuntimeDb
 #include "FairTutorialDet1GeoPar.h"   // for FairTutorialDet1GeoPar
 
 #include <TList.h>     // for TList
 #include <TString.h>   // for TString
 #include <cstring>     // for strcmp
 
-class FairParSet;
-
-ClassImp(FairTutorialDet1ContFact);
-
 static FairTutorialDet1ContFact gFairTutorialDet1ContFact;
 
 FairTutorialDet1ContFact::FairTutorialDet1ContFact()
-    : FairContFact()
+    : FairContFact("FairTutorialDet1ContFact", "Factory for parameter containers in libTutorial1")
 {
     /** Constructor (called when the library is loaded) */
-    fName = "FairTutorialDet1ContFact";
-    fTitle = "Factory for parameter containers in libTutorial1";
-    setAllContainers();
-    FairRuntimeDb::instance()->addContFactory(this);
-}
 
-void FairTutorialDet1ContFact::setAllContainers()
-{
     /** Creates the Container objects with all accepted
       contexts and adds them to
       the list of containers for the Tutorial1 library.
   */
 
-    FairContainer* p =
-        new FairContainer("FairTutorialDet1GeoPar", "FairTutorialDet1 Geometry Parameters", "TestDefaultContext");
-    p->addContext("TestNonDefaultContext");
-
-    containers->Add(p);
+    auto p = new FairContainer("FairTutorialDet1GeoPar", "FairTutorialDet1 Geometry Parameters", "TestDefaultContext");
+    AddContainer(p);
 }
 
 FairParSet* FairTutorialDet1ContFact::createContainer(FairContainer* c)

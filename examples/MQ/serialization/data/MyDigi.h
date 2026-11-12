@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH       *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -13,11 +13,11 @@
  * Created on November 24, 2014, 1:31 PM
  */
 
-#ifndef MYDIGIDATA_H
-#define MYDIGIDATA_H
+#ifndef MYDIGI_H
+#define MYDIGI_H
 
-#include "FairTimeStamp.h"   // for FairTimeStamp
-
+#include <FairTimeStamp.h>   // for FairTimeStamp
+#include <FairTimeStampBoostSerializationSupport.h>
 #include <Rtypes.h>   // for Int_t, etc
 #include <iosfwd>     // for ostream
 #include <iostream>   // for operator<<, basic_ostream, etc
@@ -32,9 +32,16 @@ class access;
 class MyDigi : public FairTimeStamp
 {
   public:
-    MyDigi();
-    MyDigi(Int_t x, Int_t y, Int_t z, Double_t timeStamp, Double_t timeStampError = 0.0);
-    virtual ~MyDigi();
+    MyDigi() = default;
+
+    MyDigi(Int_t x, Int_t y, Int_t z, Double_t timeStamp, Double_t timeStampError = 0.0)
+        : FairTimeStamp(timeStamp, timeStampError)
+        , fX(x)
+        , fY(y)
+        , fZ(z)
+    {}
+
+    ~MyDigi() override = default;
 
     void SetXYZ(Int_t x, Int_t y, Int_t z)
     {
@@ -51,7 +58,7 @@ class MyDigi : public FairTimeStamp
     Int_t GetZ() const { return fZ; }
 
     // temporary to avoid serialisation of the parent class
-    virtual bool equal(FairTimeStamp* data)
+    bool equal(FairTimeStamp* data) override
     {
         MyDigi* myDigi = dynamic_cast<MyDigi*>(data);
         if (myDigi != 0) {
@@ -104,11 +111,11 @@ class MyDigi : public FairTimeStamp
   private:
     friend class boost::serialization::access;
 
-    Int_t fX;
-    Int_t fY;
-    Int_t fZ;
+    Int_t fX = 0;
+    Int_t fY = 0;
+    Int_t fZ = 0;
 
-    ClassDef(MyDigi, 1);
+    ClassDefOverride(MyDigi, 1);
 };
 
-#endif /* MYDIGIDATA_H */
+#endif /* MYDIGI_H */

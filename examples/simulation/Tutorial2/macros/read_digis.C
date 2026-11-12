@@ -1,13 +1,35 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
+#if !defined(__CLING__) || defined(__ROOTCLING__)
+#include "FairBaseParSet.h"
+#include "FairFileSource.h"
+#include "FairParAsciiFileIo.h"
+#include "FairParRootFileIo.h"
+#include "FairRootFileSink.h"
+#include "FairRunAna.h"
+#include "FairRuntimeDb.h"
+#include "FairSystemInfo.h"
+#include "FairTutorialDet2CustomTask.h"
+#include "FairTutorialDet2DigiPar.h"
+#include "FairTutorialDet2Digitizer.h"
+
+#include <TStopwatch.h>
+#include <TString.h>
+#include <iostream>
+#include <memory>
+#endif
+
+using std::cout;
+using std::endl;
+
 void read_digis()
 {
-
     TStopwatch timer;
     timer.Start();
 
@@ -27,7 +49,7 @@ void read_digis()
     FairRunAna* fRun = new FairRunAna();
     FairFileSource* fFileSource = new FairFileSource(inFile);
     fRun->SetSource(fFileSource);
-    fRun->SetSink(new FairRootFileSink(outFile));
+    fRun->SetSink(std::make_unique<FairRootFileSink>(outFile));
 
     // Init Simulation Parameters from Root File
     FairRuntimeDb* rtdb = fRun->GetRuntimeDb();
@@ -72,7 +94,8 @@ void read_digis()
     rtdb->saveOutput();
 
     // -- Print out the random seed from the simulation ----------------------
-    FairBaseParSet* BasePar = (FairBaseParSet*)rtdb->getContainer("FairBaseParSet");
+    auto BasePar = dynamic_cast<FairBaseParSet*>(rtdb->getContainer("FairBaseParSet"));
+    assert(BasePar);
     cout << "RndSeed used in simulation was  " << BasePar->GetRndSeed() << endl;
 
     // -----------------------------------------------------------------------
@@ -80,7 +103,7 @@ void read_digis()
     // Second version to print the parameters
     // which also shows how to change and save them again
 
-    FairTutorialDet2DigiPar* DigiPar = (FairTutorialDet2DigiPar*)rtdb->getContainer("FairTutorialDet2DigiPar");
+    auto DigiPar = static_cast<FairTutorialDet2DigiPar*>(rtdb->getContainer("FairTutorialDet2DigiPar"));
 
     DigiPar->setChanged();
     DigiPar->setInputVersion(fRun->GetRunId(), 1);

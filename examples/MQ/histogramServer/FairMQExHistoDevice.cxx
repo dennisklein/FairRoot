@@ -1,12 +1,14 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2024 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
  *                  copied verbatim in the file "LICENSE"                       *
  ********************************************************************************/
+
 #include "FairMQExHistoDevice.h"
 
+#include "FairMQ.h"
 #include "RootSerializer.h"
 
 #include <TMath.h>
@@ -51,11 +53,11 @@ bool FairMQExHistoDevice::ConditionalRun()
     y = r * TMath::Sin(phi);
     fh_histo4.Fill(x, y);
 
-    FairMQMessagePtr message(NewMessage());
-    Serialize<RootSerializer>(*message, &fArrayHisto);
+    auto message(NewMessage());
+    RootSerializer().Serialize(*message, &fArrayHisto);
 
-    for (auto& channel : fChannels) {
-        Send(message, channel.first.data());
+    for (auto& channel : fairroot::GetFairMQDeviceChannels(*this)) {
+        Send(message, channel.first);
     }
 
     fh_histo1.Reset();

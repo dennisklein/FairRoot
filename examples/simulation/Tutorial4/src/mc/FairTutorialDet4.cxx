@@ -1,5 +1,5 @@
 /********************************************************************************
- *    Copyright (C) 2014 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH    *
+ * Copyright (C) 2014-2023 GSI Helmholtzzentrum fuer Schwerionenforschung GmbH  *
  *                                                                              *
  *              This software is distributed under the terms of the             *
  *              GNU Lesser General Public Licence (LGPL) version 3,             *
@@ -24,8 +24,6 @@
 #include <TString.h>           // for TString, operator<<, Form
 #include <TVirtualMC.h>        // for TVirtualMC
 #include <TVirtualMCStack.h>   // for TVirtualMCStack
-
-FairTutorialDet4Geo* FairTutorialDet4::fgGeo;   //!
 
 FairTutorialDet4::FairTutorialDet4()
     : FairDetector("TutorialDet", kTRUE, kTutDet)
@@ -112,9 +110,9 @@ void FairTutorialDet4::SetParContainers()
     LOG(info) << "Set tutdet missallign parameters";
     // Get Base Container
     FairRun* sim = FairRun::Instance();
-    LOG_IF(FATAL, !sim) << "No run object";
+    LOG_IF(fatal, !sim) << "No run object";
     FairRuntimeDb* rtdb = sim->GetRuntimeDb();
-    LOG_IF(FATAL, !rtdb) << "No runtime database";
+    LOG_IF(fatal, !rtdb) << "No runtime database";
 
     fMisalignPar = static_cast<FairTutorialDet4MisalignPar*>(rtdb->getContainer("FairTutorialDet4MissallignPar"));
 }
@@ -252,10 +250,7 @@ void FairTutorialDet4::ConstructGeometry()
 
 Bool_t FairTutorialDet4::IsSensitive(const std::string& name)
 {
-    if (name.find("tut4") != std::string::npos) {
-        return kTRUE;
-    }
-    return kFALSE;
+    return name.find("tut4") != std::string::npos;
 }
 
 void FairTutorialDet4::ConstructASCIIGeometry()
@@ -264,7 +259,7 @@ void FairTutorialDet4::ConstructASCIIGeometry()
       just copy this and use it for your detector, otherwise you can
       implement here you own way of constructing the geometry. */
 
-    FairModule::ConstructASCIIGeometry<FairTutorialDet4Geo, FairTutorialDet4GeoPar>(fgGeo, "FairTutorialDet4GeoPar");
+    FairModule::ConstructASCIIGeometry<FairTutorialDet4Geo, FairTutorialDet4GeoPar>("FairTutorialDet4GeoPar");
 }
 
 std::map<std::string, TGeoHMatrix> FairTutorialDet4::getMisalignmentMatrices()
@@ -353,6 +348,7 @@ FairTutorialDet4Point* FairTutorialDet4::AddHit(Int_t trackID,
     return new (clref[size]) FairTutorialDet4Point(trackID, detID, pos, mom, time, length, eLoss);
 }
 
-FairModule* FairTutorialDet4::CloneModule() const { return new FairTutorialDet4(*this); }
-
-ClassImp(FairTutorialDet4);
+FairModule* FairTutorialDet4::CloneModule() const
+{
+    return new FairTutorialDet4(*this);
+}
