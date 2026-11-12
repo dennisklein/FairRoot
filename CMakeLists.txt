@@ -17,6 +17,11 @@ set(FLATSIM_G4DATA_DIR "$ENV{HOME}/.cache/flatsim/geant4-data" CACHE PATH
   "Geant4 data sets. Outside of the build tree, so that a clean build reuses them")
 set(FLATSIM_JOBS 4 CACHE STRING "Parallel jobs for each package build")
 
+# Transformations that change only the compiler and linker settings of the whole stack.
+set(FLATSIM_FLAGS "" CACHE STRING
+  "Extra C and C++ compiler flags for all packages, for example -march=x86-64-v3 (T1, target ISA)")
+option(FLATSIM_LTO "Link-time optimization in all packages (T1, LTO)" OFF)
+
 set(ext "${CMAKE_SOURCE_DIR}/extern")
 set(common_args
   -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
@@ -27,7 +32,14 @@ set(common_args
   -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
   -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+  "-DCMAKE_C_FLAGS=${FLATSIM_FLAGS}"
+  "-DCMAKE_CXX_FLAGS=${FLATSIM_FLAGS}"
 )
+if(FLATSIM_LTO)
+  list(APPEND common_args
+    -DCMAKE_POLICY_DEFAULT_CMP0069=NEW
+    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON)
+endif()
 set(build_cmd ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${FLATSIM_JOBS})
 
 function(flatsim_package name)

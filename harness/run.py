@@ -5,20 +5,23 @@ For each seed, the script runs fv0sim, measures time and memory, and
 writes the physics observables with fv0dump. Results go to
 <out>/<label>/:
   runs.csv              one line per run (times, memory, output hash)
+  summary.json          fixed cost and time per event
   physics/seed<N>.*.csv observables for compare.py
   callgrind.<N>.out     with --callgrind, for layers.py
 
 Usage:
-  run.py --prefix <install prefix> --label <name> --seeds 1-5 --events 200
+  run.py --prefix <install prefix> --label <name> --seeds 1-5 --events 1000
          [--callgrind] [--out results]
 """
 import argparse
 import csv
 import hashlib
+import json
 import os
 import re
 import resource
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -95,7 +98,9 @@ def main():
     ap.add_argument("--prefix", required=True)
     ap.add_argument("--label", required=True)
     ap.add_argument("--seeds", default="1-5")
-    ap.add_argument("--events", type=int, default=200)
+    ap.add_argument("--events", type=int, default=1000)
+    ap.add_argument("--fixed-runs", type=int, default=3,
+                    help="1-event runs that measure the fixed cost (start-up, physics tables)")
     ap.add_argument("--callgrind", action="store_true")
     ap.add_argument("--field", default=FIELD_KG,
                     help="field in kG; change it only to test the power of the physics gate")
@@ -128,6 +133,26 @@ def main():
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()
         w.writerows(rows)
+    if args.callgrind or args.fixed_runs < 1:
+        return
+
+    # Fixed cost: runs with 1 event. Per-event time = (wall - fixed) / (events - 1).
+    fixed = []
+    for i in range(args.fixed_runs):
+        fixed.append(run_one(prefix, env, work, seeds(args.seeds)[0], 1, False, args.field, args.key_values)["wall_s"])
+    fixed_s = statistics.median(fixed)
+    per_event = [(r["wall_s"] - fixed_s) / (r["events"] - 1) * 1e3 for r in rows]
+    summary = {
+        "label": args.label, "events": args.events, "seeds": len(rows),
+        "fixed_s": fixed_s, "fixed_runs_s": fixed,
+        "ms_per_event": statistics.mean(per_event),
+        "ms_per_event_err": statistics.stdev(per_event) / len(per_event) ** 0.5 if len(per_event) > 1 else 0.0,
+        "maxrss_mb": max(r["maxrss_mb"] for r in rows),
+    }
+    with open(os.path.join(out, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=1)
+    print(f"{args.label}: fixed {fixed_s:.2f} s, {summary['ms_per_event']:.2f} "
+          f"+- {summary['ms_per_event_err']:.2f} ms per event", flush=True)
 
 
 if __name__ == "__main__":

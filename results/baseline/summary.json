@@ -1,0 +1,14 @@
+{
+ "label": "baseline",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.886,
+ "fixed_runs_s": [
+  1.901,
+  1.886,
+  1.87
+ ],
+ "ms_per_event": 23.31211211211211,
+ "ms_per_event_err": 0.1581962929658879,
+ "maxrss_mb": 360.4
+}

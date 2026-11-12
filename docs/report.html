@@ -1,0 +1,174 @@
+<title>Flatsim FV0 Report</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one reading column; tables and figures may scroll inside their own box. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1b2230; --muted: #5a6577; --rule: #d9dee6;
+  --accent: #1f6feb; --g4: #2f7d4f; --root: #c0562b; --o2: #6b4bb3; --sys: #7a8494; --thin: #b0892a;
+  --pass: #2f7d4f; --fail: #b4232c;
+  --display: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5; --rule: #2c3442;
+  --accent: #6aa6ff; --g4: #5cbf86; --root: #e58a5f; --o2: #a58bea; --sys: #8d97a8; --thin: #d8b25a;
+  --pass: #5cbf86; --fail: #f07178; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e8ef; --muted: #9aa5b5; --rule: #2c3442;
+  --accent: #6aa6ff; --g4: #5cbf86; --root: #e58a5f; --o2: #a58bea; --sys: #8d97a8; --thin: #d8b25a;
+  --pass: #5cbf86; --fail: #f07178; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font: 16px/1.6 var(--body); }
+main { max-width: 52rem; margin: 0 auto; padding-block: 2.5rem 4rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 2.25rem; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: 2rem; } h2 { font-size: 1.35rem; } h3 { font-size: 1.05rem; }
+section { display: flex; flex-direction: column; gap: .8rem; min-width: 0; }
+p, ul { margin: 0; max-width: 65ch; } li + li { margin-top: .3rem; }
+.eyebrow { font: 600 .75rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.lead { color: var(--muted); font-size: 1.05rem; }
+code { font-family: var(--mono); font-size: .88em; }
+a { color: var(--accent); }
+.box { overflow-x: auto; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .45rem .75rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 600 .75rem var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.pass { color: var(--pass); font-weight: 600; } .fail { color: var(--fail); font-weight: 600; }
+svg text { fill: var(--fg); font-family: var(--mono); font-size: 12px; }
+svg .muted { fill: var(--muted); }
+.cap { font-size: .85rem; color: var(--muted); }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; }
+.kv div { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .7rem .9rem; }
+.kv b { display: block; font: 600 1.3rem var(--display); font-variant-numeric: tabular-nums; }
+.kv span { font-size: .8rem; color: var(--muted); }
+</style>
+
+<main>
+<header style="display:flex;flex-direction:column;gap:.6rem">
+  <span class="eyebrow">Flatsim · FV0 pilot · status 2026-11-12</span>
+  <h1>What does each layer of the simulation stack cost?</h1>
+  <p class="lead">This report follows one experiment. We take the full source of a real simulation (ALICE O2 FV0 with Geant4 through VMC), build it from source with only CMake and GCC, and measure the cost of each layer. Then we remove the layers one at a time. Each step must keep the physics equal.</p>
+</header>
+
+<section>
+  <span class="eyebrow">Result so far</span>
+  <h2>The organizational layers are cheap. Two implementation choices are expensive.</h2>
+  <div class="kv">
+    <div><b>203 M</b><span>instructions per event</span></div>
+    <div><b>49.6 %</b><span>TGeo navigation (ROOT)</span></div>
+    <div><b>24.5 %</b><span>field map (O2)</span></div>
+    <div><b>&lt; 0.2 %</b><span>VMC and FairRoot together</span></div>
+  </div>
+  <p>Geant4 navigates in the ROOT geometry (TGeo) through g4root, because O2 uses TGeo as the geometry source. The navigation costs half of all instructions per event. The O2 Chebyshev field map costs one quarter. Geant4 physics and stepping cost one eighth. The VMC interface and the FairRoot dispatch layer cost almost nothing for FV0.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Figure 1</span>
+  <h2>Cost per event, by layer</h2>
+  <div class="box">
+    <svg viewBox="0 0 640 300" width="100%" role="img" aria-label="Bar chart of the share of instructions per event for each layer">
+      <!-- scale: 0..50 % maps to x 150..610 (9.2 px per %) -->
+      <g stroke="var(--rule)" stroke-width="1">
+        <line x1="150" y1="16" x2="150" y2="266"/><line x1="242" y1="16" x2="242" y2="266"/>
+        <line x1="334" y1="16" x2="334" y2="266"/><line x1="426" y1="16" x2="426" y2="266"/>
+        <line x1="518" y1="16" x2="518" y2="266"/><line x1="610" y1="16" x2="610" y2="266"/>
+      </g>
+      <g>
+        <text x="140" y="36" text-anchor="end">ROOT (TGeo)</text><rect x="150" y="22" width="456.3" height="20" fill="var(--root)"/><text x="600" y="37" text-anchor="end" style="fill:var(--bg)">49.6 %</text>
+        <text x="140" y="66" text-anchor="end">O2</text><rect x="150" y="52" width="225.0" height="20" fill="var(--o2)"/><text x="381" y="67">24.5 %</text>
+        <text x="140" y="96" text-anchor="end">Geant4</text><rect x="150" y="82" width="114.9" height="20" fill="var(--g4)"/><text x="271" y="97">12.5 %</text>
+        <text x="140" y="126" text-anchor="end">libm, libc</text><rect x="150" y="112" width="79.6" height="20" fill="var(--sys)"/><text x="236" y="127">8.6 %</text>
+        <text x="140" y="156" text-anchor="end">PLT stubs</text><rect x="150" y="142" width="25.2" height="20" fill="var(--thin)"/><text x="181" y="157">2.7 %</text>
+        <text x="140" y="186" text-anchor="end">geant4_vmc</text><rect x="150" y="172" width="17.9" height="20" fill="var(--thin)"/><text x="174" y="187">2.0 %</text>
+        <text x="140" y="216" text-anchor="end">FairRoot</text><rect x="150" y="202" width="1.0" height="20" fill="var(--thin)"/><text x="157" y="217">0.11 %</text>
+        <text x="140" y="246" text-anchor="end">VMC</text><rect x="150" y="232" width="0.5" height="20" fill="var(--thin)"/><text x="157" y="247">≈ 0 (21 instr.)</text>
+      </g>
+      <g class="muted">
+        <text class="muted" x="150" y="284" text-anchor="middle">0</text><text class="muted" x="242" y="284" text-anchor="middle">10</text>
+        <text class="muted" x="334" y="284" text-anchor="middle">20</text><text class="muted" x="426" y="284" text-anchor="middle">30</text>
+        <text class="muted" x="518" y="284" text-anchor="middle">40</text><text class="muted" x="610" y="284" text-anchor="middle">50 %</text>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">Callgrind instruction counts (Ir), self cost per shared object. Per event = (profile with 110 events − profile with 10 events) / 100, so start-up and physics tables are excluded. Benchmark: 10 π<sup>+</sup> per event, η 2.2–5.1, p 0.5–10 GeV/c, nominal 5 kG field, modules CAVE, PIPE, FV0.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Where the instructions go</span>
+  <h2>Top functions per event</h2>
+  <div class="box"><table>
+    <tr><th>Function</th><th>Layer</th><th class="num">Share</th></tr>
+    <tr><td><code>o2::math_utils::Chebyshev3DCalc::Eval</code></td><td>O2 field map</td><td class="num">20.2 %</td></tr>
+    <tr><td><code>TGeoTranslation::MasterToLocal</code></td><td>ROOT</td><td class="num">13.5 %</td></tr>
+    <tr><td><code>TGeoUnion::Contains</code></td><td>ROOT</td><td class="num">12.0 %</td></tr>
+    <tr><td><code>TGeoTube::Contains</code></td><td>ROOT</td><td class="num">3.7 %</td></tr>
+    <tr><td><code>__fmaf_fma3</code> (libm)</td><td>system</td><td class="num">2.8 %</td></tr>
+    <tr><td><code>__ieee754_atan2_fma</code> (libm)</td><td>system</td><td class="num">2.4 %</td></tr>
+    <tr><td><code>TGeoIdentity::MasterToLocal</code></td><td>ROOT</td><td class="num">2.4 %</td></tr>
+    <tr><td><code>TGeoCompositeShape::Contains</code></td><td>ROOT</td><td class="num">2.0 %</td></tr>
+    <tr><td><code>G4NystromRK4::Stepper</code></td><td>Geant4</td><td class="num">1.8 %</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <span class="eyebrow">Boundaries</span>
+  <h2>Calls across layer boundaries, per event</h2>
+  <p>The harness counts each call whose caller and callee are in different layers. It looks through PLT stubs, so a call counts from the real caller to the real callee.</p>
+  <div class="box"><table>
+    <tr><th>Caller → callee</th><th class="num">Calls / event</th><th>What it is</th></tr>
+    <tr><td>O2 → libm</td><td class="num">1,920,434</td><td><code>std::fma(float)</code> in the field map. The build targets baseline x86-64 without FMA, so each call goes through the PLT to <code>fmaf</code>.</td></tr>
+    <tr><td>ROOT → libc</td><td class="num">55,017</td><td><code>__tls_get_addr</code> for TGeo thread data, <code>atan2</code>, <code>sincos</code>.</td></tr>
+    <tr><td>Geant4 → geant4_vmc</td><td class="num">45,276</td><td>Field queries: <code>G4NystromRK4::Stepper</code> → <code>TG4CachedMagneticField</code>.</td></tr>
+    <tr><td>geant4_vmc → O2</td><td class="num">23,563</td><td>Field value from the O2 field map; the user stepping action.</td></tr>
+    <tr><td>O2 → FairRoot</td><td class="num">2,672</td><td>The O2 stepping action calls <code>FairMCApplication::Stepping</code> (2,412 steps in sensitive volumes), plus track begin and end.</td></tr>
+    <tr><td>FairRoot → geant4_vmc</td><td class="num">2,413</td><td><code>TVirtualMC::CurrentVolID</code> once per step, to find the detector of the volume. Only 82 steps per event reach <code>fv0::Detector::ProcessHits</code>.</td></tr>
+  </table></div>
+  <p>Inside a layer, calls between its own shared libraries also go through the PLT: 310,000 per event inside Geant4 and 244,000 inside ROOT. A static link with LTO (T1, T2) removes them.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Method</span>
+  <h2>How the branch is built</h2>
+  <ul>
+    <li>Every dependency is imported as source into <code>extern/</code>, one commit per package, with the upstream URL, tag and commit in the message. Versions follow the ALICE production stack (alidist): ROOT v6-36-10-alice4, Geant4 v11.2.0-alice4, geant4_vmc v6-6-update4-p5, VMC v2-2, Pythia 8.318, O2 daily-20261112.</li>
+    <li>From O2 we import only the closure that FV0 needs: 145 source files and about 347 headers. A link-map closure finds the sources, and an include closure with both GCC and Clang finds the headers. O2 already carries the FairRoot simulation core (<code>Detectors/3rdparty/FairRootBase</code>), so a separate FairRoot is not necessary.</li>
+    <li>One CMake superbuild builds everything. It requires CMake and GCC only. CMake downloads the Geant4 physics data into a cache outside the build tree.</li>
+    <li><code>fv0sim</code> is a reduced copy of <code>o2-sim-serial</code>. One cut keeps the CCDB out of the link: the field comes from the nominal setting.</li>
+  </ul>
+</section>
+
+<section>
+  <span class="eyebrow">Physics gate</span>
+  <h2>Each transformation must keep the physics equal</h2>
+  <p>The gate compares a candidate build with the reference build on independent seeds. Event observables use the two-sample KS test. Hit observables use permutation tests over whole events, because hits in one event are correlated. The gate passes when every p-value is above 0.01 divided by the number of tests (Bonferroni). An equal hit hash is a diagnostic only.</p>
+  <p>The first gate tested hits as independent samples. It failed for two seed sets of the same build (cell χ² = 246 for 39 degrees of freedom). With event permutations, the same data give p = 0.40. We also added the hit offset from the straight line of its track. This observable shows the bending in the field.</p>
+  <div class="box"><table>
+    <tr><th>Calibration, 5 × 200 events</th><th class="num">Smallest p</th><th>Gate</th></tr>
+    <tr><td>Same build, other seeds</td><td class="num">0.032 (hit r)</td><td class="pass">pass</td></tr>
+    <tr><td>Same seed again</td><td class="num">identical hash</td><td class="pass">deterministic</td></tr>
+    <tr><td>Field 5 → 2 kG</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
+    <tr><td>p<sub>max</sub> 10 → 9.5 GeV/c</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
+  </table></div>
+  <p class="cap">0.00025 is the smallest p that 4000 permutations can give. The threshold is 0.00071.</p>
+</section>
+
+<section>
+  <span class="eyebrow">Plan</span>
+  <h2>Transformations, each measured alone</h2>
+  <div class="box"><table>
+    <tr><th>Step</th><th>Change</th><th>Expected lever from the baseline</th></tr>
+    <tr><td>T1</td><td>LTO, whole program; target ISA with FMA (separate measurement)</td><td>PLT calls, the libm <code>fmaf</code> calls</td></tr>
+    <tr><td>T2</td><td>Static link, no dictionaries</td><td>PLT, start-up</td></tr>
+    <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
+    <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
+    <tr><td>T5</td><td>Compile-time geometry, native Geant4 geometry</td><td>Large: TGeo navigation is half of the cost</td></tr>
+    <tr><td>T6</td><td>Flat hit output</td><td>Output and start-up</td></tr>
+    <tr><td>T7</td><td>No VMC, native Geant4 stepping</td><td>Removes geant4_vmc (2 %)</td></tr>
+  </table></div>
+  <p>FV0 makes few hits. EMCAL and ITS2 make many, so the per-hit layers (T3, T4, T6) can cost more there. That is why the plan continues with these detectors.</p>
+</section>
+</main>
