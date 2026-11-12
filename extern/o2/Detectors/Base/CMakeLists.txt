@@ -1,0 +1,149 @@
+# Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+# See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+# All rights not expressly granted are reserved.
+#
+# This software is distributed under the terms of the GNU General Public
+# License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+#
+# In applying this license CERN does not waive the privileges and immunities
+# granted to it by virtue of its status as an Intergovernmental Organization
+# or submit itself to any jurisdiction.
+#add_compile_options(-O0 -g -fPIC)
+
+# Optional VecGeom backend for material-budget LUT filling, off by default when TGeo2VecGeom
+# isn't installed (guarded by O2_WITH_VECGEOM). Linked PRIVATE: VecGeom types never appear in
+# DetectorsBase's public headers, so consumers need neither VecGeom headers nor VecGeom itself.
+find_package(TGeo2VecGeom CONFIG QUIET)
+
+o2_add_library(DetectorsBase
+               TARGETVARNAME targetDetectorsBase
+               SOURCES src/Detector.cxx
+                       src/GeometryManager.cxx
+                       src/MaterialManager.cxx
+                       src/MaterialManagerParam.cxx
+                       src/GeometryManagerParam.cxx
+                       src/Propagator.cxx
+                       src/MatLayerCyl.cxx
+                       src/MatLayerCylSet.cxx
+                       src/Ray.cxx
+                       src/BaseDPLDigitizer.cxx
+                       src/CTFCoderBase.cxx
+                       src/Aligner.cxx
+                       src/SimFieldUtils.cxx
+                       src/TFIDInfoHelper.cxx
+                       src/GRPGeomHelper.cxx
+                       src/Stack.cxx
+                       src/VMCSeederService.cxx
+                       src/SimRandom.cxx
+                       src/GlobalParams.cxx
+                       src/O2Tessellated.cxx
+                       src/TGeoGeometryUtils.cxx
+               PUBLIC_LINK_LIBRARIES O2::FairRootBase
+                                     O2::CommonUtils
+                                     O2::DetectorsCommonDataFormats
+                                     O2::DataFormatsCTP
+                                     O2::GPUCommon
+                                     O2::GPUUtils
+                                     O2::ReconstructionDataFormats
+                                     O2::Field
+                                     O2::Framework
+                                     FairMQ::FairMQ
+                                     O2::DataFormatsParameters
+                                     O2::SimulationDataFormat
+                                     O2::SimConfig
+                                     O2::CCDB
+                                     O2::GPUDataTypes
+                                     MC::VMC
+                                     TBB::tbb
+                                     ROOT::Gdml
+                             )
+
+if(TGeo2VecGeom_FOUND)
+  target_compile_definitions(${targetDetectorsBase} PRIVATE O2_WITH_VECGEOM)
+  target_link_libraries(${targetDetectorsBase} PRIVATE TGeo2VecGeom::TGeo2VecGeom)
+else()
+  message(STATUS "TGeo2VecGeom not found: DetectorsBase built without the optional VecGeom material-budget backend")
+endif()
+
+o2_target_root_dictionary(DetectorsBase
+                          HEADERS include/DetectorsBase/Detector.h
+                                  include/DetectorsBase/GeometryManager.h
+                                  include/DetectorsBase/MaterialManager.h
+                                  include/DetectorsBase/MaterialManagerParam.h
+                                  include/DetectorsBase/GeometryManagerParam.h
+                                  include/DetectorsBase/Propagator.h
+                                  include/DetectorsBase/Ray.h
+                                  include/DetectorsBase/MatCell.h
+                                  include/DetectorsBase/MatLayerCyl.h
+                                  include/DetectorsBase/MatLayerCylSet.h
+                                  include/DetectorsBase/Aligner.h
+                                  include/DetectorsBase/Stack.h
+                                  include/DetectorsBase/SimFieldUtils.h
+                                  include/DetectorsBase/GlobalParams.h
+                                  include/DetectorsBase/O2Tessellated.h
+                                  )
+
+o2_add_test(
+  HalfSpaceBox
+  SOURCES test/testHalfSpaceBox.cxx
+  COMPONENT_NAME DetectorsBase
+  PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+  LABELS detectorsbase)
+
+o2_add_test(
+  SimRandom
+  SOURCES test/testSimRandom.cxx
+  COMPONENT_NAME DetectorsBase
+  PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+  LABELS detectorsbase)
+
+o2_add_test(
+  O2Tessellated
+  SOURCES test/testO2Tessellated.cxx
+  COMPONENT_NAME DetectorsBase
+  PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+  LABELS detectorsbase)
+
+if(BUILD_SIMULATION)
+  if (NOT APPLE)
+    o2_add_test(
+      MatBudLUT
+      SOURCES test/testMatBudLUT.cxx
+      COMPONENT_NAME DetectorsBase
+      PUBLIC_LINK_LIBRARIES O2::DetectorsBase O2::ITSMFTReconstruction
+      LABELS detectorsbase
+      ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
+                VMCWORKDIR=${CMAKE_BINARY_DIR}/stage/${CMAKE_INSTALL_DATADIR})
+  endif()
+
+  o2_add_test(
+    MCStack
+    SOURCES test/testStack.cxx
+    COMPONENT_NAME DetectorsBase
+    PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+    LABELS detectorsbase
+    ENVIRONMENT O2_ROOT=${CMAKE_BINARY_DIR}/stage
+                VMCWORKDIR=${CMAKE_BINARY_DIR}/stage/${CMAKE_INSTALL_DATADIR})
+endif()
+
+install(FILES test/buildMatBudLUT.C
+              test/compareMatBudLUT.C
+              test/extractLUTLayers.C
+              test/rescaleLUT.C
+              DESTINATION share/macro/)
+
+o2_add_test_root_macro(test/buildMatBudLUT.C
+                       PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+                       LABELS detectorsbase)
+
+o2_add_test_root_macro(test/compareMatBudLUT.C
+                       PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+                       LABELS detectorsbase)
+
+o2_add_test_root_macro(test/extractLUTLayers.C
+                       PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+                       LABELS detectorsbase)
+
+o2_add_test_root_macro(test/rescaleLUT.C
+                       PUBLIC_LINK_LIBRARIES O2::DetectorsBase
+                       LABELS detectorsbase)

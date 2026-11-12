@@ -1,0 +1,51 @@
+# Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+# See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+# All rights not expressly granted are reserved.
+#
+# This software is distributed under the terms of the GNU General Public
+# License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+#
+# In applying this license CERN does not waive the privileges and immunities
+# granted to it by virtue of its status as an Intergovernmental Organization
+# or submit itself to any jurisdiction.
+
+o2_add_library(DetectorsPassive
+               SOURCES src/Absorber.cxx
+                       src/Cave.cxx
+                       src/Dipole.cxx
+                       src/Compensator.cxx
+                       src/Pipe.cxx
+                       src/PipeRun4.cxx
+                       src/Magnet.cxx
+                       src/FrameStructure.cxx
+                       src/Shil.cxx
+                       src/Hall.cxx
+                       src/HallSimParam.cxx
+                       src/PassiveBase.cxx
+                       src/ExternalModule.cxx
+               PUBLIC_LINK_LIBRARIES O2::Field O2::DetectorsBase O2::SimConfig
+                                     RapidJSON::RapidJSON
+               PRIVATE_LINK_LIBRARIES O2::CADSupport)
+
+o2_target_root_dictionary(DetectorsPassive
+                          HEADERS include/DetectorsPassive/Absorber.h
+                                  include/DetectorsPassive/Cave.h
+                                  include/DetectorsPassive/Dipole.h
+                                  include/DetectorsPassive/Compensator.h
+                                  include/DetectorsPassive/Magnet.h
+                                  include/DetectorsPassive/Pipe.h
+                                  include/DetectorsPassive/PipeRun4.h
+                                  include/DetectorsPassive/FrameStructure.h
+                                  include/DetectorsPassive/Shil.h
+                                  include/DetectorsPassive/Hall.h
+                                  include/DetectorsPassive/HallSimParam.h
+                                  include/DetectorsPassive/PassiveBase.h
+                                  include/DetectorsPassive/ExternalModule.h
+                          LINKDEF src/PassiveLinkDef.h)
+
+# FIXME: if PutFrameInTop really depends on TRD, then the following can not work
+# as TRD is built afterwards. So we have a dependency problem here potentially.
+# o2_add_test_root_macro(FILENAME "macro/PutFrameInTop.C" PUBLIC_LINK_LIBRARIES
+# DetectorsPassive O2::FairRootBase TRDSimulation)
+
+o2_data_file(COPY data DESTINATION Detectors/Passive/simulation)
