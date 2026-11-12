@@ -1,0 +1,104 @@
+---
+// One page for each code issue: the problem, the code lines, the proposed fix and the links.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Code } from '@astrojs/starlight/components';
+import { getCollection } from 'astro:content';
+import { build } from 'virtual:fairroot/data';
+import { model, guidesForFile } from '../../lib/model.mjs';
+import { issues, SEVERITIES, CATEGORIES, issueUrl, codeLink, foundLink, where, areaOf } from '../../lib/issues.mjs';
+import { base } from '../../lib/model.mjs';
+import '../../styles/issues.css';
+
+export function getStaticPaths() {
+  return issues.map((i: any, n: number) => ({ params: { id: i.id.toLowerCase() }, props: { n } }));
+}
+
+const { n } = Astro.props as { n: number };
+const i = issues[n];
+const prev = issues[n - 1];
+const next = issues[n + 1];
+const sev = SEVERITIES.find((s) => s.id === i.severity)!;
+const sameFile = issues.filter((x: any) => x.file === i.file && x.id !== i.id);
+const docs = await getCollection('docs');
+const guides = guidesForFile(docs, i.file);
+const types = (model().files.get(i.file)?.defines ?? []).filter((c: any) => c.public);
+const lang = /\.(h|cxx|C|c|cpp|cc)$/.test(i.file) ? 'cpp' : /CMakeLists\.txt$|\.cmake$/.test(i.file) ? 'cmake' : /\.sh(\.in)?$/.test(i.file) ? 'sh' : 'text';
+const ex = i.excerpt;
+const mark = ex && i.line ? `${i.line - ex.start + 1}-${(i.lineEnd ?? i.line) - ex.start + 1}` : undefined;
+const exEnd = ex ? ex.start + ex.code.split('\n').length - 1 : 0;
+---
+
+<StarlightPage
+  frontmatter={{
+    title: i.title,
+    description: `${i.id}: ${i.description.slice(0, 150)}`,
+    eyebrow: `Code issue · ${i.id}`,
+    searchTitle: `${i.id}: ${i.title}`,
+    tableOfContents: false,
+    editUrl: false,
+    guides: [...guides, ...types.map((t: any) => ({ label: t.name, link: t.url.replace(base, '') }))],
+    prev: prev ? { link: `/issues/${prev.id.toLowerCase()}/`, label: prev.id } : false,
+    next: next ? { link: `/issues/${next.id.toLowerCase()}/`, label: next.id } : false,
+  }}
+  headings={[]}
+>
+  <dl class="iss-facts">
+    <div><dt>ID</dt><dd><code>{i.id}</code></dd></div>
+    <div><dt>Severity</dt><dd><span class={`iss-sev ${i.severity}`}>{i.severity}</span></dd></div>
+    <div><dt>Category</dt><dd>{CATEGORIES[i.category as keyof typeof CATEGORIES] ?? i.category}</dd></div>
+    <div><dt>Status</dt><dd>{i.status}</dd></div>
+    <div class="wide"><dt>Location</dt><dd><a href={codeLink(i, build.repo)}><code>{where(i)}</code></a></dd></div>
+  </dl>
+
+  <h2 id="problem">Problem</h2>
+  <p>{i.description}</p>
+
+  {
+    ex && (
+      <div class="iss-code">
+        <Code code={ex.code} lang={lang} title={`${i.file}, lines ${ex.start}–${exEnd} at ${i.foundIn}`} mark={mark ? { range: mark } : undefined} />
+        <p class="iss-code-links">
+          <a href={foundLink(i, build.repo)}>On GitHub at {i.foundIn}</a> · <a href={codeLink(i, build.repo)}>Current code</a>
+        </p>
+      </div>
+    )
+  }
+
+  {
+    i.fix && (
+      <>
+        <h2 id="fix">Proposed fix</h2>
+        <p>{i.fix}</p>
+      </>
+    )
+  }
+
+  {
+    i.evidence && (
+      <>
+        <h2 id="evidence">Second check</h2>
+        <p class="iss-evidence">{i.evidence}</p>
+      </>
+    )
+  }
+
+  {
+    sameFile.length > 0 && (
+      <>
+        <h2 id="same-file">Other issues in this file</h2>
+        <ul class="iss-mini">
+          {sameFile.map((x: any) => (
+            <li>
+              <a href={issueUrl(x.id)}>{x.id}</a> <span class={`iss-sev ${x.severity}`}>{x.severity}</span> {x.title}
+            </li>
+          ))}
+        </ul>
+      </>
+    )
+  }
+
+  <p class="iss-back">
+    <a href={`${base}/issues/?area=${encodeURIComponent(areaOf(i.file))}`}>All issues in <code>{areaOf(i.file)}</code></a> ·
+    <a href={`${base}/issues/`}>All code issues</a>
+  </p>
+</StarlightPage>

@@ -88,6 +88,7 @@ export default defineConfig({
           items: [
             { label: 'API reference', link: '/api/' },
             { label: 'Source browser', link: '/source/' },
+            { label: 'Code issues', link: '/issues/' },
           ],
         },
       ],
@@ -96,7 +97,7 @@ export default defineConfig({
           errorOnRelativeLinks: false,
           // Generated pages. scripts/check-links.mjs checks these links in dist/.
           // Links to /repo/<path> go to GitHub (scripts/base-links.mjs).
-          exclude: [`${base}/api/**`, `${base}/source/**`, '/repo/**', `${base}/repo/**`],
+          exclude: [`${base}/api/**`, `${base}/source/**`, `${base}/issues/**`, '/repo/**', `${base}/repo/**`],
         }),
       ],
     }),

@@ -1,0 +1,292 @@
+/* Code issue register: the list page and the issue pages. */
+.iss-lead {
+  font-size: 1.05rem;
+  color: var(--fr-ink-2);
+}
+
+/* Severity: the label always carries the word, the color only adds to it. */
+.iss-sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font: 600 0.66rem/1 var(--fr-font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fr-ink-2);
+  white-space: nowrap;
+}
+.iss-sev::before {
+  content: '';
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 2px;
+  background: var(--sev);
+}
+.iss-sev.high,
+.iss-stat.high,
+.iss-chip.high {
+  --sev: var(--fr-ruby);
+}
+.iss-sev.medium,
+.iss-stat.medium,
+.iss-chip.medium {
+  --sev: var(--fr-saffron);
+}
+.iss-sev.low,
+.iss-stat.low,
+.iss-chip.low {
+  --sev: var(--fr-ink-3);
+}
+
+.iss-stats > *,
+.iss-facts > *,
+.iss-filter > * {
+  margin: 0 !important;
+}
+.iss-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+.iss-stat {
+  border: 1px solid var(--fr-rule);
+  border-top: 3px solid var(--sev);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  align-items: baseline;
+}
+.iss-stat .v {
+  font: 700 1.6rem/1.1 var(--fr-font-body);
+  color: var(--fr-ink);
+}
+.iss-stat .l {
+  font-weight: 600;
+  color: var(--fr-ink);
+}
+.iss-stat .t {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--fr-ink-2);
+  margin-top: 0.2rem;
+}
+
+.iss-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1.5rem;
+  position: sticky;
+  top: calc(var(--sl-nav-height) + 0.25rem);
+  z-index: 2;
+  background: var(--sl-color-bg);
+  padding: 0.5rem 0;
+}
+.iss-filter input[type='search'],
+.iss-filter select {
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--fr-ink);
+  background: var(--fr-paper);
+  border: 1px solid var(--fr-rule-strong);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  min-height: 2.25rem;
+}
+.iss-filter input[type='search'] {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.iss-filter select {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+.iss-sev-pick {
+  display: flex;
+  gap: 0.35rem;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.iss-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid var(--fr-rule-strong);
+  border-radius: 999px;
+  padding: 0.3rem 0.65rem 0.3rem 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  min-height: 2.25rem;
+}
+.iss-chip input {
+  accent-color: var(--sev);
+  margin: 0;
+}
+.iss-chip:has(input:not(:checked)) {
+  color: var(--fr-ink-3);
+  border-style: dashed;
+}
+.iss-count {
+  font-size: 0.8rem;
+  color: var(--fr-ink-2);
+  margin-top: 0.25rem !important;
+}
+
+/* The list: ID, severity, category in a narrow column; title and location in the wide one. */
+.sl-markdown-content .iss-list {
+  list-style: none;
+  padding: 0;
+  margin-top: 0.5rem !important;
+  border-top: 1px solid var(--fr-rule);
+}
+.iss-list > li.iss-row {
+  display: grid;
+  grid-template-columns: 5.4rem 6rem 1fr;
+  grid-template-areas:
+    'id sev title'
+    '. cat where';
+  align-items: baseline;
+  column-gap: 0.75rem;
+  row-gap: 0.1rem;
+  padding: 0.6rem 0.25rem;
+  margin: 0 !important;
+  border-bottom: 1px solid var(--fr-rule);
+  scroll-margin-top: 9rem;
+}
+.iss-row[hidden] {
+  display: none !important;
+}
+.iss-row:target {
+  background: var(--fr-saffron-tint);
+}
+.iss-id {
+  grid-area: id;
+  font: 500 0.8rem/1.6 var(--fr-font-mono);
+  color: var(--fr-ink-2);
+  text-decoration: none;
+}
+.iss-row .iss-sev {
+  grid-area: sev;
+}
+.iss-cat {
+  grid-area: cat;
+  font-size: 0.75rem;
+  color: var(--fr-ink-2);
+}
+.sl-markdown-content .iss-title {
+  grid-area: title;
+  color: var(--fr-ink);
+  text-decoration: none;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.iss-title:hover,
+.iss-id:hover {
+  color: var(--fr-link);
+  text-decoration: underline;
+}
+.sl-markdown-content .iss-where {
+  grid-area: where;
+  font: 0.75rem/1.4 var(--fr-font-mono);
+  color: var(--fr-ink-2);
+  text-decoration-color: var(--fr-rule-strong);
+  overflow-wrap: anywhere;
+}
+.sl-markdown-content .iss-where:hover {
+  color: var(--fr-link);
+}
+
+@media (max-width: 40rem) {
+  .iss-stats {
+    grid-template-columns: 1fr;
+  }
+  .iss-stat .t {
+    display: none;
+  }
+  .iss-list > li.iss-row {
+    grid-template-columns: auto auto 1fr;
+    grid-template-areas:
+      'id sev cat'
+      'title title title'
+      'where where where';
+    row-gap: 0.25rem;
+  }
+  .iss-cat {
+    justify-self: end;
+  }
+}
+
+/* Issue page */
+.iss-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 0;
+  border-block: 1px solid var(--fr-rule);
+}
+.iss-facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0;
+}
+.iss-facts dt {
+  font: 600 0.66rem/1 var(--fr-font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+}
+.sl-markdown-content .iss-facts dd {
+  margin: 0;
+  padding: 0;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.iss-code-links {
+  font-size: 0.8rem;
+  margin-top: 0.35rem !important;
+  color: var(--fr-ink-2);
+}
+.iss-evidence {
+  font-size: 0.9rem;
+  color: var(--fr-ink-2);
+}
+.iss-mini {
+  list-style: none;
+  padding: 0;
+}
+.iss-mini li {
+  margin: 0.3rem 0;
+}
+.iss-mini a {
+  font-family: var(--fr-font-mono);
+  font-size: 0.85rem;
+  margin-right: 0.35rem;
+}
+.iss-back {
+  margin-top: 2rem !important;
+  font-size: 0.875rem;
+}
+
+/* Issue titles are sentences: a smaller title that breaks long names. */
+:root:has(.iss-facts) h1#_top {
+  font-size: clamp(1.6rem, 1.1rem + 2vw, 2.4rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+/* On a phone the filters take much room: they scroll with the page. */
+@media (max-width: 40rem) {
+  .iss-filter {
+    position: static;
+  }
+}

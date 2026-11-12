@@ -1,0 +1,144 @@
+---
+// Register of known problems in the FairRoot code: a list that you can search and filter.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { build } from 'virtual:fairroot/data';
+import { base } from '../../lib/model.mjs';
+import { issues, commit, SEVERITIES, CATEGORIES, areaOf, issueUrl, codeLink, where } from '../../lib/issues.mjs';
+import '../../styles/issues.css';
+
+const count = (f: (i: any) => boolean) => issues.filter(f).length;
+const areas = [...new Set(issues.map((i: any) => areaOf(i.file)))].sort();
+const cats = Object.entries(CATEGORIES).filter(([k]) => issues.some((i: any) => i.category === k));
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Code issues',
+    description: 'Known problems in the FairRoot code: crashes, wrong results, leaks, build traps and wrong messages, each with an ID, the code lines and a fix.',
+    eyebrow: 'Code',
+    tableOfContents: false,
+    editUrl: false,
+  }}
+  headings={[]}
+>
+  <p class="iss-lead">
+    While the agents wrote these docs, they read the FairRoot code and reported problems. Other agents verified each report against
+    the code and tried to refute it. This register has the {issues.length} problems that remain. None of them is fixed yet. Each problem
+    has a fixed ID, the code lines at commit
+    <a href={`${build.repo}/commit/${commit}`}><code>{commit.slice(0, 7)}</code></a>, and a proposed fix.
+  </p>
+
+  <div class="iss-stats" role="list">
+    {
+      SEVERITIES.map((s) => (
+        <div class={`iss-stat ${s.id}`} role="listitem">
+          <span class="v">{count((i: any) => i.severity === s.id)}</span>
+          <span class="l">{s.label}</span>
+          <span class="t">{s.text}</span>
+        </div>
+      ))
+    }
+  </div>
+
+  <form class="iss-filter" role="search" onsubmit="return false">
+    <input type="search" name="q" placeholder="Search ID, title, file or text" aria-label="Search the issues" autocomplete="off" />
+    <fieldset class="iss-sev-pick">
+      <legend class="sr-only">Severity</legend>
+      {
+        SEVERITIES.map((s) => (
+          <label class={`iss-chip ${s.id}`}>
+            <input type="checkbox" name="sev" value={s.id} checked />
+            {s.label}
+          </label>
+        ))
+      }
+    </fieldset>
+    <select name="cat" aria-label="Category">
+      <option value="">All categories</option>
+      {cats.map(([k, v]) => <option value={k}>{v} ({count((i: any) => i.category === k)})</option>)}
+    </select>
+    <select name="area" aria-label="Area">
+      <option value="">All areas</option>
+      {areas.map((a) => <option value={a}>{a} ({count((i: any) => areaOf(i.file) === a)})</option>)}
+    </select>
+  </form>
+  <p class="iss-count" aria-live="polite"><span data-shown>{issues.length}</span> of {issues.length} issues</p>
+
+  <ol class="iss-list">
+    {
+      issues.map((i: any) => (
+        <li
+          class="iss-row"
+          id={i.id}
+          data-sev={i.severity}
+          data-cat={i.category}
+          data-area={areaOf(i.file)}
+          data-text={`${i.id} ${i.title} ${i.file} ${i.description}`.toLowerCase()}
+        >
+          <a class="iss-id" href={issueUrl(i.id)}>{i.id}</a>
+          <span class={`iss-sev ${i.severity}`}>{i.severity}</span>
+          <span class="iss-cat">{CATEGORIES[i.category as keyof typeof CATEGORIES] ?? i.category}</span>
+          <a class="iss-title" href={issueUrl(i.id)}>{i.title}</a>
+          <a class="iss-where" href={codeLink(i, build.repo)}>{where(i)}</a>
+        </li>
+      ))
+    }
+  </ol>
+  <p class="iss-none" hidden>No issue matches the search and the filters.</p>
+
+  <h2 id="use">How to use the register</h2>
+  <ul>
+    <li>
+      Refer to a problem by its ID, for example in a commit message: <code>Fixes FRI-0042</code>. The IDs do not change.
+    </li>
+    <li>
+      The list is in <a href={`${build.repo}/blob/dev/docs/src/data/code-issues.json`}><code>docs/src/data/code-issues.json</code></a>. When you fix a
+      problem, set its <code>status</code> to <code>fixed</code> in the same pull request.
+    </li>
+    <li>The location links go to the source browser, which shows the current code. The code on each issue page is from the commit where the problem was found.</li>
+    <li>The site search (<kbd>Ctrl</kbd> <kbd>K</kbd>) also finds the issue pages.</li>
+  </ul>
+</StarlightPage>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>('.iss-filter')!;
+  const rows = [...document.querySelectorAll<HTMLElement>('.iss-row')];
+  const shown = document.querySelector('[data-shown]')!;
+  const none = document.querySelector<HTMLElement>('.iss-none')!;
+  const q = form.elements.namedItem('q') as HTMLInputElement;
+  const cat = form.elements.namedItem('cat') as HTMLSelectElement;
+  const area = form.elements.namedItem('area') as HTMLSelectElement;
+  const sevs = [...form.querySelectorAll<HTMLInputElement>('input[name=sev]')];
+
+  // The filters are in the URL, so that a filtered list has a link: ?q=leak&sev=high&area=fairroot/base
+  const params = new URLSearchParams(location.search);
+  q.value = params.get('q') ?? '';
+  cat.value = params.get('cat') ?? '';
+  area.value = params.get('area') ?? '';
+  const sevParam = params.get('sev');
+  if (sevParam) sevs.forEach((s) => (s.checked = sevParam.split(',').includes(s.value)));
+
+  function apply() {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const on = new Set(sevs.filter((s) => s.checked).map((s) => s.value));
+    let n = 0;
+    for (const r of rows) {
+      const d = r.dataset;
+      const ok =
+        on.has(d.sev!) && (!cat.value || d.cat === cat.value) && (!area.value || d.area === area.value) && words.every((w) => d.text!.includes(w));
+      r.hidden = !ok;
+      if (ok) n++;
+    }
+    shown.textContent = String(n);
+    none.hidden = n > 0;
+    const p = new URLSearchParams();
+    if (q.value) p.set('q', q.value);
+    if (on.size < sevs.length) p.set('sev', [...on].join(','));
+    if (cat.value) p.set('cat', cat.value);
+    if (area.value) p.set('area', area.value);
+    const s = p.toString();
+    history.replaceState(null, '', s ? `?${s}${location.hash}` : location.pathname + location.hash);
+  }
+  form.addEventListener('input', apply);
+  apply();
+</script>
