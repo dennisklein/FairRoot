@@ -21,6 +21,17 @@ set(FLATSIM_JOBS 4 CACHE STRING "Parallel jobs for each package build")
 set(FLATSIM_FLAGS "" CACHE STRING
   "Extra C and C++ compiler flags for all packages, for example -march=x86-64-v3 (T1, target ISA)")
 option(FLATSIM_LTO "Link-time optimization in all packages (T1, LTO)" OFF)
+option(FLATSIM_STATIC
+  "Link Geant4, VMC, geant4_vmc and the O2 libraries statically into fv0sim; ROOT stays shared (T2b)" OFF)
+if(FLATSIM_STATIC)
+  set(lib_kind -DBUILD_SHARED_LIBS=OFF)
+  set(g4_lib_kind -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON)
+else()
+  set(lib_kind -DBUILD_SHARED_LIBS=ON)
+  set(g4_lib_kind -DBUILD_SHARED_LIBS=ON)
+endif()
+set(FLATSIM_SHARED_LDFLAGS "" CACHE STRING
+  "Extra linker flags for the shared libraries of all packages, for example -Wl,-Bsymbolic-functions (T2a)")
 
 set(ext "${CMAKE_SOURCE_DIR}/extern")
 set(common_args
@@ -34,6 +45,8 @@ set(common_args
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
   "-DCMAKE_C_FLAGS=${FLATSIM_FLAGS}"
   "-DCMAKE_CXX_FLAGS=${FLATSIM_FLAGS}"
+  "-DCMAKE_SHARED_LINKER_FLAGS=${FLATSIM_SHARED_LDFLAGS}"
+  "-DCMAKE_MODULE_LINKER_FLAGS=${FLATSIM_SHARED_LDFLAGS}"
 )
 if(FLATSIM_LTO)
   list(APPEND common_args
@@ -83,10 +96,10 @@ flatsim_package(root ARGS
   -Drpath=ON
   -Dtesting=OFF)
 
-flatsim_package(vmc DEPENDS root)
+flatsim_package(vmc DEPENDS root ARGS ${lib_kind})
 
 flatsim_package(geant4 ARGS
-  -DBUILD_SHARED_LIBS=ON
+  ${g4_lib_kind}
   -DGEANT4_BUILD_MULTITHREADED=ON
   -DGEANT4_BUILD_TLS_MODEL=initial-exec
   -DGEANT4_ENABLE_TESTING=OFF
@@ -101,6 +114,7 @@ flatsim_package(geant4 ARGS
   -DGEANT4_INSTALL_DATA_TIMEOUT=2000)
 
 flatsim_package(geant4_vmc DEPENDS geant4 vmc root ARGS
+  ${lib_kind}
   -DGeant4VMC_USE_VGM=OFF
   -DGeant4VMC_BUILD_EXAMPLES=OFF
   -DGeant4VMC_INSTALL_EXAMPLES=OFF)
@@ -122,4 +136,5 @@ flatsim_package(o2 SOURCE_DIR "${CMAKE_SOURCE_DIR}/cmake/o2"
   -DRAPIDJSON_SOURCE_DIR=${ext}/rapidjson
   -DMSGSL_SOURCE_DIR=${ext}/ms_gsl
   -DFLATSIM_APP_DIR=${CMAKE_SOURCE_DIR}/app
-  -DFLATSIM_HARNESS_DIR=${CMAKE_SOURCE_DIR}/harness)
+  -DFLATSIM_HARNESS_DIR=${CMAKE_SOURCE_DIR}/harness
+  -DFLATSIM_STATIC=${FLATSIM_STATIC})

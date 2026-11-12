@@ -12,6 +12,7 @@ set(RAPIDJSON_SOURCE_DIR "" CACHE PATH "Imported RapidJSON (extern/rapidjson)")
 set(MSGSL_SOURCE_DIR "" CACHE PATH "Imported Microsoft GSL (extern/ms_gsl)")
 set(FLATSIM_APP_DIR "" CACHE PATH "Directory of fv0sim.cxx")
 set(FLATSIM_HARNESS_DIR "" CACHE PATH "Directory of the harness tools")
+option(FLATSIM_STATIC "Static O2 libraries, linked whole into the programs (T2b)" OFF)
 
 include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 20)
@@ -50,14 +51,21 @@ target_link_libraries(o2_external INTERFACE
   Boost::headers Boost::program_options)
 
 # One shared library libO2<name>.so per upstream O2 library, with its
-# ROOT dictionary, as in an O2 installation.
+# ROOT dictionary, as in an O2 installation. With FLATSIM_STATIC, one static
+# library each.
+if(FLATSIM_STATIC)
+  set(o2_lib_kind STATIC)
+else()
+  set(o2_lib_kind SHARED)
+endif()
 function(o2_library name)
   cmake_parse_arguments(A "" "DIR" "SOURCES;DEPENDS;DICTIONARY" ${ARGN})
   set(target O2${name})
   set(dir "${O2_SOURCE_DIR}/${A_DIR}")
   list(TRANSFORM A_SOURCES PREPEND "${dir}/")
   list(TRANSFORM A_DEPENDS PREPEND "O2")
-  add_library(${target} SHARED ${A_SOURCES})
+  add_library(${target} ${o2_lib_kind} ${A_SOURCES})
+  set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
   add_library(${name} ALIAS ${target})
   target_include_directories(${target} PUBLIC ${O2_INCLUDE_DIRS} PRIVATE "${dir}/src")
   target_link_libraries(${target} PUBLIC o2_external ${A_DEPENDS})
@@ -72,7 +80,7 @@ function(o2_library name)
       "${CMAKE_CURRENT_BINARY_DIR}/lib${target}.rootmap"
       DESTINATION ${CMAKE_INSTALL_LIBDIR})
   endif()
-  install(TARGETS ${target} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  install(TARGETS ${target} LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 endfunction()
 
 include(o2libs.cmake)
@@ -89,13 +97,27 @@ add_executable(fv0sim "${FLATSIM_APP_DIR}/fv0sim.cxx")
 # does not have, so fv0sim links all O2 libraries directly.
 get_property(o2_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 list(FILTER o2_targets INCLUDE REGEX "^O2")
-list(REMOVE_ITEM o2_targets O2G4Setup)
-target_link_libraries(fv0sim PRIVATE ${o2_targets})
+if(FLATSIM_STATIC)
+  # Nothing references the ROOT dictionaries in the archives, so the linker
+  # would drop them. WHOLE_ARCHIVE keeps them, and their static
+  # initializers register the classes with ROOT.
+  target_compile_definitions(fv0sim PRIVATE FLATSIM_STATIC)
+  target_link_libraries(fv0sim PRIVATE
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,${o2_targets}>"
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,VMCLibrary;${Geant4VMC_LIBRARIES}>")
+else()
+  list(REMOVE_ITEM o2_targets O2G4Setup)
+  target_link_libraries(fv0sim PRIVATE ${o2_targets})
+endif()
 install(TARGETS fv0sim RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # Harness tool: reads the simulation output through ROOT I/O only.
 add_executable(fv0dump "${FLATSIM_HARNESS_DIR}/fv0dump.cxx")
-target_link_libraries(fv0dump PRIVATE DataFormatsFV0 SimulationDataFormat)
+if(FLATSIM_STATIC)
+  target_link_libraries(fv0dump PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${o2_targets}>")
+else()
+  target_link_libraries(fv0dump PRIVATE DataFormatsFV0 SimulationDataFormat)
+endif()
 install(TARGETS fv0dump RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 # Run time data, at the same place below share/ as in an O2 installation.

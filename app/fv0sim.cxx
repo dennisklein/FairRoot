@@ -25,6 +25,20 @@
 #include <SimConfig/SimConfig.h>
 #include <SimSetup/SimSetup.h>
 #include <SimSetup/StaticTLSReserve.h>
+
+#ifdef FLATSIM_STATIC
+// T2b: the Geant4 setup is linked into the program, so it is called directly,
+// not loaded from libO2G4Setup.so with dlopen.
+namespace o2
+{
+void SetCuts();
+namespace g4config
+{
+void G4Config();
+void G4Terminate();
+} // namespace g4config
+} // namespace o2
+#endif
 #include <SimulationDataFormat/MCEventHeader.h>
 #include <Steer/O2RunSim.h>
 
@@ -92,8 +106,10 @@ void buildGeometry(FairRunSim* run)
 
 int main(int argc, char* argv[])
 {
+#ifndef FLATSIM_STATIC
   // Geant4 is dlopened with initial-exec TLS; glibc takes the static TLS reserve only at program start.
   o2::ensureStaticTLSReserve(argv);
+#endif
   auto& conf = o2::conf::SimConfig::Instance();
   if (!conf.resetFromArguments(argc, argv)) {
     return 1;
@@ -113,7 +129,14 @@ int main(int argc, char* argv[])
 
   auto run = new o2::steer::O2RunSim(false, false);
   run->SetImportTGeoToVMC(false);
+#ifdef FLATSIM_STATIC
+  run->SetSimSetup([]() {
+    o2::g4config::G4Config();
+    o2::SetCuts();
+  });
+#else
   run->SetSimSetup([&conf]() { o2::SimSetup::setup(conf.getMCEngine().c_str()); });
+#endif
   run->SetRunId(conf.getTimestamp());
   run->SetSink(new FairRootFileSink((conf.getOutPrefix() + ".root").c_str()));
   run->SetName(conf.getMCEngine().c_str());
@@ -146,7 +169,11 @@ int main(int argc, char* argv[])
   LOG(info) << "Run: Real time " << timer.RealTime() << " s, CPU time " << timer.CpuTime() << " s";
   LOG(info) << "Run: Memory used " << sysinfo.GetMaxMemory() << " MB";
 
+#ifdef FLATSIM_STATIC
+  o2::g4config::G4Terminate();
+#else
   o2::SimSetup::shutdown();
+#endif
   delete run;
   return 0;
 }

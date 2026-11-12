@@ -1,0 +1,17 @@
+{
+ "label": "rerun2-lto",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.603,
+ "fixed_runs_s": [
+  1.603,
+  1.589,
+  1.603
+ ],
+ "ms_per_event": 19.67167167167167,
+ "ms_per_event_err": 0.30696426484645645,
+ "fixed_cpu_s": 1.586,
+ "cpu_ms_per_event": 19.620420420420423,
+ "cpu_ms_per_event_err": 0.298509407934464,
+ "maxrss_mb": 349.8
+}

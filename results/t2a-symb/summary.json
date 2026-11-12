@@ -1,0 +1,17 @@
+{
+ "label": "t2a-symb",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.582,
+ "fixed_runs_s": [
+  1.581,
+  1.582,
+  1.74
+ ],
+ "ms_per_event": 19.034434434434434,
+ "ms_per_event_err": 0.18845651009327546,
+ "fixed_cpu_s": 1.574,
+ "cpu_ms_per_event": 18.86066066066066,
+ "cpu_ms_per_event_err": 0.21058249126237197,
+ "maxrss_mb": 348.7
+}
