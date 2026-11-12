@@ -1,0 +1,3 @@
+/results/*/work/
+__pycache__/
+/results/*/callgrind.*.out

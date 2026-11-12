@@ -1,0 +1,2 @@
+seed,events,wall_s,cpu_s,init_s,run_s,run_cpu_s,maxrss_mb,hits_sha1
+1,50,121.903,121.192,35.04,80.7578,80.35,1042.1,88f3286bf4c2
