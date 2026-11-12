@@ -17,6 +17,8 @@
 .src-path {
   color: var(--fr-code-ink);
   font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .src-info {
   color: var(--fr-code-dim);
