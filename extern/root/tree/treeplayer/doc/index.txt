@@ -1,0 +1,1 @@
+This directory contains utilities to plot data stored in a TTree.

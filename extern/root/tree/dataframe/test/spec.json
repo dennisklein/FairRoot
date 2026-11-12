@@ -1,0 +1,52 @@
+{
+   "samples": {
+      "sampleA": {
+         "trees": [
+            "subTree1",
+            "subTree2"
+         ],
+         "files": [
+            "CPPspecTestFile5.root",
+            "CPPspecTestFile6.root"
+         ],
+         "metadata": {
+            "lumi": 1.0
+         }
+      },
+      "sampleB": {
+         "trees": [
+            "subTree"
+         ],
+         "files": [
+            "CPPspecTestFile4.root"
+         ],
+         "metadata": {
+            "lumi": 0.5
+         }
+      }
+   },
+   "friends": {
+      "friendTree": {
+         "trees": [
+            "anotherTree"
+         ],
+         "files": [
+            "CPPspecTestFile7.root"
+         ]
+      },
+      "friendChain1": {
+         "trees": [
+            "subTree"
+         ],
+         "files": [
+            "CPPspecTestFile2.root",
+            "CPPspecTestFile3.root",
+            "CPPspecTestFile4.root"
+         ]
+      }
+   },
+   "range": [
+      1,
+      5
+   ]
+}
