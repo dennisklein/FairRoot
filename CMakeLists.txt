@@ -40,6 +40,7 @@ if(FLATSIM_LTO)
     -DCMAKE_POLICY_DEFAULT_CMP0069=NEW
     -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON)
 endif()
+set(no_ipo_hook "${CMAKE_SOURCE_DIR}/cmake/hooks/no-ipo.cmake")
 set(build_cmd ${CMAKE_COMMAND} --build <BINARY_DIR> --parallel ${FLATSIM_JOBS})
 
 function(flatsim_package name)
@@ -70,6 +71,7 @@ flatsim_package(ms_gsl ARGS -DGSL_TEST=OFF)
 # ROOT: only the parts a simulation needs. All third-party code comes from
 # ROOT's own builtins, so that the only host tools are CMake and GCC.
 flatsim_package(root ARGS
+  -DCMAKE_PROJECT_LLVM_INCLUDE=${no_ipo_hook}
   -Dminimal=ON
   -Dgeom=ON
   -Dbuiltin_zlib=ON -Dbuiltin_lzma=ON -Dbuiltin_lz4=ON -Dbuiltin_zstd=ON

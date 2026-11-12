@@ -1,0 +1,717 @@
+{
+ "per": 100.0,
+ "total": 180773022.23,
+ "self": {
+  "PLT stubs": 1807728.3,
+  "ROOT": 104623359.74,
+  "Geant4": 22846573.46,
+  "Pythia8": 1257.32,
+  "O2": 36391775.37,
+  "VMC": 21.0,
+  "other:libGeomPainter.so.6.36.10": 0.0,
+  "system": 11364365.1,
+  "support": 8700.91,
+  "other:libGraf3d.so.6.36.10": 0.0,
+  "FairRoot": 205296.12,
+  "geant4_vmc": 3523944.91,
+  "other:libtinfo.so.6.4": 0.0
+ },
+ "crossings": {
+  "ROOT->PLT stubs": -0.57,
+  "ROOT->system": 55704.016862598415,
+  "ROOT->O2": 6007.23,
+  "ROOT->FairRoot": 1.0,
+  "Geant4->PLT stubs": 0.0,
+  "Geant4->system": 29635.11,
+  "Pythia8->system": 0.36,
+  "Pythia8->PLT stubs": 0.0,
+  "Pythia8->O2": 0.0,
+  "O2->PLT stubs": 0.0,
+  "O2->VMC": 0.0,
+  "O2->ROOT": 2924.33,
+  "VMC->PLT stubs": 0.0,
+  "VMC->system": 3.0,
+  "other:libGeomPainter.so.6.36.10->PLT stubs": 0.0,
+  "system->PLT stubs": 7.27,
+  "system->ROOT": 0.0,
+  "system->O2": 9.0,
+  "system->geant4_vmc": 0.0,
+  "system->FairRoot": 0.0,
+  "system->Geant4": 14.17,
+  "system->support": 0.0,
+  "system->Pythia8": 0.0,
+  "Geant4->geant4_vmc": 42170.46,
+  "support->system": 51.0,
+  "support->FairRoot": 0.0,
+  "support->PLT stubs": 0.0,
+  "support->O2": 6.0,
+  "O2->system": 44777.2,
+  "O2->geant4_vmc": 5586.97,
+  "O2->FairRoot": 2541.52,
+  "other:libGraf3d.so.6.36.10->PLT stubs": 0.0,
+  "system->other:libGraf3d.so.6.36.10": 0.0,
+  "system->other:libGeomPainter.so.6.36.10": 0.0,
+  "system->VMC": 0.0,
+  "system->other:libtinfo.so.6.4": 0.0,
+  "Geant4->O2": 21.9,
+  "Geant4->ROOT": 8.78,
+  "O2->support": 6.0,
+  "FairRoot->PLT stubs": -0.22,
+  "FairRoot->system": 84.09,
+  "FairRoot->O2": 127.97,
+  "FairRoot->ROOT": 12.0,
+  "FairRoot->VMC": 1.0,
+  "FairRoot->geant4_vmc": 2291.63,
+  "Geant4->Pythia8": 52.81,
+  "geant4_vmc->PLT stubs": 0.0,
+  "geant4_vmc->Geant4": 23218.85,
+  "geant4_vmc->ROOT": 6209.18,
+  "geant4_vmc->FairRoot": 260.89,
+  "ROOT->other:libGraf3d.so.6.36.10": 0.0,
+  "ROOT->other:libGeomPainter.so.6.36.10": 0.0,
+  "ROOT->VMC": 0.0,
+  "ROOT->geant4_vmc": 0.0,
+  "geant4_vmc->system": 2670.8,
+  "geant4_vmc->VMC": 2.0,
+  "geant4_vmc->O2": 21925.71
+ },
+ "plt_calls": {
+  "ROOT->ROOT": 241795.91313740157,
+  "ROOT->system": 55704.016862598415,
+  "Geant4->system": 29635.11,
+  "Pythia8->system": 0.36,
+  "VMC->system": 3.0,
+  "system->system": 52098.49,
+  "Geant4->Geant4": 316060.76,
+  "support->system": 51.0,
+  "support->support": 45.0,
+  "support->O2": 6.0,
+  "Geant4->geant4_vmc": 2728.51,
+  "O2->system": 44777.2,
+  "O2->O2": 91779.19,
+  "O2->ROOT": 2611.43,
+  "ROOT->O2": 524.71,
+  "Geant4->O2": 21.9,
+  "Geant4->ROOT": 8.78,
+  "O2->support": 6.0,
+  "O2->FairRoot": 2541.52,
+  "FairRoot->system": 84.09,
+  "FairRoot->O2": 1.0,
+  "FairRoot->FairRoot": 10.0,
+  "FairRoot->ROOT": 2.0,
+  "FairRoot->VMC": 1.0,
+  "Geant4->Pythia8": 52.81,
+  "geant4_vmc->Geant4": 14991.76,
+  "geant4_vmc->geant4_vmc": 39469.76,
+  "geant4_vmc->ROOT": 6152.07,
+  "system->O2": 9.0,
+  "system->PLT stubs": 7.27,
+  "geant4_vmc->system": 2670.8,
+  "geant4_vmc->VMC": 2.0,
+  "geant4_vmc->O2": 10.0
+ },
+ "top_pairs": [
+  [
+   "O2",
+   "system",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   "atan2",
+   29139.93
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoBoolNode::SetSelected",
+   "__tls_get_addr",
+   23731.08
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4NystromRK4::Stepper",
+   "TG4CachedMagneticField::GetFieldValue",
+   18327.28
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4CachedMagneticField::GetFieldValue",
+   "o2::field::MagneticField::Field",
+   15853.88
+  ],
+  [
+   "O2",
+   "system",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   "__sincos_fma",
+   14750.84
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::On...",
+   "pow@@GLIBC_2.29",
+   5942.74
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::Ac...",
+   "TG4CachedMagneticField::GetFieldValue",
+   5462.05
+  ],
+  [
+   "Geant4",
+   "system",
+   "field_utils::copy",
+   "__memcpy_avx_unaligned_erms",
+   5294.55
+  ],
+  [
+   "ROOT",
+   "O2",
+   "TGeoVolume::IsAssembly",
+   "TGeoShape::IsAssembly",
+   5218.21
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4FieldTrack::LoadFromArray",
+   "__memcpy_avx_unaligned_erms",
+   4710.87
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4FieldTrack::LoadFromArray",
+   "__memset_avx2_unaligned_erms",
+   4710.87
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4StepManager::CurrentVolID",
+   "G4PVPlacement::IsReplicated",
+   4635.76
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoShape::IsInPhiRange",
+   "atan2",
+   4581.54
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoBoolNode::GetThreadData",
+   "__tls_get_addr",
+   3991.38
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoShape::SafetyPhi",
+   "__sincos_fma",
+   3162.91
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoVolumeAssembly::GetThreadData",
+   "__tls_get_addr",
+   2756.32
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4ChordFinderDelegate<G4IntegrationDriver<G4Mag...",
+   "TG4CachedMagneticField::GetFieldValue",
+   2349.84
+  ],
+  [
+   "O2",
+   "geant4_vmc",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   "TGeant4::TrackTime",
+   2323.07
+  ],
+  [
+   "O2",
+   "geant4_vmc",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   "TGeant4::TrackPosition",
+   2323.07
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SensitiveDetector::UserProcessHits",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   2323.07
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4StepManager::CurrentVolID",
+   "G4PVPlacement::GetCopyNo",
+   2317.88
+  ],
+  [
+   "O2",
+   "FairRoot",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   "FairMCApplication::Stepping",
+   2290.63
+  ],
+  [
+   "FairRoot",
+   "geant4_vmc",
+   "FairMCApplication::Stepping",
+   "TGeant4::CurrentVolID",
+   2290.63
+  ],
+  [
+   "geant4_vmc",
+   "ROOT",
+   "TG4RootNavigator::ComputeStep",
+   "TGeoNavigator::FindNextBoundary",
+   2278.65
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::Contains",
+   "__sincos_fma",
+   2144.78
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::Contains",
+   "atan2",
+   2144.28
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoVoxelFinder::SortCrossedVoxels",
+   "__memset_avx2_unaligned_erms",
+   2063.0
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoVolumeAssembly::GetNextNodeIndex",
+   "__tls_get_addr",
+   1772.14
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4PropagatorInField::ComputeStep",
+   "TG4RootNavigator::LocateGlobalPointWithinVolume",
+   1711.12
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::GetPhiCrossList",
+   "__sincos_fma",
+   1631.57
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "G4Navigator::LocateGlobalPointAndUpdateTouchabl...",
+   "aTouchableHistoryAllocator",
+   1469.88
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "G4Navigator::LocateGlobalPointAndUpdateTouchabl...",
+   "aCountedObjectAllocator",
+   1469.88
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4SteppingManager::Stepping",
+   "TG4SensitiveDetector::ProcessHits",
+   1387.1
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4SteppingManager::Stepping",
+   "TG4SteppingAction::UserSteppingAction",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4EmParameters::Instance",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4EmParameters::GeneralProcessActive",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4HadronicParameters::Instance",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4Gamma::GammaDefinition",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfOutOfRegion",
+   "CLHEP::Hep3Vector::operator/=",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SteppingAction::ProcessTrackIfOutOfRegion",
+   "o2::steer::O2MCApplicationBase::TrackingRmax",
+   1387.1
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SteppingAction::ProcessTrackIfOutOfRegion",
+   "o2::steer::O2MCApplicationBase::TrackingZmax",
+   1387.1
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::SliceCrossingIn",
+   "__sincos_fma",
+   1357.29
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::LocatePhi",
+   "atan2",
+   1333.14
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4StepLimiter::PostStepGetPhysicalInteractionLe...",
+   "TG4Limits::GetMaxAllowedStep",
+   1263.67
+  ],
+  [
+   "geant4_vmc",
+   "system",
+   "TG4Limits::GetMaxUserStep",
+   "__tls_get_addr",
+   1263.67
+  ],
+  [
+   "ROOT",
+   "system",
+   "TGeoPgon::GetThreadData",
+   "__tls_get_addr",
+   1254.76
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4CascadeCheckBalance::collide",
+   "__dynamic_cast",
+   1205.52
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4PropagatorInField::ComputeStep",
+   "TG4RootNavigator::ComputeStep",
+   1189.21
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4SteppingManager::DefinePhysicalStepLength",
+   "TG4VSpecialCuts::PostStepGetPhysicalInteraction...",
+   1165.41
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4RootNavigator::ResetHierarchyAndLocate",
+   "G4NavigationLevel::operator=",
+   1133.99
+  ]
+ ],
+ "top_functions": [
+  [
+   "ROOT",
+   "TGeoTranslation::MasterToLocal",
+   29287230.42
+  ],
+  [
+   "O2",
+   "o2::math_utils::Chebyshev3DCalc::Eval",
+   28743971.07
+  ],
+  [
+   "ROOT",
+   "TGeoUnion::Contains",
+   25923119.28
+  ],
+  [
+   "ROOT",
+   "TGeoTube::Contains",
+   7735897.82
+  ],
+  [
+   "ROOT",
+   "TGeoIdentity::MasterToLocal",
+   5234669.82
+  ],
+  [
+   "system",
+   "__ieee754_atan2_fma",
+   4699534.09
+  ],
+  [
+   "ROOT",
+   "TGeoCompositeShape::Contains",
+   4436274.84
+  ],
+  [
+   "ROOT",
+   "TGeoUnion::Safety",
+   3520350.04
+  ],
+  [
+   "system",
+   "__sincos_fma",
+   3414986.91
+  ],
+  [
+   "Geant4",
+   "G4NystromRK4::Stepper",
+   2386993.6
+  ],
+  [
+   "ROOT",
+   "TGeoUnion::Contains",
+   2114810.81
+  ],
+  [
+   "O2",
+   "o2::field::MagneticWrapperChebyshev::findSolenoidSegment",
+   2064461.5
+  ],
+  [
+   "O2",
+   "o2::field::MagneticWrapperChebyshev::fieldCylindricalSolenoid",
+   2050928.44
+  ],
+  [
+   "ROOT",
+   "TGeoBBox::Contains",
+   1938890.42
+  ],
+  [
+   "ROOT",
+   "TGeoSubtraction::Contains",
+   1501517.14
+  ],
+  [
+   "ROOT",
+   "TGeoBBox::DistFromOutside",
+   1471365.37
+  ],
+  [
+   "geant4_vmc",
+   "TG4CachedMagneticField::GetFieldValue",
+   1369916.77
+  ],
+  [
+   "ROOT",
+   "TGeoVoxelFinder::GetNextCandidates",
+   1321492.67
+  ],
+  [
+   "O2",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   1168960.54
+  ],
+  [
+   "ROOT",
+   "TGeoSubtraction::Safety",
+   1145869.3
+  ],
+  [
+   "O2",
+   "long long TMath::BinarySearch<float>",
+   1024788.15
+  ],
+  [
+   "Geant4",
+   "G4GEMProbability::CalcProbability",
+   974735.68
+  ],
+  [
+   "system",
+   "atan2",
+   961981.95
+  ],
+  [
+   "O2",
+   "o2::field::MagneticField::Field",
+   898319.41
+  ],
+  [
+   "ROOT",
+   "TGeoTube::Safety",
+   876356.66
+  ],
+  [
+   "ROOT",
+   "long long TMath::BinarySearch<double>",
+   840766.26
+  ],
+  [
+   "system",
+   "__ieee754_pow_fma",
+   829162.84
+  ],
+  [
+   "ROOT",
+   "TGeoSubtraction::Contains",
+   727610.89
+  ],
+  [
+   "Geant4",
+   "G4SteppingManager::DefinePhysicalStepLength",
+   668287.44
+  ],
+  [
+   "ROOT",
+   "TGeoShapeAssembly::Safety",
+   644425.37
+  ],
+  [
+   "Geant4",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::AccurateAdvance",
+   555851.34
+  ],
+  [
+   "ROOT",
+   "TGeoBBox::Safety",
+   554142.38
+  ],
+  [
+   "Geant4",
+   "G4ChordFinderDelegate<G4IntegrationDriver<G4MagIntegratorStepper> >::FindNextChord",
+   508705.84
+  ],
+  [
+   "Geant4",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::OneGoodStep",
+   502976.96
+  ],
+  [
+   "ROOT",
+   "TGeoCompositeShape::Safety",
+   484865.78
+  ],
+  [
+   "ROOT",
+   "TGeoCompositeShape::Contains",
+   448510.38
+  ],
+  [
+   "system",
+   "__tls_get_addr",
+   442448.88
+  ],
+  [
+   "ROOT",
+   "TGeoBoolNode::SetSelected",
+   427159.44
+  ],
+  [
+   "Geant4",
+   "G4PropagatorInField::ComputeStep",
+   420278.06
+  ],
+  [
+   "ROOT",
+   "TGeoTubeSeg::Contains",
+   409834.32
+  ],
+  [
+   "ROOT",
+   "TObjArray::GetAbsLast",
+   406896.0
+  ],
+  [
+   "ROOT",
+   "TGeoVoxelFinder::SortCrossedVoxels",
+   399307.13
+  ],
+  [
+   "ROOT",
+   "TGeoUnion::DistFromOutside",
+   396364.21
+  ],
+  [
+   "ROOT",
+   "TGeoCompositeShape::DistFromOutside",
+   391237.23
+  ],
+  [
+   "Geant4",
+   "G4NucleiPropertiesTableAME12::GetIndex",
+   368668.85
+  ],
+  [
+   "geant4_vmc",
+   "CLHEP::MixMaxRng::iterate",
+   358869.64
+  ],
+  [
+   "ROOT",
+   "TGeoNavigator::Safety",
+   341023.43
+  ],
+  [
+   "ROOT",
+   "TGeoNavigator::FindNextBoundary",
+   335743.53
+  ],
+  [
+   "Geant4",
+   "G4FieldTrack::LoadFromArray",
+   334471.77
+  ],
+  [
+   "Geant4",
+   "G4MultiLevelLocator::EstimateIntersectionPoint",
+   324443.65
+  ]
+ ]
+}

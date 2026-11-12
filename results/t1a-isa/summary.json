@@ -1,0 +1,14 @@
+{
+ "label": "t1a-isa",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.751,
+ "fixed_runs_s": [
+  1.751,
+  1.646,
+  1.776
+ ],
+ "ms_per_event": 20.524524524524523,
+ "ms_per_event_err": 0.6639272233584602,
+ "maxrss_mb": 360.7
+}

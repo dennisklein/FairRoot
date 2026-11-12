@@ -69,6 +69,18 @@ svg .muted { fill: var(--muted); }
 </section>
 
 <section>
+  <span class="eyebrow">Transformations</span>
+  <h2>Measured results</h2>
+  <p>Each row adds one change to the row above it. Time per event is measured on seeds 101–105 with 1000 events each. The physics gate compares the variant with the baseline on seeds 1–5.</p>
+  <div class="box"><table>
+    <tr><th>Variant</th><th class="num">ms / event</th><th class="num">Change</th><th class="num">Instr. / event</th><th>Gate</th></tr>
+    <tr><td>Baseline: upstream build settings, shared libraries</td><td class="num">23.00</td><td class="num">–</td><td class="num">203 M</td><td>reference</td></tr>
+    <tr><td>T1a: whole stack with <code>-march=x86-64-v3</code> (AVX2, FMA)</td><td class="num">20.52 ± 0.66</td><td class="num">−10.8 %</td><td class="num">181 M (−11.1 %)</td><td class="pass">pass (min p 0.10)</td></tr>
+  </table></div>
+  <p>T1a removes the 1.9 M libm <code>fmaf</code> calls per event in the field map: the compiler now emits the FMA instruction inline. The field map drops from 24.5 % to 20.1 % of the instructions. TGeo navigation is now 58 % of all instructions. The bit hash changes, because FMA rounds differently, but the gate shows that the physics is equal.</p>
+</section>
+
+<section>
   <span class="eyebrow">Figure 1</span>
   <h2>Cost per event, by layer</h2>
   <div class="box">
@@ -164,7 +176,8 @@ svg .muted { fill: var(--muted); }
   <h2>Transformations, each measured alone</h2>
   <div class="box"><table>
     <tr><th>Step</th><th>Change</th><th>Expected lever from the baseline</th></tr>
-    <tr><td>T1</td><td>LTO, whole program; target ISA with FMA (separate measurement)</td><td>PLT calls, the libm <code>fmaf</code> calls</td></tr>
+    <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −10.8 %</td></tr>
+    <tr><td>T1b</td><td>LTO in all packages</td><td>PLT calls inside Geant4 and ROOT</td></tr>
     <tr><td>T2</td><td>Static link, no dictionaries</td><td>PLT, start-up</td></tr>
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
