@@ -1,0 +1,208 @@
+---
+title: 'MQ: histogram server'
+description: 'Devices fill ROOT histograms and send them with RootSerializer to a server device. The server adds them up and shows them in a web browser with THttpServer on port 8080.'
+sidebar:
+  order: 14
+code: [examples/MQ/histogramServer/FairMQExHistoDevice.cxx, examples/MQ/histogramServer/FairMQExHistoServer.h,
+  examples/MQ/histogramServer/FairMQExHistoServer.cxx, examples/MQ/histogramServer/FairMQExHistoCanvasDrawer.h,
+  examples/MQ/histogramServer/FairMQExHistoCanvasDrawerExample.cxx, examples/MQ/histogramServer/runExHistoServer.h,
+  examples/MQ/histogramServer/runExHistoCanvasDrawer.cxx, examples/MQ/histogramServer/runExHistoDevice.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+In this example, four FairMQ devices fill ROOT histograms with random values and send them to a
+server device. The server adds up the histograms of all devices and shows them in a web browser with
+the ROOT class `THttpServer`. The example shows how to send ROOT objects with `RootSerializer`, and
+how to run a `THttpServer` in a device.
+
+## The devices
+
+| Device | Program | Class | Channel in the start script |
+| --- | --- | --- | --- |
+| Histogram device, four of them | `ex-histo-device` | `FairMQExHistoDevice` | `histogram-in`: pub, connects to `tcp://localhost:5555` |
+| Server | `ex-histo-server` | `FairMQExHistoServer` with `FairMQExHistoCanvasDrawerExample` | `histogram-in`: sub, binds `tcp://localhost:5555` |
+
+The programs have no options of their own: their `addCustomOptions()` is empty
+([runExHistoDevice.cxx](/source/examples/MQ/histogramServer/runExHistoDevice.cxx/#L14-L19)). The
+channels have `rateLogging=0`, so FairMQ logs no transfer rates. A FairMQ `sub` channel subscribes to
+all messages. A pub socket sends each message to the subscribers that are connected at this time
+(ZeroMQ behavior). Thus the server does not get the messages from before its connection.
+
+## Files
+
+| File | Content |
+| --- | --- |
+| [`FairMQExHistoDevice.h`](/source/examples/MQ/histogramServer/FairMQExHistoDevice.h/), [`FairMQExHistoDevice.cxx`](/source/examples/MQ/histogramServer/FairMQExHistoDevice.cxx/) | The device that fills and sends the histograms |
+| [`FairMQExHistoServer.h`](/source/examples/MQ/histogramServer/FairMQExHistoServer.h/), [`FairMQExHistoServer.cxx`](/source/examples/MQ/histogramServer/FairMQExHistoServer.cxx/) | The server device with the `THttpServer` |
+| [`FairMQExHistoCanvasDrawer.h`](/source/examples/MQ/histogramServer/FairMQExHistoCanvasDrawer.h/) | The interface of a canvas drawer |
+| [`FairMQExHistoCanvasDrawerExample.h`](/source/examples/MQ/histogramServer/FairMQExHistoCanvasDrawerExample.h/), [`FairMQExHistoCanvasDrawerExample.cxx`](/source/examples/MQ/histogramServer/FairMQExHistoCanvasDrawerExample.cxx/) | A drawer with one canvas of four pads |
+| [`runExHistoDevice.cxx`](/source/examples/MQ/histogramServer/runExHistoDevice.cxx/) | The program of the histogram device |
+| [`runExHistoServer.h`](/source/examples/MQ/histogramServer/runExHistoServer.h/), [`runExHistoCanvasDrawer.cxx`](/source/examples/MQ/histogramServer/runExHistoCanvasDrawer.cxx/) | The program of the server |
+| [`FairMQExHistoLinkDef.h`](/source/examples/MQ/histogramServer/FairMQExHistoLinkDef.h/) | The LinkDef file of the library. It selects no classes. |
+| [`fairmq-start-ex-histo.sh.in`](/repo/examples/MQ/histogramServer/fairmq-start-ex-histo.sh.in) | The template of the start script |
+| [`CMakeLists.txt`](/repo/examples/MQ/histogramServer/CMakeLists.txt) | The library `ExHistogramServer`, the two programs and the start script |
+
+The library links the ROOT library `RHTTP`, which has `THttpServer`, and `FairRoot::BaseMQ` for
+`RootSerializer` ([CMakeLists.txt](/repo/examples/MQ/histogramServer/CMakeLists.txt#L29-L42)).
+
+## Run the example
+
+CMake builds the example if `BUILD_EXAMPLES` is on and CMake finds FairMQ and Boost
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L43-L56)). The example has no test.
+
+<Steps>
+
+1. Go to the build folder of the example:
+
+   ```sh
+   cd <build>/examples/MQ/histogramServer
+   ```
+
+2. Start the four histogram devices and the server. Each one opens in an `xterm` window:
+
+   ```sh
+   ./fairmq-start-ex-histo.sh
+   ```
+
+3. Open `http://localhost:8080` in a web browser on the same computer.
+
+4. Open the canvas `c1` in the folder `Canvases`. It shows the four histograms. The folder
+   `Histograms` has each histogram.
+
+5. Press `q` in each window to stop the devices and the server.
+
+</Steps>
+
+The script starts the devices with the IDs `device1` to `device4`, and the server with the ID
+`server1`. Each window sources `config.sh` of the FairRoot build folder before it starts the
+program:
+
+<Snippet file="examples/MQ/histogramServer/fairmq-start-ex-histo.sh.in" start='SERVER="ex-histo-server"' end="@CMAKE_CURRENT_BINARY_DIR@/$SERVER" lang="sh" title="fairmq-start-ex-histo.sh.in" />
+
+The devices use the default transport `zeromq`. Do not use `--transport shmem`: the shmem transport
+of FairMQ does not support the channel types pub and sub.
+
+## The histogram device
+
+`InitTask()` makes four histograms and adds them to a `TObjArray`
+([FairMQExHistoDevice.cxx](/source/examples/MQ/histogramServer/FairMQExHistoDevice.cxx/#L26-L37)):
+
+| Histogram | Class | Bins | Filled with |
+| --- | --- | --- | --- |
+| `histo1` | `TH1F` | 200 bins from −0.5 to 1.5 | A uniform value in [0, 1] |
+| `histo2` | `TH1F` | 1000 bins from −5 to 5 | A Gaussian value with mean 0 and σ 1 |
+| `histo3` | `TH2F` | 40 × 40 bins from −2 to 2 | x uniform in [0, 1], and y uniform in [x, 1] |
+| `histo4` | `TH2F` | 40 × 40 bins from −2 to 2 | The point (r cos φ, r sin φ), with r uniform in [0, 1] and φ uniform in [0°, 360°] |
+
+`ConditionalRun()` adds one value to each histogram and sends the array:
+
+<Snippet file="examples/MQ/histogramServer/FairMQExHistoDevice.cxx" start="bool FairMQExHistoDevice::ConditionalRun()" title="FairMQExHistoDevice.cxx" />
+
+- `RootSerializer` writes the `TObjArray` with the four histograms into one message.
+- The device sends this message on each of its channels. The name of the channel does not matter.
+- Then the device resets the histograms. Thus each message holds only the new values, and the
+  server adds them up.
+- The device waits 10 ms and returns `true`. It does not end by itself.
+
+:::caution[One channel only]
+The device sends the same message object on each channel. With the ZeroMQ transport, a successful
+`Send()` empties the message (ZeroMQ behavior). Thus a second channel gets an empty message, and
+the server does not check this. To send to several channels, make one message for each channel.
+:::
+
+## The server
+
+The constructor sets the name of the input channel and makes the `THttpServer` on port 8080:
+
+<Snippet file="examples/MQ/histogramServer/FairMQExHistoServer.cxx" start="FairMQExHistoServer::FairMQExHistoServer()" title="FairMQExHistoServer.cxx" />
+
+The program has no options for the channel name and the port. To use another port, change the
+string `http:8080`. `InitTask()` registers the callback `ReceiveData()` for the channel
+`histogram-in`, and lets the drawer make its canvases
+([FairMQExHistoServer.cxx](/source/examples/MQ/histogramServer/FairMQExHistoServer.cxx/#L34-L41)).
+For each message, the callback adds the histograms to the array of the server:
+
+<Snippet file="examples/MQ/histogramServer/FairMQExHistoServer.cxx" start="bool FairMQExHistoServer::ReceiveData" title="FairMQExHistoServer.cxx" />
+
+- The server reads the message as a `TObject` and checks that its class is `TObjArray`.
+- For a new histogram name, the server clones the histogram and keeps the clone. It registers the
+  clone on the HTTP server in the folder `Histograms`.
+- For a known name, the server adds the histogram to its clone with `Add()`. Thus the server shows
+  the sum of all messages from all devices. Give each histogram a unique name.
+- A mutex protects the array, because a second thread uses it.
+
+The server answers the web browser in its own thread. [`PreRun()`](/source/examples/MQ/histogramServer/FairMQExHistoServer.cxx/#L77-L81)
+starts the thread, and [`PostRun()`](/source/examples/MQ/histogramServer/FairMQExHistoServer.cxx/#L97-L101)
+stops it:
+
+<Snippet file="examples/MQ/histogramServer/FairMQExHistoServer.cxx" start="void FairMQExHistoServer::UpdateHttpServer()" title="FairMQExHistoServer.cxx" />
+
+Every 10 ms, the thread lets the drawer draw the histograms. Then it calls `ProcessRequests()` of the
+`THttpServer`, which answers the waiting requests of the browsers. Thus the web page works only
+while the server is in the state `RUNNING`.
+
+:::caution[The server keeps the received histograms]
+The `TObjArray` from the message does not own its histograms: the array of the sender is not an
+owner, and ROOT streaming keeps this setting. `Clear()` only removes the pointers, and the
+`delete` deletes only the array
+([FairMQExHistoServer.cxx](/source/examples/MQ/histogramServer/FairMQExHistoServer.cxx/#L67-L72)).
+Thus the memory of the server grows with each message. In your own server, call `Delete()` instead
+of `Clear()`.
+:::
+
+## The canvas drawer
+
+`FairMQExHistoCanvasDrawer` is an interface with two functions:
+
+| Function | Called | What the example drawer does |
+| --- | --- | --- |
+| `CreateCanvases(THttpServer&)` | In `InitTask()` of the server | Makes the canvas `c1` of 1000 × 1000 pixels with 2 × 2 pads, and registers it in the folder `Canvases` |
+| `DrawHistograms(TObjArray&)` | Every 10 ms in the thread of the server | Draws `histo1` and `histo2` into the pads 1 and 2, and `histo3` and `histo4` with the option `COL` into the pads 3 and 4 |
+
+The code of the example drawer is in
+[FairMQExHistoCanvasDrawerExample.cxx](/source/examples/MQ/histogramServer/FairMQExHistoCanvasDrawerExample.cxx/#L25-L69).
+The program of the server gets its drawer from the function `getCanvasDrawer()`.
+`runExHistoServer.h` declares this function and makes the server:
+
+<Snippet file="examples/MQ/histogramServer/runExHistoServer.h" start="getCanvasDrawer();" end="^}" title="runExHistoServer.h" />
+
+[runExHistoCanvasDrawer.cxx](/source/examples/MQ/histogramServer/runExHistoCanvasDrawer.cxx/#L13-L16)
+includes this header and returns the example drawer. For your own canvases:
+
+<Steps>
+
+1. Write a class that derives from `FairMQExHistoCanvasDrawer`, and implement the two functions.
+
+2. Write a source file that includes `runExHistoServer.h`.
+
+3. In this file, define `getCanvasDrawer()`, and return your drawer.
+
+4. Build a program from this file, as `CMakeLists.txt` builds `ex-histo-server`.
+
+</Steps>
+
+If `getCanvasDrawer()` returns `nullptr`, the server makes no canvas and shows only the histograms.
+
+## Problems that can occur
+
+- **The web browser gets no answer:** the server is not in the state `RUNNING`, so no thread answers
+  the requests. Or another program uses port 8080.
+- **A device ends with the error `PUB/SUB socket type is not supported for shared memory transport`:**
+  you started it with `--transport shmem`. Use the default transport `zeromq`.
+- **The memory of the server grows:** the server does not delete the received histograms. See the
+  caution in [The server](#the-server).
+- **The histograms do not change:** the histogram devices are not in the state `RUNNING`. The server
+  keeps the last sums.
+
+## Related pages
+
+- [Process live data with FairRunOnline](/online/run-online/): `FairRunOnline` can also show your
+  histograms with a `THttpServer`.
+- [Serialize FairRoot data for messages](/online/serialization/): `RootSerializer` and the other
+  formats.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): `FairRunFairMQDevice.h` and other
+  device patterns.
+- [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/): channels, pub and sub, and the
+  device states.

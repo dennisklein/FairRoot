@@ -1,0 +1,223 @@
+---
+title: 'Data classes'
+description: 'The classes that hold the data of an event: MC points, digis, hits and track parameters. Their FairRoot base classes, the containers, ROOT dictionaries and Boost serialization.'
+sidebar:
+  order: 6
+code:
+  - fairroot/base/event/FairMCPoint.h
+  - fairroot/base/event/FairTimeStamp.h
+  - fairroot/base/event/FairHit.h
+  - fairroot/base/event/FairMultiLinkedData_Interface.h
+  - fairroot/base/event/FairTrackParam.h
+  - examples/MQ/serialization/data/MyDigi.h
+  - examples/simulation/Tutorial2/src/FairTutorialDet2Point.h
+  - templates/NewDetector_root_containers/NewDetector.cxx
+  - templates/NewDetector_stl_containers/NewDetectorPoint.h
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+Each data level of an event has its own class: MC points, digis, hits and track parameters. FairRoot gives a base class with the common members for each level, and most of them can hold links to the source objects. Your classes derive from them and need a ROOT dictionary, so that the runs can write and read them.
+
+## Data levels and base classes
+
+| Level | Made by | Base class | Members of the base class |
+| --- | --- | --- | --- |
+| MC point | A detector, during the transport | [`FairMCPoint`](/api/FairMCPoint/) | Track ID, event ID, detector ID, position, momentum, time, track length, energy loss |
+| Digi | A digitization task | [`FairTimeStamp`](/api/FairTimeStamp/) | Time stamp and its error |
+| Hit | A reconstruction task | [`FairHit`](/api/FairHit/) | The time stamp, a detector ID, the position and its errors, a reference index |
+| Track parameters | A track fit | [`FairTrackParam`](/api/FairTrackParam/) | x, y, z, tx, ty, q/p and a covariance matrix |
+
+The MC tracks come from the stack: see [The particle stack and MC tracks](/simulation/stack/). The event header has its own page: [Event headers and run IDs](/concepts/event-headers/).
+
+The base classes form this tree. Each header names the base class in the class line, for example [FairHit.h](/source/fairroot/base/event/FairHit.h/#L22).
+
+```text
+TObject
+├── FairMultiLinkedData_Interface   optional links
+│   ├── FairMCPoint                 MC point
+│   └── FairTimeStamp               time stamp
+│       └── FairHit                 hit
+└── FairTrackParam                  track parameters
+```
+
+[`FairMultiLinkedData_Interface`](/api/FairMultiLinkedData_Interface/) holds a pointer to a set of links, not the links. It makes the set at the first change, and only when links are on ([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L64-L75)). Without links, the pointer stays empty. See [Links between data levels](/concepts/links/).
+
+## MC points
+
+A detector makes MC points in `ProcessHits()`, while the transport engine moves a track through a sensitive volume. See [Write a detector](/simulation/detectors/). Derive your point class from `FairMCPoint`, which has these members:
+
+<Snippet file="fairroot/base/event/FairMCPoint.h" start="  protected:" end="ClassDefOverride(FairMCPoint, 5);" title="FairMCPoint.h" />
+
+The comments give the units: cm, GeV and ns. The constructor takes the track ID, the detector ID, the position, the momentum, the time, the track length and the energy loss. A last argument, the event ID, is 0 by default ([FairMCPoint.h](/source/fairroot/base/event/FairMCPoint.h/#L37-L44)). The default constructor sets the track ID and the detector ID to -1, and all other members to 0 ([FairMCPoint.cxx](/source/fairroot/base/event/FairMCPoint.cxx/#L12-L26)).
+
+During the transport, the track ID is the index of the particle in the stack. At the end of the event, `FairMCApplication::FinishEvent()` calls `UpdateTrackIndex()` of the stack ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L645-L648)). `FairStack` of the examples then writes the index of the stored MC track into each MC point:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="while ((hitArray = det->GetCollection(iColl++)))" end="// Collections of this detector" title="examples/common/mcstack/FairStack.cxx" />
+
+The stack gets the points from [`FairDetector::GetCollection()`](/api/FairDetector/#GetCollection), which returns a `TClonesArray`. With links on, `SetLink()` also gives each MC point a link to its MC track. The stack does not correct points in other containers. See [The particle stack and MC tracks](/simulation/stack/).
+
+## Digis and time stamps
+
+[`FairTimeStamp`](/api/FairTimeStamp/) adds a time stamp and its error, both `Double_t`. Both start at -1, and the member comment gives the unit ns ([FairTimeStamp.h](/source/fairroot/base/event/FairTimeStamp.h/#L79-L81)). A digi class derives from `FairTimeStamp` and adds the channel. The digi of the serialization example gives the time to the base class:
+
+<Snippet file="examples/MQ/serialization/data/MyDigi.h" start="class MyDigi : public FairTimeStamp" end="~MyDigi() override = default;" title="examples/MQ/serialization/data/MyDigi.h" />
+
+`FairTimeStamp` has three functions for time-based processing:
+
+| Function | What it does | Used by |
+| --- | --- | --- |
+| [`Compare()`](/api/FairTimeStamp/#Compare) | Orders by time stamp, then by its error. [`IsSortable()`](/api/FairTimeStamp/#IsSortable) returns true. | `TClonesArray::Sort()`, for example in [FairTestDetectorTimeRecoTask.cxx](/source/examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx/#L94) |
+| [`equal()`](/api/FairTimeStamp/#equal) | Returns true for the same time stamp and the same error. | [`FairWriteoutBuffer`](/api/FairWriteoutBuffer/), to find an older digi of the same channel ([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L184)) |
+| [`operator<`](/api/FairTimeStamp/#operator-lt) | Compares the time stamps only. | Your code |
+
+For a writeout buffer, override `equal()` so that it compares the channel, not the time:
+
+<Snippet file="examples/MQ/serialization/data/MyDigi.h" start="bool equal(FairTimeStamp* data) override" title="MyDigi.h" />
+
+Tutorial 3 has the same override in its digi class ([FairTestDetectorDigi.h](/source/examples/advanced/Tutorial3/data/FairTestDetectorDigi.h/#L55-L66)). See [Time-based simulation and reconstruction](/reconstruction/time-based/).
+
+## Hits
+
+[`FairHit`](/api/FairHit/) derives from `FairTimeStamp`. It adds a detector ID, the position, the position errors and a reference index:
+
+<Snippet file="fairroot/base/event/FairHit.h" start="  protected:" end="ClassDefOverride(FairHit, 3);" title="FairHit.h" />
+
+The constructor [`FairHit(detID, pos, dpos, index)`](/api/FairHit/#FairHit-2) sets all of them. The time stamp stays at -1, so set it with `SetTimeStamp()` ([FairHit.cxx](/source/fairroot/base/event/FairHit.cxx/#L22-L32)).
+
+The FairRoot libraries do not interpret the reference index. Use it for a one-to-one relation, for example from a hit to its MC point. The hit producer of Tutorial 4 stores the index of the MC point ([FairTutorialDet4HitProducerIdealMisalign.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx/#L174)). Its plot macro uses the index to get the point back ([plots.C](/source/examples/simulation/Tutorial4/macros/plots.C/#L118-L121)). For more than one source object, use links.
+
+## Track parameters
+
+[`FairTrackParam`](/api/FairTrackParam/) holds the result of a track fit at one z position: x, y, the slopes tx = dx/dz and ty = dy/dz, and q/p. The z coordinate tells where the parameters are, and it is not a fit parameter. An array keeps the 15 elements of the upper triangle of the 5×5 covariance matrix:
+
+<Snippet file="fairroot/base/event/FairTrackParam.h" start="  private:" end="ClassDefOverride(FairTrackParam, 1);" title="FairTrackParam.h" />
+
+`FairTrackParam` derives from `TObject` directly, so it has no time stamp and no links. [`Momentum()`](/api/FairTrackParam/#Momentum) calculates the momentum from tx, ty and q/p. It always gives a positive pz, and it uses p = 10⁴ GeV when |q/p| is 10⁻⁴ or less ([FairTrackParam.cxx](/source/fairroot/base/event/FairTrackParam.cxx/#L82-L89)). See [Track parameters and propagation](/reconstruction/tracks/).
+
+## Write a data class
+
+<Steps>
+
+1. Derive the class from the base class of its level: `FairMCPoint`, `FairTimeStamp` or `FairHit`.
+
+2. Give the class a default constructor. ROOT calls it when it reads an object from a file.
+
+3. Use `Double32_t` for the members that do not need full precision in the file. ROOT writes them as 32-bit floats.
+
+4. Start the comment of a member with `//!` if the member must not go into the file.
+
+5. Add `ClassDefOverride(MyClass, 1)` at the end of the class.
+
+6. Add the class to the LinkDef file of your library, with a `+` after the name.
+
+7. Register a container of the class as a branch. See [Containers](#containers).
+
+</Steps>
+
+The end of the `MyDigi` class shows the members with initial values and the dictionary macro:
+
+<Snippet file="examples/MQ/serialization/data/MyDigi.h" start="  private:" end="ClassDefOverride(MyDigi, 1);" title="MyDigi.h" />
+
+### Dictionary macros
+
+| Macro | Example in FairRoot | Use it for |
+| --- | --- | --- |
+| `ClassDefOverride(Name, version)` | `FairMCPoint`, `FairHit`, `FairTimeStamp` | A class that derives from a class with a dictionary macro, for example from `TObject` |
+| `ClassDef(Name, version)` | `NewDetectorPoint` of the templates | The same, without `override` on the functions that the macro declares |
+| `ClassDefNV(Name, version)` | [`FairLink`](/source/fairroot/base/event/FairLink.h/#L110), `CustomClass` of Tutorial 2 | A class without virtual functions: the macro adds none |
+
+The version tells ROOT the layout of the class in the file. Increase it each time that you add, remove or change a data member. ROOT stores the version with the data and uses it to read files that an older layout wrote (schema evolution).
+
+A comment that starts with `//!` makes a member transient: ROOT does not write it. `FairMultiLinkedData` keeps its flags out of the file in this way:
+
+<Snippet file="fairroot/base/event/FairMultiLinkedData.h" start="/ fLinks;$/" end="Int_t fVerbose;" title="FairMultiLinkedData.h" />
+
+### LinkDef file
+
+The LinkDef file lists the classes for `rootcling`. Tutorial 2 adds its classes, a class without `TObject`, and a `std::vector` of that class:
+
+<Snippet file="examples/simulation/Tutorial2/src/Tutorial2LinkDef.h" start="#ifdef __CINT__" end="#endif" title="Tutorial2LinkDef.h" />
+
+The `+` after a name asks `rootcling` for a streamer with schema evolution. A branch of type `std::vector<CustomClass>` needs the line for the vector, not only the line for the class. The examples make the dictionary with the CMake function `fairroot_target_root_dictionary()`:
+
+<Snippet file="examples/simulation/Tutorial2/src/CMakeLists.txt" start="fairroot_target_root_dictionary(" end="^\)" title="examples/simulation/Tutorial2/src/CMakeLists.txt" />
+
+See [CMake reference](/reference/cmake/).
+
+## Containers
+
+A branch holds the objects of one level for one event. Most FairRoot code uses a `TClonesArray`. With `RegisterAny()`, a branch can also be a `std::vector` or any other type with a dictionary.
+
+| | `TClonesArray` | `std::vector<T>` |
+| --- | --- | --- |
+| Register the branch | [`Register()`](/api/FairRootManager/#Register-2) | [`RegisterAny()`](/api/FairRootManager/#RegisterAny) |
+| Read it in a task | [`GetObject()`](/api/FairRootManager/#GetObject) and a cast | [`InitObjectAs<T const*>()`](/api/FairRootManager/#InitObjectAs) |
+| Element class | Derives from `TObject` | Any class with a dictionary |
+| Link history through its elements | Yes | No: the link code gets the branch with `GetObject()`, which does not find `RegisterAny()` branches ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L723-L753)) |
+| `FairStack` corrects the track IDs of its MC points | Yes, through `GetCollection()` | No |
+| `FairPrintFairLinks` and the datamatch library read it | Yes | No |
+
+A `TClonesArray` keeps its memory from event to event. Tutorial 3 makes the array of digis in `Init()` and registers it:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="// Create and register output array" end="ioman->Register(" title="FairTestDetectorDigiTask.cxx" />
+
+In `Exec()`, the task empties the array with `Delete()` ([FairTestDetectorDigiTask.cxx](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/#L56)). Then it makes each digi in place with `new ((*fDigiArray)[ipnt])` ([FairTestDetectorDigiTask.cxx](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/#L72)).
+
+:::caution[Links need Delete()]
+With links on, each object owns a set of links on the heap. `TClonesArray::Delete()` calls the destructors and frees the sets. `TClonesArray::Clear()` does not call the destructors, so the sets of the old objects stay in memory.
+:::
+
+Tutorial 2 keeps a class without `TObject` in a `std::vector`:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Point.h" start="class CustomClass" title="FairTutorialDet2Point.h" />
+
+The detector keeps the vector in the member `fCustomData`, of type `std::vector<CustomClass>*` ([FairTutorialDet2.h](/source/examples/simulation/Tutorial2/src/FairTutorialDet2.h/#L89-L90)). `RegisterAny()` makes the branch from it:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2.cxx" start="// example how to register any type T" end="mgr->RegisterAny(" title="FairTutorialDet2.cxx" />
+
+A later task reads it with `InitObjectAs<std::vector<CustomClass> const*>()`. A different type gives `nullptr` ([FairTutorialDet2CustomTask.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2CustomTask.cxx/#L39-L52)). See [Branches, sources and sinks](/concepts/io/).
+
+### The detector templates
+
+The templates show both containers:
+
+| Template | Point class | Container | Branch |
+| --- | --- | --- | --- |
+| [`NewDetector_root_containers`](/repo/templates/NewDetector_root_containers/) | Derives from `FairMCPoint` | `TClonesArray` | `Register()`, or `RegisterAny()` with multithreaded Geant4 |
+| [`NewDetector_stl_containers`](/repo/templates/NewDetector_stl_containers/) | A plain class with its own members | `std::vector<NewDetectorPoint*>` | `RegisterAny()` |
+
+<Snippet file="templates/NewDetector_root_containers/NewDetector.cxx" start="if (!TVirtualMC::GetMC()->IsMT())" title="templates/NewDetector_root_containers/NewDetector.cxx" />
+
+The STL template adds the vector of pointers to its LinkDef file:
+
+<Snippet file="templates/NewDetector_stl_containers/NewDetectorLinkDef.h" start="#pragma link C++ class NewDetectorPoint+;" end="std::vector<NewDetectorPoint*>+;" title="templates/NewDetector_stl_containers/NewDetectorLinkDef.h" />
+
+Its point class has no `TObject` base, so it cannot hold links. Its detector returns no collection from `GetCollection()` ([NewDetector.h](/source/templates/NewDetector_stl_containers/NewDetector.h/#L69)), so `FairStack` does not correct its track IDs.
+
+:::caution[Constructor mismatch in the STL template]
+In `templates/NewDetector_stl_containers/`, `NewDetectorPoint.cxx` defines the constructor with an extra `uint32_t evtId` parameter ([NewDetectorPoint.cxx](/source/templates/NewDetector_stl_containers/NewDetectorPoint.cxx/#L32-L39)). The header declares it without this parameter ([NewDetectorPoint.h](/source/templates/NewDetector_stl_containers/NewDetectorPoint.h/#L29-L35)). The copy in `templates/project_stl_containers/NewDetector/` agrees with its header, and the tests build it. Start from that copy.
+:::
+
+## Serialization for FairMQ
+
+For FairMQ devices, the library `FairRoot::BaseMQ` gives Boost serialization for `FairTimeStamp`, `FairHit` and `FairMCPoint` in support headers. Include the support header of your base class, for example `FairTimeStampBoostSerializationSupport.h`. Then give your class a `serialize()` function that writes the base class with `base_object`, and then its own members:
+
+<Snippet file="examples/MQ/serialization/data/MyDigi.h" start="template<class Archive>" title="MyDigi.h" />
+
+The support headers do not write the links. An object that crosses a channel in this way arrives without links ([FairTimeStampBoostSerializationSupport.h](/source/fairroot/basemq/FairTimeStampBoostSerializationSupport.h/#L18-L30)). See [Serialize FairRoot data for messages](/online/serialization/).
+
+:::caution[Energy loss of FairMCPoint]
+When it reads a point, the support header for `FairMCPoint` gives the energy loss to `SetLength()`, not to `SetEnergyLoss()` ([FairMCPointBoostSerializationSupport.h](/source/fairroot/basemq/FairMCPointBoostSerializationSupport.h/#L51-L57)).
+:::
+
+## Related pages
+
+- [Links between data levels](/concepts/links/): connect hits and digis to their MC points and MC tracks.
+- [Branches, sources and sinks](/concepts/io/): register and read the containers.
+- [Event headers and run IDs](/concepts/event-headers/): the data of the whole event.
+- [Write a detector](/simulation/detectors/): make MC points in `ProcessHits()`.
+- [The particle stack and MC tracks](/simulation/stack/): the MC tracks and the track index of the MC points.
+- [Track parameters and propagation](/reconstruction/tracks/): use `FairTrackParam` in a track fit.
+- [Serialize FairRoot data for messages](/online/serialization/): send data classes over FairMQ.

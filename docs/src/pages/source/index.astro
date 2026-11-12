@@ -1,0 +1,90 @@
+---
+// Source browser overview: all C++ files of fairroot/, examples/ and templates/, by directory.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { paths } from 'virtual:fairroot/data';
+import { SOURCE_DIRS } from '../../../scripts/api.mjs';
+import { model, base, sourceSidebar, dirId } from '../../lib/model.mjs';
+import '../../styles/source.css';
+
+const m = model();
+const dirs = new Map<string, any[]>();
+const totals = new Map<string, { files: number; lines: number }>();
+for (const f of m.sourceFiles) {
+  const dir = path.posix.dirname(f);
+  const top = f.split('/')[0];
+  const lines = readFileSync(path.join(paths.repoRoot, f), 'utf8').replace(/\n$/, '').split('\n').length;
+  const t = totals.get(top) ?? { files: 0, lines: 0 };
+  totals.set(top, { files: t.files + 1, lines: t.lines + lines });
+  const defined = (m.files.get(f)?.defines ?? []).filter((c: any) => c.public);
+  if (!dirs.has(dir)) dirs.set(dir, []);
+  dirs.get(dir)!.push({ f, name: path.posix.basename(f), lines, defined, pub: m.publicHeaders.has(f) });
+}
+const intro: Record<string, string> = {
+  fairroot: 'The FairRoot libraries. Each directory is one library, for example fairroot/base/ is FairRoot::Base.',
+  examples: 'The examples and tutorials. CI builds and runs them.',
+  templates: 'The templates for new projects, detectors, tasks and parameter containers.',
+};
+const headings = SOURCE_DIRS.flatMap((top) => [
+  { depth: 2, slug: top, text: `${top}/` },
+  ...[...dirs.keys()].filter((d) => d === top || d.startsWith(top + '/')).map((d) => ({ depth: 3, slug: dirId(d), text: `${d}/` })),
+]);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Source browser',
+    description: 'All C++ files of the FairRoot libraries, examples and templates, with line anchors and links to the API pages.',
+    tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+  }}
+  sidebar={sourceSidebar()}
+  headings={headings}
+>
+  <p class="api-lead">
+    Every C++ file of <code>fairroot/</code>, <code>examples/</code> and <code>templates/</code> as a page: {m.sourceFiles.length} files.
+    Doxygen finds the symbols. A symbol links to its API page, or to the line where it is defined.
+  </p>
+  <p>
+    Each line has an anchor, for example <a href={`${base}/source/fairroot/base/steer/FairRunSim.h/#L40`}><code>FairRunSim.h/#L40</code></a>.
+    Shift-click a second line number to mark a range. A <span class="fr-badge mark">public</span> header is installed with FairRoot.
+  </p>
+  {
+    SOURCE_DIRS.map((top) => (
+      <>
+        <h2 id={top}>
+          <code>{top}/</code>
+        </h2>
+        <p>
+          {intro[top]} {totals.get(top)?.files} files, {totals.get(top)?.lines.toLocaleString('en')} lines.
+        </p>
+        {[...dirs]
+          .filter(([d]) => d === top || d.startsWith(top + '/'))
+          .map(([dir, list]) => (
+            <>
+              <h3 id={dirId(dir)}>
+                <code>{dir}/</code>
+              </h3>
+              <ul class="src-list">
+                {list.map((x) => (
+                  <li>
+                    <a href={`${base}/source/${x.f}/`}>
+                      <code>{x.name}</code>
+                    </a>
+                    <span class="src-lines">{x.lines}</span>
+                    <span class="src-meta">
+                      {x.pub && <span class="fr-badge mark">public</span>}
+                      {x.defined.slice(0, 4).map((c: any) => (
+                        <a href={c.url}>{c.short}</a>
+                      ))}
+                      {x.defined.length > 4 && <span class="muted">+{x.defined.length - 4}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ))}
+      </>
+    ))
+  }
+</StarlightPage>

@@ -1,0 +1,199 @@
+---
+title: 'Tutorial 2: digitization and parameters'
+description: 'A digitizer task reads a parameter container from an ASCII file, and the runtime database stores it in the ROOT parameter file. Also custom data and event mixing.'
+sidebar:
+  order: 3
+code: [examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.h, examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx, examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx, examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx, examples/simulation/Tutorial2/src/FairTutorialDet2CustomTask.cxx, examples/simulation/Tutorial2/src/FairTutorialDet2.cxx, examples/simulation/Tutorial2/macros/run_tutorial2.C, examples/simulation/Tutorial2/macros/create_digis.C, examples/simulation/Tutorial2/macros/read_digis.C, examples/simulation/Tutorial2/macros/create_digis_mixed.C, examples/simulation/Tutorial2/macros/compare_seed_value.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+Tutorial 2 shows how a task gets its parameters. A digitizer task requests a parameter container. The runtime
+database fills it from an ASCII file and then stores it in the ROOT parameter file of the simulation. The example
+also passes custom C++ objects between tasks and mixes signal and background events.
+
+The digitizer makes no digis. A comment block disables its digitization code
+([FairTutorialDet2Digitizer.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx/#L118-L180)).
+
+## Files
+
+<FileTree>
+- examples/simulation/Tutorial2/
+  - src/
+    - FairTutorialDet2.cxx the detector, with MC points and custom data
+    - FairTutorialDet2Point.h the MC point and CustomClass
+    - FairTutorialDet2GeoPar.cxx the geometry parameter container
+    - FairTutorialDet2DigiPar.cxx the digitization parameter container
+    - FairTutorialDet2ContFact.cxx the container factory
+    - FairTutorialDet2Digitizer.cxx the digitizer task
+    - FairTutorialDet2CustomTask.cxx a task that reads the custom data
+    - Tutorial2LinkDef.h the dictionary of the library ExSimulation2
+    - …
+  - parameters/
+    - tutdet.digi.par the digitization parameters
+  - macros/
+    - run_tutorial2.C simulation
+    - compare_seed_value.C test of the stored random seed
+    - create_digis.C digitization with the parameters
+    - read_digis.C reads the parameters again
+    - run_background.C background simulation
+    - run_signal.C signal simulation
+    - create_digis_mixed.C digitization of mixed events
+    - CMakeLists.txt the tests
+</FileTree>
+
+## Run the example
+
+The file [`macros/CMakeLists.txt`](/repo/examples/simulation/Tutorial2/macros/CMakeLists.txt) makes a shell script
+for each macro in the build folder `examples/simulation/Tutorial2/macros/`. It also defines the tests. CTest
+fixtures make sure that a test runs after the tests that make its input files:
+
+| Test | Macro call | Reads | Writes |
+| --- | --- | --- | --- |
+| `ex_sim_tutorial2` | `run_tutorial2.C(10, "TGeant4", true, 333)` | None | `tutorial2_pions.mc_p2.000_t0_n10.root`, `tutorial2_pions.params_p2.000_t0_n10.root` |
+| `ex_sim_tutorial2_compare_seed_value` | `compare_seed_value.C("tutorial2_pions.params_p2.000_t0_n10.root", 333)` | Parameter file | None |
+| `ex_sim_tutorial2_create_digis` | `create_digis.C()` | MC file, parameter file, `tutdet.digi.par` | `digis.mc.root`, parameter file |
+| `ex_sim_tutorial2_read_digis` | `read_digis.C()` | MC file, parameter file, `tutdet.digi.par` (fallback) | `digis.mc.root` |
+| `ex_sim_tutorial2_run_background` | `run_background.C()`, 130 events | None | `tutorial2_pions.mc_p2.000_t0_n130.bg.root` and its parameter file |
+| `ex_sim_tutorial2_run_signal1` | `run_signal.C(1, 10)` | None | `tutorial2_pions.mc_p2.000_t0_n10.sg1.root` and its parameter file |
+| `ex_sim_tutorial2_run_signal2` | `run_signal.C(2, 20)` | None | `tutorial2_pions.mc_p2.000_t0_n20.sg2.root` and its parameter file |
+| `ex_sim_tutorial2_create_digis_mixed` | `create_digis_mixed.C()` | The three MC files, the `sg1` parameter file, `tutdet.digi.par` | `digis.mix.mc.root`, the `sg1` parameter file |
+
+Run all tests from the build folder:
+
+```bash
+ctest -R ex_sim_tutorial2
+```
+
+You can also start a script yourself. The script joins its arguments with commas and calls `root -q -b` with the
+macro ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). Put a string argument in double quotes inside
+single quotes:
+
+```bash
+cd <build>/examples/simulation/Tutorial2/macros
+./run_tutorial2.sh 10 '"TGeant4"' true 333
+```
+
+## Simulation
+
+`run_tutorial2.C` simulates one pion with a momentum of 2 GeV/c in each event. The detector is
+`FairTutorialDet2` with the geometry `double_sector.geo`. The macro sets the random seed with
+`gRandom->SetSeed()`. After `Init()`, it writes the parameters of the simulation:
+
+<Snippet file="examples/simulation/Tutorial2/macros/run_tutorial2.C" start="// -----   Runtime database" end="rtdb->print();" />
+
+With the constructor argument `kTRUE`, the output adds to a parameter file that exists. Thus each new run adds a
+run ID to the same file. [`FairBaseParSet`](/api/FairBaseParSet/) in this file holds the random seed.
+`compare_seed_value.C` reads it back:
+
+<Snippet file="examples/simulation/Tutorial2/macros/compare_seed_value.C" start="par(myFile->Get" end="UInt_t seed = par->GetRndSeed();" />
+
+The macro returns 0 if the seed in the file is the expected seed, and 1 otherwise.
+
+## The parameter container
+
+`FairTutorialDet2DigiPar` derives from `FairParGenericSet` and has three members: the number of stations, the
+number of sectors in each station, and a float array. The block in `tutdet.digi.par` gives these values:
+
+<Snippet file="examples/simulation/Tutorial2/parameters/tutdet.digi.par" start="[FairTutorialDet2DigiPar]" end="1.0    3.0     3.650" lang="text" />
+
+The comment at the top of the file gives the layout of the float array. Each station has three values, and each
+sector has ten values. With 8 stations and 756 sectors, the array has 7584 values. `getParams()` computes this size
+and logs it, but `fill()` resizes the array to the number of values in the file. Thus the code does not check the
+size ([FairTutorialDet2DigiPar.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx/#L86-L101)).
+
+The container factory `FairTutorialDet2ContFact` knows two containers: `FairTutorialDet2GeoPar` and
+`FairTutorialDet2DigiPar`. Both have the default context `TestDefaultContext`
+([FairTutorialDet2ContFact.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx/#L17-L32)).
+[Parameters and the runtime database](/concepts/parameters/) explains the parameter container, the container factory
+and their code.
+
+## Digitization: create_digis.C
+
+`create_digis.C` reads the MC file. It opens the ROOT parameter file of the simulation as the first input and
+`tutdet.digi.par` as the second input. The digitizer requests `FairTutorialDet2DigiPar` in `SetParContainers()`.
+
+The ROOT file of a new simulation does not have this container. Thus the first input fails, and the ASCII file
+fills the container. After `Init()`, the macro stores the container in the ROOT parameter file:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start='rtdb->getContainer("FairTutorialDet2DigiPar")->print();' end="rtdb->print();" />
+
+The ROOT file is the first input and also the output. Thus the macro opens it with the mode `"UPDATE"`.
+`saveOutput()` writes only changed containers. The read from `tutdet.digi.par` already marked the container as
+changed, so the `setChanged()` call is not necessary here. `saveOutput()` writes the container because it came from
+the second input ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L368-L370)).
+
+## Read the parameters again: read_digis.C
+
+`read_digis.C` uses the same inputs, but now the ROOT file has the container. Thus the first input fills it. The
+macro has no task, so it requests the container itself before `Init()`:
+
+<Snippet file="examples/simulation/Tutorial2/macros/read_digis.C" start="// It is needed to request the parameter container" end='rtdb->getContainer("FairTutorialDet2DigiPar");' />
+
+The macro prints the parameters and the random seed of the simulation from `FairBaseParSet`. It calls
+`saveOutput()`, but it sets no output, so it writes no parameters. Despite its name, it reads the MC file, not
+digis. Its output file has the same name as the output of `create_digis.C`, `digis.mc.root`.
+
+## Custom data between tasks
+
+`CustomClass` is a small class with a position and a charge. The detector registers a `std::vector<CustomClass>`
+as a persistent branch, so the MC file contains it:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2.cxx" start="void FairTutorialDet2::Register()" />
+
+The digitizer reads the branch with [`InitObjectAs()`](/api/FairRootManager/#InitObjectAs). This function returns
+a pointer to a `const` object. The digitizer then registers its own vector with
+[`RegisterAny()`](/api/FairRootManager/#RegisterAny) as the memory branch `InMemory1`. With the last argument
+`false`, the sink does not write the vector to the output file:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx" start="void FairTutorialDet2Digitizer::Register()" />
+
+`FairTutorialDet2CustomTask` reads both branches with `InitObjectAs()`. Its asserts show that a wrong type or a
+wrong name gives `nullptr`
+([FairTutorialDet2CustomTask.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2CustomTask.cxx/#L46-L52)).
+The digitizer must come before this task in the task list, because its `Init()` registers `InMemory1`.
+
+:::caution
+The digitizer adds entries to `InMemory1` in each event, but it never clears the vector
+([FairTutorialDet2Digitizer.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx/#L112-L116)).
+The vector thus holds the entries of all events so far. Clear such a vector at the start of `Exec()`.
+:::
+
+## Event mixing: create_digis_mixed.C
+
+`run_background.C` and `run_signal.C` simulate the same pions as `run_tutorial2.C`. They write separate MC files
+and parameter files. `create_digis_mixed.C` reads them with a [`FairMixedSource`](/api/FairMixedSource/):
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis_mixed.C" start="auto fRun = std::make_unique" end="fMixedSource->BGWindowWidthTime(60, 2);" />
+
+- The background file has the ID 0. The two signal files have the IDs 1 and 2.
+- [`UseRunIdfromSG(1)`](/api/FairMixedSource/#UseRunIdfromSG) takes the run ID from signal 1. Thus the macro uses
+  the parameter file of signal 1.
+- [`SetEventMeanTime(10)`](/api/FairMixedSource/#SetEventMeanTime) sets the mean of each random time interval to
+  10 ns. The intervals have an exponential distribution
+  ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L637-L644)). From the second event on,
+  `ReadEvent()` draws two intervals for each event. Thus the mean time between events is 20 ns
+  ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L347-L388)).
+- [`BGWindowWidthTime(100, 1)`](/api/FairMixedSource/#BGWindowWidthTime) gives signal 1 the fraction 10/100 = 0.1.
+  `BGWindowWidthTime(60, 2)` gives signal 2 the fraction 10/60 = 0.167
+  ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L585-L604)). Both use the value 10 of
+  `SetEventMeanTime()`.
+
+For each event, the source draws one random number and selects a signal or the background with the fractions. The
+fractions do not add up. Thus signal 1 gets about 10 % of the events, signal 2 about 6.7 % (0.167 minus 0.1), and the
+background the rest. [Mix signal and background](/reconstruction/sources/#mix-signal-and-background) explains the
+selection. The comments in the macro expect one signal 1 event in about 100 ns and one signal 2 event in about
+60 ns. With 20 ns between events, the real values are about 200 ns and 300 ns.
+
+The parameter steps are the same as in `create_digis.C`. The output file is `digis.mix.mc.root`.
+
+## Related pages
+
+- [Parameters and the runtime database](/concepts/parameters/): containers, factories, inputs and the output.
+- [ASCII parameter file format](/reference/par-format/): the format of `tutdet.digi.par`.
+- [From MC points to digis](/reconstruction/digitization/): tasks that make digis from MC points.
+- [Input sources, friends and event mixing](/reconstruction/sources/): `FairFileSource` and `FairMixedSource`.
+- [Tutorial 1: a simple detector](/examples/tutorial1/): the simulation basics.
+- [Branches, sources and sinks](/concepts/io/): branches, `Register()` and `RegisterAny()`.
+- [Tests](/tools/testing/): how the example tests run.

@@ -1,0 +1,232 @@
+---
+title: 'Tutorial 3: event-based and time-based reconstruction'
+description: 'A silicon test detector: simulation, digitization and hit reconstruction, event by event or time-based, and the same reconstruction in FairMQ devices.'
+sidebar:
+  order: 6
+code: [examples/advanced/Tutorial3/simulation/FairTestDetector.cxx, examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx, examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx, examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeDigiTask.cxx, examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx, examples/advanced/Tutorial3/MQ/sampler.cxx, examples/advanced/Tutorial3/MQ/processor.cxx, examples/advanced/Tutorial3/MQ/sink.cxx, examples/advanced/Tutorial3/macro/run_sim.C, examples/advanced/Tutorial3/macro/run_digi_timebased.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree, Steps } from '@astrojs/starlight/components';
+
+Tutorial 3 simulates a test detector of silicon boxes and makes hits from its MC points. Its macros
+do this event by event, or time-based with a writeout buffer and a time sorter. Three FairMQ devices
+run the same hit reconstruction on messages.
+
+## Files
+
+<FileTree>
+- examples/advanced/Tutorial3/
+  - CMakeLists.txt the library `ExTestDetector`, the devices and their tests
+  - simulation/ the detector `FairTestDetector`, its geometry and parameter classes
+  - data/ the MC point, the digi and the hit
+  - digitization/ the event-based digitizer
+  - reconstruction/ the event-based hit producer
+  - timeBasedSimulation/ the time-based digitizer and hit producer, the writeout buffer, the sorter
+  - macro/ the macros and their tests
+  - MQ/ the sampler, the processor, the sink and their scripts
+</FileTree>
+
+The examples build Tutorial 3 only if CMake finds FairMQ and Boost
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt)). The library `ExTestDetector` holds the
+classes of `data/`, `simulation/`, `digitization/`, `reconstruction/` and `timeBasedSimulation/`.
+The three device programs link it. It also has `FairTestDetectorHitProducerSmearing`, which no
+macro uses.
+
+## Run the tutorial
+
+CTest runs the macros as a chain. Each test requires the test that makes its input
+([macro/CMakeLists.txt](/repo/examples/advanced/Tutorial3/macro/CMakeLists.txt)):
+
+| Test | Command | Requires |
+| --- | --- | --- |
+| `ex_tutorial3_sim_<engine>` | `run_sim.sh 100 "<engine>"` | nothing |
+| `ex_tutorial3_digi_<engine>` | `run_digi.sh "<engine>"` | the simulation |
+| `ex_tutorial3_reco_<engine>` | `run_reco.sh "<engine>"` | the digitization |
+| `ex_tutorial3_digi_timebased_<engine>` | `run_digi_timebased.sh "<engine>"` | the simulation |
+| `ex_tutorial3_reco_timebased_<engine>` | `run_reco_timebased.sh "<engine>"` | the time-based digitization |
+| `ex_tutorial3_mq_<format>` | `test.sh <format>` | the digitization with `TGeant4` |
+
+The transport engine is `TGeant4`. CMake adds `TGeant3` if it finds Geant3 and `ENABLE_GEANT3_TESTING` is on.
+A macro test passes when its output contains `Macro finished successfully`. An MQ test passes when
+the sink logs `Received 100 messages!`.
+
+The MQ tests use the formats `tmessage`, `binary` and `boost`, and also `flatbuffers` and `protobuf`
+if CMake finds these libraries ([CMakeLists.txt](/repo/examples/advanced/Tutorial3/CMakeLists.txt)).
+To run all tests of the tutorial, use `ctest -R ex_tutorial3` in the build folder. To run the chain
+by hand, use the scripts that CMake makes for the macros:
+
+<Steps>
+
+1. Go to the folder `<build>/examples/advanced/Tutorial3/macro`.
+2. Run the macros with the same transport engine. Give a string argument with its double quotes:
+   ```sh
+   ./run_sim.sh 100 '"TGeant4"'
+   ./run_digi.sh '"TGeant4"'
+   ./run_reco.sh '"TGeant4"'
+   ```
+
+</Steps>
+
+The script sets the environment, joins its arguments with commas and starts ROOT with the macro
+([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). The output goes into the subfolder `data/`.
+
+## The macros
+
+| Macro | Input | Output in `data/` | Default engine |
+| --- | --- | --- | --- |
+| `run_sim.C(nEvents, mcEngine)` | the primary generator | `testrun_<engine>.root`, `testparams_<engine>.root`, `geofile_<engine>_full.root` | `TGeant4` |
+| `run_digi.C(mcEngine)` | `testrun_<engine>.root` | `testdigi_<engine>.root` | `TGeant4` |
+| `run_reco.C(mcEngine)` | `testdigi_<engine>.root` | `testreco_<engine>.root` | `TGeant3` |
+| `run_digi_timebased.C(mcEngine)` | `testrun_<engine>.root` | `testdigitimebased_<engine>.root` | `TGeant3` |
+| `run_reco_timebased.C(mcEngine)` | nothing, see [Time-based digis and hits](#time-based-digis-and-hits) | `testrecotimebased_<engine>.root` | `TGeant3` |
+| `eventDisplay.C(mcEngine)` | `testrun_<engine>.root` | `tst.root` | `TGeant3` |
+
+All macros after `run_sim.C` read the parameters from `testparams_<engine>.root`. The
+[event display](/reconstruction/event-display/) of `eventDisplay.C` needs `FairMCTracksDraw`, which
+the build makes only with Geant3 ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt)).
+
+:::caution[Give the engine to each macro]
+The default engines differ. Without an argument, `run_reco.C` looks for `testdigi_TGeant3.root`,
+but `run_digi.C` writes `testdigi_TGeant4.root`.
+:::
+
+`run_sim_sep.C(fileId, nEvents, mcEngine)` writes the file `testrun_<engine>_f<fileId>.root`.
+`run_digi_reco_one.C` digitizes and reconstructs the file 0 in one run. `run_digi_reco_local.C` does
+the same for a chain of files. `run_digi_reco_proof.C` does it on PROOF workers and needs the
+deprecated option `BUILD_PROOF_SUPPORT`.
+
+## The detector and its MC points
+
+`run_sim.C` builds the cave, the magnet and the detector `TORINO` of the class `FairTestDetector`.
+The geometry file [`torino.geo`](/repo/examples/common/geometry/torino.geo) places four silicon
+boxes in the cave. The medium `silicon` is sensitive, so each box is a sensitive volume. The primary
+generator shoots 10 protons with 2 GeV/c into each event:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start="FairBoxGenerator *boxGen" end="primGen->AddGenerator(boxGen);" />
+
+The comment in the first line is out of date: 2212 is the PDG code of the proton, and 10 is the
+number of particles.
+
+When a track enters a box, `FairTestDetector::ProcessHits()` keeps the position, the momentum and
+the time. It multiplies `TrackTime()` by 10⁹, so the time is in ns. It sums the energy loss of the
+steps. When the track leaves the box, stops or disappears, it adds a `FairTestDetectorPoint` if the
+energy loss is not 0 ([FairTestDetector.cxx](/source/examples/advanced/Tutorial3/simulation/FairTestDetector.cxx/#L70-L113)).
+The point gets a link to its MC track. `Register()` makes the points the branch
+`FairTestDetectorPoint` of the output file. See also [Write a detector](/simulation/detectors/).
+
+## Event by event: digis and hits
+
+`run_digi.C` adds `FairTestDetectorDigiTask` to a run that reads the simulation file. The task reads
+the branch `FairTestDetectorPoint` and registers the branch `FairTestDetectorDigi`
+([FairTestDetectorDigiTask.cxx](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/#L30-L51)).
+It makes one digi for each MC point:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="void FairTestDetectorDigiTask::Exec" />
+
+- `CalcPad()` makes an integer pad number for each coordinate: `static_cast<Int_t>(posIn + posOut) / 2`.
+- `CalcTimeStamp()` adds the event time, the time of the MC point and a random value from a Gaussian
+  with the width `fTimeResolution`. The constructor sets the width to 0. Change it with
+  `SetTimeResolution()`. A negative sum becomes 0.
+- The link points to the MC point: the branch `FairTestDetectorPoint`, the entry and the index.
+
+`run_reco.C` adds `FairTestDetectorRecoTask`. It reads `FairTestDetectorDigi` and registers
+`FairTestDetectorHit`. The task puts each hit at the pad number plus 0.5 cm, with the error 1/√12 cm:
+
+<Snippet file="examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx" start="TVector3 pos(digi->GetX() + 0.5" end="hit->SetTimeStampError(digi->GetTimeStampError());" />
+
+For a positive pad number, this is the center of the pad, which is 1 cm wide. The error is then the
+standard deviation of a uniform distribution over the pad. `CalcPad()` rounds toward 0, so the pad 0
+covers −1 cm to 1 cm, and its hit is 0.5 cm above the center. The hit of a negative pad is 1 cm above
+the center, outside the pad. See [From MC points to digis](/reconstruction/digitization/).
+
+The hit gets a link to its digi only without stream processing. The FairMQ processor switches stream
+processing on with [`SetStreamProcessing()`](/api/FairTask/#SetStreamProcessing), because its digis
+come from a message and not from a tree entry.
+
+`run_digi.C` and `run_reco.C` call `FairLinkManager::Instance()->AddIncludeType(0)`. The branch with
+the ID 0 is `GeoTracks`, so the link manager drops the links to the MC points and to the digis. See
+[Filter links by branch](/concepts/links/#filter-links-by-branch).
+
+## Time-based digis and hits
+
+`run_digi_timebased.C` reads the same simulation file. The source gives the events random times
+with a mean distance of 50 ns. The time-based digitizer makes the same digis with a time resolution
+of 100 ns and gives them to a writeout buffer. A sorter task then sorts them by time stamp:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi_timebased.C" start="FairTestDetectorTimeDigiTask* digiProducer" end="fRun->AddTask(digiSorter);" />
+
+| Branch of the output | Content |
+| --- | --- |
+| `FairTestDetectorDigi` | The digis of the writeout buffer. The buffer writes a digi into the entry of a later event, after the active time of the digi has ended. |
+| `FairTestDetectorSortedDigi` | The digis in time order. The sorter has 5000 cells of 50 ns, a window of 250 µs. 100 events with a mean distance of 50 ns cover about 5 µs. If all time stamps are below 250 µs, the sorter keeps all digis until `FinishTask()`. The run then fills them into one more entry after the last event. |
+
+`run_reco_timebased.C` switches the run to time stamps with
+[`RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps). Its task `FairTestDetectorTimeRecoTask`
+gets the sorted digis in windows of 200 ns and makes one hit for each digi.
+[Time-based simulation and reconstruction](/reconstruction/time-based/) explains each part.
+
+:::caution[run_reco_timebased.C reads no data]
+The macro makes a `FairFileSource`, but it does not give it to the run
+([run_reco_timebased.C](/source/examples/advanced/Tutorial3/macro/run_reco_timebased.C/#L43-L47)).
+The task finds no branch `FairTestDetectorSortedDigi`, and the run switches the task off. The macro
+and its test still end with `Macro finished successfully.` Add `fRun->SetSource(fFileSource);`
+before `fRun->Init()`.
+:::
+
+## Hit reconstruction in FairMQ devices
+
+The MQ part runs the event-based hit reconstruction in three device programs. Each program includes
+`FairRunFairMQDevice.h` and implements `addCustomOptions()` and `fairGetDevice()`:
+
+| Device | What it does | Options (default) |
+| --- | --- | --- |
+| `tut3-sampler` | Reads the digi file with a `FairRunAna`. For each entry, it calls [`RunMQ(entry)`](/api/FairRunAna/#RunMQ) and sends the digis in one message. | `--input-file` (required), `--parameter-file` (empty), `--branch` (`FairTestDetectorDigi`), `--out-channel` (`data1`), `--chain-input` (0) |
+| `tut3-processor` | Makes the hits of each message with `FairTestDetectorRecoTask`, and sends them on. | `--in-channel` (`data1`), `--out-channel` (`data2`) |
+| `tut3-sink` | Writes the hits into the tree `MQOut` of the file `filesink_<format>.root`. | `--in-channel` (`data2`), `--max-msgs` (0, no limit) |
+
+Each device also has `--data-format` (`binary`). `--chain-input n` adds the input file n more times
+to the source, so the sampler sends each event n + 1 times
+([sampler.cxx](/source/examples/advanced/Tutorial3/MQ/sampler.cxx/#L71-L118)). The processor gives
+each message to its task:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/processor.cxx" start="OnData(fInChannelName" />
+
+`MQRecoTask` holds the task of `run_reco.C`. Its `Exec()` reads the digis from the message, calls the
+task and puts the hits into the message. Each data format has its own `Exec()`, see
+[Compare the formats in Tutorial 3](/online/serialization/#compare-the-formats-in-tutorial-3):
+
+- `binary`: the task copies the values into the structs of [Payload.h](/source/examples/advanced/Tutorial3/MQ/data/Payload.h/).
+- `boost` and `tmessage`: [`BoostSerializer`](/api/BoostSerializer/) and [`RootSerializer`](/api/RootSerializer/).
+- `flatbuffers` and `protobuf`: code that the build generates from the files in [`MQ/data/`](/repo/examples/advanced/Tutorial3/MQ/data/).
+
+CMake configures two scripts into `<build>/examples/advanced/Tutorial3/`. Both start one sampler, two
+processors and one sink. Their only argument is the data format:
+
+| Script | How the devices run | Channels | Input in `macro/data/` |
+| --- | --- | --- | --- |
+| `start.sh` | Each in its own `xterm` | `tcp://localhost:5565` and `tcp://localhost:5570` | `testdigi_TGeant3.root`, 100 times (`--chain-input 99`) |
+| `test.sh` | In the background, with `--control static` | `ipc://data1` and `ipc://data2` | `testdigi_TGeant4.root`, once |
+
+The sampler and the sink bind their channels, and the processors connect to them. The channels are
+of the types `push` and `pull`, so each message goes to one of the two processors. The sampler of
+`test.sh`:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/test.sh.in" start='SAMPLER="tut3-sampler"' end="SAMPLER_PID=$!" lang="sh" />
+
+`test.sh` starts the sink with `--max-msgs 100`. When the sink has 100 messages, it stops, and the
+script stops the other devices with `SIGINT`.
+
+:::caution[start.sh reads the files of TGeant3]
+The tests make the files of `TGeant3` only if Geant3 testing is on. Before `start.sh`, run
+`run_sim.sh` and `run_digi.sh` with `'"TGeant3"'`, or change `mcEngine` in `start.sh`.
+:::
+
+## Related pages
+
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): the buffer, the sorter, the time windows.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): samplers, processors and sinks.
+- [Serialize FairRoot data for messages](/online/serialization/): the serializers of the formats.
+- [Write a reconstruction macro](/reconstruction/run-macro/): the macros of this tutorial step by step.
+- [From MC points to digis](/reconstruction/digitization/): the digitizer of this tutorial.
+- [Tests](/tools/testing/): CTest fixtures and the scripts of the macro tests.

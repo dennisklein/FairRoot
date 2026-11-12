@@ -1,0 +1,1170 @@
+---
+// One event of a simulation run, step by step: generators → stack → engine → steps → sensitive volume →
+// MC points → secondaries → end of the event → output tree. The engine in this walk-through is TGeant3, the
+// default engine of examples/simulation/Tutorial1/macros/run_tutorial1.C (line 24), with the example stack
+// (examples/common/mcstack/FairStack) and the detector FairTutorialDet1 of that example.
+// Differences from Tutorial1: the macro adds one FairBoxGenerator only (run_tutorial1.C:105-113); the diagram
+// adds a FairParticleGenerator to show two generators. The geometry (examples/common/geometry/double_sector.geo)
+// has two sensitive volumes, tutdet1 and tutdet2; the diagram shows tutdet1 only. With the default geometry
+// model "TGeo" (fairroot/base/steer/FairRunSim.h:263), g3Config.C makes a TGeant3TGeo
+// (examples/common/gconfig/g3Config.C:17-18). TGeant3TGeo derives from TGeant3 and uses its event loop
+// (vmc-project/geant3 TGeant3/TGeant3TGeo.cxx: GtreveRoot() calls the same gtreveroot), so the diagram uses the
+// engine name TGeant3, as in run->SetName("TGeant3").
+//
+// Facts (FairRoot, paths relative to the repository):
+// - FairRunSim::Run() calls fApp->RunMC(NEvents) (fairroot/base/steer/FairRunSim.cxx:322-324).
+//   FairMCApplication::RunMC() calls fMC->ProcessRun(nofEvents) (fairroot/base/sim/FairMCApplication.cxx:302).
+// - FairMCApplication::BeginEvent() calls BeginEvent() of each active detector (FairMCApplication.cxx:384-390).
+// - FairMCApplication::GeneratePrimaries() calls fEvGen->GenerateEvent(fStack) (FairMCApplication.cxx:982-990).
+//   FairPrimaryGenerator::GenerateEvent() calls MakeVertex(), then ReadEvent(this) of each generator in fGenList
+//   (fairroot/base/sim/FairPrimaryGenerator.cxx:224-281, MakeVertex 245, ReadEvent 262).
+//   FairBoxGenerator::ReadEvent() and FairParticleGenerator::ReadEvent() call primGen->AddTrack()
+//   (fairroot/generators/FairBoxGenerator.cxx:219, FairParticleGenerator.cxx:64). AddTrack() adds the event
+//   vertex to the track vertex (FairPrimaryGenerator.cxx:302-304) and calls fStack->PushTrack() with parent -1
+//   (FairPrimaryGenerator.cxx:371, 382).
+// - FairStack: fStack is a std::stack<TParticle*>, last in, first out (examples/common/mcstack/FairStack.h:218).
+//   PushTrack() pushes the particle onto fStack if toBeDone == 1 (FairStack.cxx:83-131, push 130).
+//   PopNextTrack() takes fStack.top() and pops it; on an empty stack it sets iTrack = -1 and returns nullptr
+//   (FairStack.cxx:134-156). AddPoint(detId) counts a point for the current track in fPointsMap (336-347).
+//   FillTrackArray() copies the selected particles into the MCTrack array, with their point counts (196-238,
+//   SetNPoints 225); SelectTracks() always keeps the primaries (383-458). UpdateTrackIndex() puts the new track
+//   numbers into the MC points of each detector collection (245-300). Reset() clears fStack, the particles, the
+//   tracks and the point counts (302-313). Register(): branch "MCTrack" (318).
+// - FairMCApplication::Stepping(): id = fMC->CurrentVolID(copyNo), fVolMap.find(id), the FairVolume with the same
+//   copy number, disvol->GetDetector(), disdet->ProcessHits(disvol) (FairMCApplication.cxx:514-528). fVolMap
+//   (std::multimap<Int_t, FairVolume*>, FairMCApplication.h:295) holds only the sensitive volumes: InitGeometry()
+//   fills it from FairModule::fAllSensitiveVolumes (FairMCApplication.cxx:882-918). RegisterSensitiveVolume()
+//   calls vol.SetModule(this), and FairVolume::SetModule() sets fDetector (fairroot/base/sim/FairModule.cxx:217-223,
+//   FairVolume.cxx:31-35).
+// - FairTutorialDet1 (examples/simulation/Tutorial1/src/FairTutorialDet1.cxx): IsSensitive() is true for volume
+//   names with "tutdet" (118-121). ProcessHits() adds Edep() of each step (68); when the track exits, stops or
+//   disappears, it calls AddHit() and stack->AddPoint(kTutDet) (71-88); with no energy loss it makes no point
+//   (75-77), so the diagram assumes that each track loses energy in tutdet1. EndOfEvent() clears the points (94).
+//   Register(): branch "TutorialDetPoint" (104).
+// - FairMCApplication::FinishEvent() order (FairMCApplication.cxx:633-671): fStack->FillTrackArray() (646),
+//   fStack->UpdateTrackIndex() (648), the task list if there is one (652-655, not shown), FinishEvent() of each
+//   active detector (658), fRootManager->Fill() (662), EndOfEvent() of each active detector (668),
+//   fStack->Reset() (671). fairroot/base/sim/FairDetector.h:56 and 101 say the same: EndOfEvent() after and
+//   FinishEvent() before the tree fill.
+// - FairRootManager::Fill() calls fSink->Fill() (fairroot/base/steer/FairRootManager.cxx:331-334).
+//   FairRootFileSink::Fill() calls fOutTree->Fill() (fairroot/base/sink/FairRootFileSink.cxx:302-305). The
+//   default tree name is "cbmsim" (FairRootManager.cxx:943). FairMCEventHeader registers "MCEventHeader."
+//   (fairroot/base/event/FairMCEventHeader.cxx:85). The sink writes the tree to the file at the end of the run:
+//   FinishRun() → fRootManager->Write() (FairMCApplication.cxx:369) → fSink->Write() (FairRootManager.cxx:353)
+//   → WriteTObject(fOutTree) (FairRootFileSink.cxx:328).
+// Facts (VMC engines, github.com/vmc-project/geant3 and geant4_vmc):
+// - TGeant3::ProcessRun() calls ProcessEvent() for each event: BeginEvent(), Gtrig(), FinishEvent()
+//   (TGeant3/TGeant3.cxx). Gtrig calls gukine → GeneratePrimaries() (TGeant3gu.cxx) and gtreve_root, which pops
+//   tracks with stack->PopNextTrack() (rxgtrak) until there are none and calls BeginPrimary() for each primary
+//   (gtrak/gtreveroot.F). gutrak: PreTrack(), the tracking, PostTrack(). gustep: the secondaries of the step
+//   go to SetTrack(1, current track, ...) → PushTrack(), then Stepping().
+// - TGeant4 is different: it reads the primaries with PopPrimaryForTracking() and tracks from its own stack
+//   (TG4PrimaryGeneratorAction.cxx, TG4TrackManager.cxx).
+// Not shown: FinishPrimary(), the task list, the track selection cuts of FairStack.
+import Explainer from './Explainer.astro';
+
+const steps = [
+  {
+    cap: 'FairRunSim::Run() starts the transport engine, here TGeant3. At the start of each event, the engine calls BeginEvent(), and FairMCApplication calls BeginEvent() of each active detector.',
+    code: 'fMC->ProcessRun(nofEvents);',
+  },
+  {
+    cap: 'The engine calls GeneratePrimaries(). FairPrimaryGenerator makes the event vertex, then each generator reads its particles and puts them onto the stack with AddTrack().',
+    code: 'primGen->AddTrack(GetPDGType(), px, py, pz, fX, fY, fZ);',
+  },
+  {
+    cap: 'TGeant3 takes the track on top of the stack with PopNextTrack(): last in, first out. (TGeant4 reads the primaries with PopPrimaryForTracking() and uses its own stack.)',
+    code: 'std::stack<TParticle*> fStack;',
+  },
+  {
+    cap: 'The engine moves the track in steps and calls Stepping() after each step. In a sensitive volume, Stepping() finds the FairVolume from the volume ID and the copy number, and calls ProcessHits() of its detector.',
+    code: 'disdet->ProcessHits(disvol);',
+  },
+  {
+    cap: 'A step in the volume makes a secondary track. TGeant3 pushes it onto the stack, with the current track as its mother.',
+    code: 'fStack.push(particle);',
+  },
+  {
+    cap: 'The track leaves the volume. ProcessHits() of the detector adds a point with the energy loss in the volume, and AddPoint() counts the point for the track.',
+    code: 'stack->AddPoint(kTutDet);',
+  },
+  {
+    cap: 'The engine transports the other tracks in the same way: first the secondary, then #0. When the stack is empty, PopNextTrack() returns no track.',
+    code: 'if (fStack.empty()) { iTrack = -1; return nullptr; }',
+  },
+  {
+    cap: 'The engine calls FinishEvent(). FillTrackArray() copies the tracks into the MCTrack array, and UpdateTrackIndex() puts the new track numbers into the points.',
+    code: 'fStack->FillTrackArray();',
+  },
+  {
+    cap: 'FairRootManager::Fill() makes the sink add one entry to the tree cbmsim (the sink writes the tree to the file at the end of the run). Then EndOfEvent() clears the points, and Reset() clears the stack.',
+    code: 'fRootManager->Fill();',
+  },
+];
+
+// Beats inside each step: [time in ms, texts]. At beat i (i ≥ 1) the script adds the class b<i> to the stage.
+// It writes the texts into the elements with data-k: a0…a4 call trace of FairMCApplication, eng TGeant3,
+// st FairStack, det FairTutorialDet1, nS tracks on the stack, nP points, ent entries of the tree. A step starts
+// from empty texts, except the counters nS, nP and ent, which each step sets at time 0.
+type Beat = [number, Record<string, string>];
+const at0 = (nS: number, nP: number) => ({ nS: String(nS), nP: String(nP), ent: 'cbmsim: 0 entries' });
+const beats: Beat[][] = [
+  [
+    [0, { ...at0(0, 0), eng: 'ProcessRun()', a0: 'BeginEvent()' }],
+    [500, { a1: '→ BeginEvent()', det: 'BeginEvent()' }],
+  ],
+  [
+    [0, { ...at0(0, 0), a0: 'GeneratePrimaries()', a1: '→ GenerateEvent()', a2: '  → MakeVertex()' }],
+    [300, { a3: '  → ReadEvent()' }],
+    [600, { a4: '    → AddTrack()', st: 'PushTrack()' }],
+    [1250, { nS: '1' }],
+    [1550, {}],
+    [2200, { nS: '2' }],
+  ],
+  [
+    [0, { ...at0(2, 0), eng: 'PopNextTrack()' }],
+    [300, { nS: '1' }],
+    [1000, { a0: 'BeginPrimary()', a1: 'PreTrack()' }],
+  ],
+  [
+    [0, { ...at0(1, 0), a0: 'Stepping()', a1: '→ CurrentVolID()', a2: '→ fVolMap.find(id)' }],
+    [1300, { a3: '→ GetDetector()', a4: '→ ProcessHits(vol)', det: 'ProcessHits(vol)' }],
+  ],
+  [
+    [0, { ...at0(1, 0), eng: 'PushTrack()' }],
+    [300, {}],
+    [800, {}],
+    [1400, { nS: '2' }],
+  ],
+  [
+    [0, at0(2, 0)],
+    [400, { a0: 'Stepping()', a1: '→ ProcessHits(vol)', det: 'ProcessHits(vol)' }],
+    [800, { a2: '  → AddHit()' }],
+    [1200, { nP: '1' }],
+    [1600, { a3: '  → AddPoint()', st: 'AddPoint(kTutDet)' }],
+  ],
+  [
+    [0, { ...at0(2, 1), a0: '// for #2, then #0:', a1: 'PreTrack()', a2: 'Stepping() …', a3: 'PostTrack()', eng: 'PopNextTrack()' }],
+    [100, {}],
+    [450, {}],
+    [550, { nS: '1' }],
+    [1050, {}],
+    [1450, { nP: '2', det: 'ProcessHits(vol)' }],
+    [1750, { nS: '0' }],
+    [2200, {}],
+    [2700, { nP: '3' }],
+    [3000, { det: '' }],
+  ],
+  [
+    [0, { ...at0(0, 3), a0: 'FinishEvent()' }],
+    [300, { st: 'FillTrackArray()' }],
+    [1300, { st: 'UpdateTrackIndex()' }],
+  ],
+  [
+    [0, { ...at0(0, 3), a0: 'FinishEvent()' }],
+    [300, { det: 'FinishEvent()' }],
+    [900, { det: '', ent: 'cbmsim: 1 entry' }],
+    [1700, { det: 'EndOfEvent()', nP: '0' }],
+    [2400, { det: '', st: 'Reset()' }],
+    [3000, {}],
+  ],
+];
+
+type P = [number, number];
+type B = { x: number; y: number; w: number; h: number };
+interface Lay {
+  key: string;
+  W: number;
+  H: number;
+  gen: B;
+  genT: P;
+  rows: B[];
+  add: { x: number; y1: number; y2: number; lx: number; ly: number };
+  st: B;
+  stT: P;
+  stS: P;
+  pile: B;
+  cw: number;
+  slots: P[];
+  nS: P;
+  nSl: P[];
+  mctT: P;
+  mct: P[];
+  mw: number;
+  stC: P;
+  eng: B;
+  engT: P;
+  engS: P;
+  hold: B;
+  cpos: P;
+  spawn2: P;
+  engC: P;
+  app: B;
+  appT: P;
+  lines: P[];
+  geo: B;
+  caveT: P;
+  V: P;
+  vT: P;
+  slab: B;
+  slabT: P;
+  z1: P;
+  z0: P;
+  s2: P;
+  det: B;
+  detT: P;
+  detC: P;
+  colT: P;
+  pts: P[];
+  nP: P;
+  nPl: P;
+  out: B;
+  outT: P;
+  outS: P;
+  ent: P;
+  entEnd: boolean;
+  cells: B[];
+}
+const col = (x: number, y0: number, dy: number, n: number): P[] => Array.from({ length: n }, (_, i) => [x, y0 + i * dy]);
+// Wide layout: three columns.
+const wide: Lay = {
+  key: 'w',
+  W: 680,
+  H: 380,
+  gen: { x: 12, y: 12, w: 188, h: 84 },
+  genT: [24, 32],
+  rows: [
+    { x: 24, y: 42, w: 164, h: 20 },
+    { x: 24, y: 68, w: 164, h: 20 },
+  ],
+  add: { x: 106, y1: 98, y2: 122, lx: 114, ly: 114 },
+  st: { x: 12, y: 124, w: 188, h: 244 },
+  stT: [24, 144],
+  stS: [24, 160],
+  pile: { x: 24, y: 172, w: 72, h: 84 },
+  cw: 60,
+  slots: [
+    [30, 230],
+    [30, 204],
+  ],
+  nS: [112, 216],
+  nSl: [
+    [112, 234],
+    [112, 248],
+  ],
+  mctT: [24, 284],
+  mct: [
+    [24, 294],
+    [80, 294],
+    [136, 294],
+  ],
+  mw: 50,
+  stC: [24, 348],
+  eng: { x: 216, y: 12, w: 168, h: 84 },
+  engT: [228, 32],
+  engS: [372, 32],
+  hold: { x: 228, y: 44, w: 64, h: 26 },
+  cpos: [230, 46],
+  spawn2: [304, 46],
+  engC: [228, 86],
+  app: { x: 216, y: 112, w: 168, h: 178 },
+  appT: [228, 133],
+  lines: col(228, 153, 17, 7),
+  geo: { x: 400, y: 12, w: 268, h: 184 },
+  caveT: [412, 31],
+  V: [432, 116],
+  vT: [432, 137],
+  slab: { x: 560, y: 42, w: 16, h: 144 },
+  slabT: [568, 33],
+  z1: [668, 66],
+  z0: [668, 180],
+  s2: [572, 130],
+  det: { x: 400, y: 208, w: 268, h: 82 },
+  detT: [412, 228],
+  detC: [412, 246],
+  colT: [412, 277],
+  pts: [
+    [528, 264],
+    [556, 264],
+    [584, 264],
+  ],
+  nP: [656, 254],
+  nPl: [656, 272],
+  out: { x: 216, y: 300, w: 452, h: 68 },
+  outT: [228, 321],
+  outS: [352, 321],
+  ent: [656, 321],
+  entEnd: true,
+  cells: [
+    { x: 228, y: 332, w: 136, h: 24 },
+    { x: 372, y: 332, w: 136, h: 24 },
+    { x: 516, y: 332, w: 140, h: 24 },
+  ],
+};
+// Narrow layout for phones: rows of boxes, so that the text stays at 11 px or more on a 360 px screen.
+const narrow: Lay = {
+  key: 'n',
+  W: 340,
+  H: 594,
+  gen: { x: 10, y: 10, w: 320, h: 58 },
+  genT: [20, 29],
+  rows: [
+    { x: 20, y: 37, w: 128, h: 22 },
+    { x: 154, y: 37, w: 166, h: 22 },
+  ],
+  add: { x: 85, y1: 70, y2: 92, lx: 93, ly: 86 },
+  st: { x: 10, y: 94, w: 155, h: 232 },
+  stT: [20, 113],
+  stS: [20, 129],
+  pile: { x: 20, y: 138, w: 60, h: 84 },
+  cw: 52,
+  slots: [
+    [24, 196],
+    [24, 170],
+  ],
+  nS: [92, 180],
+  nSl: [
+    [92, 198],
+    [92, 212],
+  ],
+  mctT: [20, 244],
+  mct: [
+    [20, 254],
+    [64, 254],
+    [108, 254],
+  ],
+  mw: 40,
+  stC: [20, 308],
+  eng: { x: 175, y: 94, w: 155, h: 76 },
+  engT: [185, 113],
+  engS: [320, 113],
+  hold: { x: 185, y: 122, w: 56, h: 26 },
+  cpos: [187, 124],
+  spawn2: [251, 124],
+  engC: [185, 162],
+  app: { x: 175, y: 182, w: 155, h: 144 },
+  appT: [185, 201],
+  lines: col(185, 218, 15, 7),
+  geo: { x: 10, y: 338, w: 320, h: 116 },
+  caveT: [20, 355],
+  V: [40, 400],
+  vT: [40, 421],
+  slab: { x: 206, y: 360, w: 14, h: 86 },
+  slabT: [213, 353],
+  z1: [330, 358],
+  z0: [330, 444],
+  s2: [216, 411],
+  det: { x: 175, y: 466, w: 155, h: 118 },
+  detT: [185, 485],
+  detC: [185, 501],
+  colT: [185, 517],
+  pts: [
+    [185, 526],
+    [213, 526],
+    [241, 526],
+  ],
+  nP: [320, 548],
+  nPl: [320, 566],
+  out: { x: 10, y: 466, w: 155, h: 118 },
+  outT: [20, 485],
+  outS: [20, 500],
+  ent: [20, 515],
+  entEnd: false,
+  cells: [
+    { x: 20, y: 522, w: 135, h: 17 },
+    { x: 20, y: 541, w: 135, h: 17 },
+    { x: 20, y: 560, w: 135, h: 17 },
+  ],
+};
+
+const at = (a: P, b: P, x: number): P => [x, a[1] + ((b[1] - a[1]) * (x - a[0])) / (b[0] - a[0])];
+const mix = (a: P, b: P, f: number): P => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+const f1 = (n: number) => Math.round(n * 10) / 10;
+const line = (a: P, b: P) => `M${f1(a[0])} ${f1(a[1])} L${f1(b[0])} ${f1(b[1])}`;
+// Track segments: id, primary or secondary, start, end, number of step dots, draw time and delay (ms).
+type Seg = { id: string; sec: boolean; a: P; b: P; n: number; dur: number; del: number };
+function geometry(L: Lay) {
+  const x0 = L.slab.x;
+  const x1 = L.slab.x + L.slab.w;
+  const E1 = at(L.V, L.z1, x0);
+  const I1 = at(L.V, L.z1, (x0 + x1) / 2);
+  const X1 = at(L.V, L.z1, x1);
+  const E0 = at(L.V, L.z0, x0);
+  const X0 = at(L.V, L.z0, x1);
+  const segs: Seg[] = [
+    { id: 'p1a', sec: false, a: L.V, b: E1, n: 5, dur: 1200, del: 0 },
+    { id: 'p1b', sec: false, a: E1, b: I1, n: 1, dur: 300, del: 0 },
+    { id: 'p1c', sec: false, a: I1, b: X1, n: 1, dur: 300, del: 0 },
+    { id: 'p1d', sec: false, a: X1, b: L.z1, n: 3, dur: 350, del: 0 },
+    { id: 'p2', sec: true, a: I1, b: L.s2, n: 2, dur: 400, del: 0 },
+    { id: 'p0a', sec: false, a: L.V, b: E0, n: 5, dur: 350, del: 0 },
+    { id: 'p0b', sec: false, a: E0, b: X0, n: 1, dur: 150, del: 350 },
+    { id: 'p0c', sec: false, a: X0, b: L.z0, n: 3, dur: 300, del: 0 },
+  ];
+  // The part of each track in the sensitive volume, in the order of the points: #1, #2, #0.
+  const inside: [P, P][] = [
+    [E1, X1],
+    [I1, L.s2],
+    [E0, X0],
+  ];
+  return { segs, inside, I1 };
+}
+// The step dots of a segment: the last dot is at the end of the segment.
+const dots = (s: Seg) =>
+  Array.from({ length: s.n }, (_, k) => {
+    const f = (k + 1) / s.n;
+    const [x, y] = mix(s.a, s.b, f);
+    return { x: f1(x), y: f1(y), d: Math.round(s.del + s.dur * f) };
+  });
+const lays = [wide, narrow].map((L) => ({ L, ...geometry(L) }));
+
+const gens = ['FairBoxGenerator', 'FairParticleGenerator'];
+// The tracks of the event: #0 and #1 are primaries (one from each generator), #2 is a secondary of #1.
+// a: where the chip starts, b: its place on the stack, c: the engine.
+const chipsOf = (L: Lay) => [
+  { cls: 'c0', label: '#0', sec: false, a: [L.rows[0].x + (L.rows[0].w - L.cw) / 2, L.rows[0].y], b: L.slots[0] },
+  { cls: 'c1', label: '#1', sec: false, a: [L.rows[1].x + (L.rows[1].w - L.cw) / 2, L.rows[1].y], b: L.slots[1] },
+  { cls: 'c2', label: '#2', sec: true, a: L.spawn2, b: L.slots[1] },
+];
+const pos = (k: string, p: number[]) => `--${k}x:${f1(p[0])}px;--${k}y:${f1(p[1])}px`;
+const pointIds = ['#1', '#2', '#0'];
+const cellNames = ['MCEventHeader.', 'MCTrack', 'TutorialDetPoint'];
+const cellCounts = ['', '3', '3'];
+const fe = ['FillTrackArray()', 'UpdateTrackIndex()', 'FinishEvent()', 'Fill()', 'EndOfEvent()', 'Reset()'];
+const label =
+  'One simulated event. FairPrimaryGenerator puts two primary tracks onto FairStack. TGeant3 takes the tracks from the stack, last in, first out, and moves each one in steps through the cave. In the sensitive volume tutdet1, FairTutorialDet1 adds MC points, and a secondary track goes onto the stack. When the stack is empty, FairStack fills the MCTrack array, and FairRootManager fills one entry of the tree cbmsim.';
+---
+
+<Explainer title="One event of a simulation run" meta="TGeant3 · FairStack · FairTutorialDet1" steps={steps}>
+  <div class="se-wrap">
+    <svg class="se" data-stage data-beats={JSON.stringify(beats)} role="img" aria-label={label}>
+      {
+        lays.map(({ L, segs, inside, I1 }) => (
+          <svg class={`lay lay-${L.key}`} viewBox={`0 0 ${L.W} ${L.H}`} width="100%" height="100%">
+            {/* FairPrimaryGenerator and its generators */}
+            <rect class="bx bx-gen" x={L.gen.x} y={L.gen.y} width={L.gen.w} height={L.gen.h} rx="3" />
+            <text class="ttl" x={L.genT[0]} y={L.genT[1]}>
+              FairPrimaryGenerator
+            </text>
+            {L.rows.map((r, i) => (
+              <g class={`row row${i}`}>
+                <rect x={r.x} y={r.y} width={r.w} height={r.h} rx="2" />
+                <text x={r.x + 7} y={r.y + r.h / 2 + 4}>
+                  {gens[i]}
+                </text>
+              </g>
+            ))}
+            <g class="arr-add">
+              <path d={`M${L.add.x} ${L.add.y1} V${L.add.y2 - 6}`} class="arr" />
+              <path d={`M${L.add.x - 4} ${L.add.y2 - 7} L${L.add.x} ${L.add.y2} L${L.add.x + 4} ${L.add.y2 - 7}z`} class="arrhead" />
+              <text class="arrlabel" x={L.add.lx} y={L.add.ly}>
+                AddTrack()
+              </text>
+            </g>
+
+            {/* FairStack: the stack of tracks and the MCTrack array */}
+            <rect class="bx bx-st" x={L.st.x} y={L.st.y} width={L.st.w} height={L.st.h} rx="3" />
+            <text class="ttl" x={L.stT[0]} y={L.stT[1]}>
+              FairStack
+            </text>
+            <text class="sub" x={L.stS[0]} y={L.stS[1]}>
+              last in, first out
+            </text>
+            <path class="pile" d={`M${L.pile.x} ${L.pile.y} V${L.pile.y + L.pile.h} H${L.pile.x + L.pile.w} V${L.pile.y}`} />
+            <text class="num" x={L.nS[0]} y={L.nS[1]} data-k="nS">
+              0
+            </text>
+            <text class="sub" x={L.nSl[0][0]} y={L.nSl[0][1]}>
+              tracks on
+            </text>
+            <text class="sub" x={L.nSl[1][0]} y={L.nSl[1][1]}>
+              the stack
+            </text>
+            <text class="sub" x={L.mctT[0]} y={L.mctT[1]}>
+              MCTrack
+            </text>
+            <rect class="mcbox" x={L.mct[0][0] - 4} y={L.mct[0][1] - 4} width={L.mct[2][0] + L.mw - L.mct[0][0] + 8} height="30" rx="3" />
+            {L.mct.map((p, i) => (
+              <g class={`mc${i === 2 ? ' sec' : ''}`} style={`--d:${i * 150}ms`}>
+                <rect x={p[0]} y={p[1]} width={L.mw} height="22" rx="3" />
+                <text x={p[0] + 5} y={p[1] + 15}>
+                  #{i}
+                </text>
+                <circle cx={p[0] + L.mw - 10} cy={p[1] + 11} r="7.5" />
+                <text class="bn" x={p[0] + L.mw - 10} y={p[1] + 15} text-anchor="middle">
+                  1
+                </text>
+              </g>
+            ))}
+            <text class="call" x={L.stC[0]} y={L.stC[1]} data-k="st" />
+
+            {/* TGeant3 */}
+            <rect class="bx bx-eng" x={L.eng.x} y={L.eng.y} width={L.eng.w} height={L.eng.h} rx="3" />
+            <text class="ttl" x={L.engT[0]} y={L.engT[1]}>
+              TGeant3
+            </text>
+            <text class="sub" x={L.engS[0]} y={L.engS[1]} text-anchor="end">
+              TVirtualMC
+            </text>
+            <rect class="hold" x={L.hold.x} y={L.hold.y} width={L.hold.w} height={L.hold.h} rx="3" />
+            <text class="null" x={L.hold.x + L.hold.w / 2} y={L.hold.y + L.hold.h / 2 + 4} text-anchor="middle">
+              nullptr
+            </text>
+            <text class="call" x={L.engC[0]} y={L.engC[1]} data-k="eng" />
+
+            {/* FairMCApplication: the calls of the current step */}
+            <rect class="bx bx-app" x={L.app.x} y={L.app.y} width={L.app.w} height={L.app.h} rx="3" />
+            <text class="ttl" x={L.appT[0]} y={L.appT[1]}>
+              FairMCApplication
+            </text>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <text class="ln" x={L.lines[i][0]} y={L.lines[i][1]} data-k={`a${i}`} />
+            ))}
+            {fe.map((f, i) => (
+              <text class={`fe fe${i + 1}`} x={L.lines[i + 1][0]} y={L.lines[i + 1][1]}>
+                <tspan class="n">{i + 1} </tspan>
+                <tspan class="f">{f}</tspan>
+              </text>
+            ))}
+
+            {/* Geometry: the cave with one sensitive volume */}
+            <rect class="bx bx-geo" x={L.geo.x} y={L.geo.y} width={L.geo.w} height={L.geo.h} rx="3" />
+            <text class="sub" x={L.caveT[0]} y={L.caveT[1]}>
+              cave
+            </text>
+            <rect class="slab" x={L.slab.x} y={L.slab.y} width={L.slab.w} height={L.slab.h} />
+            <text class="slabl" x={L.slabT[0]} y={L.slabT[1]} text-anchor="middle">
+              tutdet1<tspan class="mint"> sensitive</tspan>
+            </text>
+            <path class="lnk" d={`M${L.slab.x + L.slab.w / 2} ${L.slab.y + L.slab.h} V${L.det.y}`} />
+            <g class="vtx">
+              <path d={`M${L.V[0] - 4} ${L.V[1] - 4} L${L.V[0] + 4} ${L.V[1] + 4} M${L.V[0] + 4} ${L.V[1] - 4} L${L.V[0] - 4} ${L.V[1] + 4}`} />
+              <text class="sub" x={L.vT[0]} y={L.vT[1]} text-anchor="middle">
+                vertex
+              </text>
+            </g>
+            {segs.map((s) => (
+              <g class={`trk g-${s.id}${s.sec ? ' sec' : ''}`}>
+                <path class="seg" d={line(s.a, s.b)} pathLength="1" style={`--dur:${s.dur}ms;--del:${s.del}ms`} />
+                {dots(s).map((d) => (
+                  <circle class="dot" cx={d.x} cy={d.y} r="2" style={`--d:${d.d}ms`} />
+                ))}
+              </g>
+            ))}
+            <circle class="born" cx={f1(I1[0])} cy={f1(I1[1])} r="5" />
+            {inside.map(([a, b], i) => (
+              <path class={`inseg i${i}`} d={line(a, b)} />
+            ))}
+
+            {/* FairTutorialDet1 and its points */}
+            <rect class="bx bx-det" x={L.det.x} y={L.det.y} width={L.det.w} height={L.det.h} rx="3" />
+            <text class="ttl" x={L.detT[0]} y={L.detT[1]}>
+              FairTutorialDet1
+            </text>
+            <text class="call" x={L.detC[0]} y={L.detC[1]} data-k="det" />
+            <text class="sub" x={L.colT[0]} y={L.colT[1]}>
+              TutorialDetPoint
+            </text>
+            {L.pts.map((p, i) => (
+              <g class={`pt q${i}`}>
+                <rect x={p[0]} y={p[1]} width="24" height="18" rx="2" />
+                <text x={p[0] + 12} y={p[1] + 13} text-anchor="middle">
+                  {pointIds[i]}
+                </text>
+              </g>
+            ))}
+            <text class="num" x={L.nP[0]} y={L.nP[1]} text-anchor="end" data-k="nP">
+              0
+            </text>
+            <text class="sub" x={L.nPl[0]} y={L.nPl[1]} text-anchor="end">
+              points
+            </text>
+
+            {/* FairRootManager, the sink and the tree */}
+            <rect class="bx bx-out" x={L.out.x} y={L.out.y} width={L.out.w} height={L.out.h} rx="3" />
+            <text class="ttl" x={L.outT[0]} y={L.outT[1]}>
+              FairRootManager
+            </text>
+            <text class="sub" x={L.outS[0]} y={L.outS[1]}>
+              → FairRootFileSink
+            </text>
+            <text class="sub ent" x={L.ent[0]} y={L.ent[1]} text-anchor={L.entEnd ? 'end' : 'start'} data-k="ent">
+              cbmsim: 0 entries
+            </text>
+            {L.cells.map((c, i) => (
+              <g class={`cell cell${i}`}>
+                <rect x={c.x} y={c.y} width={c.w} height={c.h} rx="2" />
+                <text x={c.x + 6} y={c.y + c.h / 2 + 4}>
+                  {cellNames[i]}
+                </text>
+                <text class="cnt" x={c.x + c.w - 6} y={c.y + c.h / 2 + 4} text-anchor="end">
+                  {cellCounts[i]}
+                </text>
+              </g>
+            ))}
+
+            {/* The tracks as chips: generator → stack → engine */}
+            {chipsOf(L).map((c) => (
+              <g class={`chip ${c.cls}${c.sec ? ' sec' : ''}`} style={`${pos('a', c.a)};${pos('b', c.b)};${pos('c', L.cpos)}`}>
+                <rect class="body" width={L.cw} height="22" rx="3" />
+                <text x="8" y="15">
+                  {c.label}
+                </text>
+                <g class="badge">
+                  <circle cx={L.cw - 11} cy="11" r="7.5" />
+                  <text x={L.cw - 11} y="15" text-anchor="middle">
+                    1
+                  </text>
+                </g>
+              </g>
+            ))}
+          </svg>
+        ))
+      }
+    </svg>
+  </div>
+</Explainer>
+
+<script>
+  // Plays the beats of the current step: at beat i, it adds the class b<i> to the stage and writes the texts.
+  type Beat = [number, Record<string, string>];
+  const KEEP = ['nS', 'nP', 'ent'];
+  for (const svg of document.querySelectorAll<SVGSVGElement>('svg.se[data-beats]')) {
+    const beats: Beat[][] = JSON.parse(svg.dataset.beats!);
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const slots = new Map<string, SVGTextElement[]>();
+    for (const el of svg.querySelectorAll<SVGTextElement>('[data-k]')) {
+      const k = el.dataset.k!;
+      if (!slots.has(k)) slots.set(k, []);
+      slots.get(k)!.push(el);
+    }
+    let timers: number[] = [];
+    let mine = '';
+    const put = (vals: Record<string, string>) => {
+      for (const [k, v] of Object.entries(vals)) {
+        for (const el of slots.get(k) ?? []) {
+          el.textContent = v;
+          el.classList.toggle('note', v.startsWith('//'));
+        }
+      }
+    };
+    const beat = (n: number, i: number) => {
+      put(beats[n][i][1]);
+      if (i > 0) svg.classList.add('b' + i);
+      mine = svg.getAttribute('class') ?? '';
+    };
+    const run = () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers = [];
+      const m = /\bnow(\d+)\b/.exec(svg.getAttribute('class') ?? '');
+      const n = m ? Number(m[1]) - 1 : -1;
+      if (!beats[n]) return;
+      for (const [k, list] of slots) if (!KEEP.includes(k)) for (const el of list) el.textContent = '';
+      beats[n].forEach(([t], i) => {
+        if (reduce || t === 0) beat(n, i);
+        else timers.push(window.setTimeout(() => beat(n, i), t));
+      });
+    };
+    // The explainer sets the classes r1 … rn and now<n> for each step. A class change that is not ours starts
+    // the beats of the new step.
+    new MutationObserver(() => {
+      if ((svg.getAttribute('class') ?? '') !== mine) run();
+    }).observe(svg, { attributes: true, attributeFilter: ['class'] });
+    run();
+  }
+</script>
+
+<style>
+  .se-wrap {
+    container-type: inline-size;
+  }
+  .se {
+    aspect-ratio: 680 / 380;
+  }
+  .lay-n {
+    display: none;
+  }
+  @container (max-width: 639.98px) {
+    .se {
+      aspect-ratio: 340 / 594;
+      max-width: 400px;
+      margin-inline: auto;
+    }
+    .lay-w {
+      display: none;
+    }
+    .lay-n {
+      display: inline;
+    }
+  }
+  /* Text sizes in user units: the narrow layout is drawn smaller on the screen, so its text is larger. */
+  .lay-w {
+    --fs: 11.5px;
+    --fs-tight: 11.5px;
+  }
+  .lay-n {
+    --fs: 12px;
+    --fs-tight: 11.5px;
+  }
+
+  /* Text */
+  .ttl {
+    fill: var(--fr-stage-ink);
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .sub {
+    fill: var(--fr-stage-dim);
+    font-size: var(--fs);
+  }
+  .call {
+    fill: var(--fr-saffron);
+    font-size: var(--fs);
+    font-weight: 600;
+  }
+  .ln {
+    fill: var(--fr-saffron);
+    font-size: var(--fs-tight);
+    font-weight: 600;
+    white-space: pre;
+  }
+  .ln.note {
+    fill: var(--fr-stage-dim);
+    font-weight: 400;
+  }
+  .num {
+    fill: var(--fr-stage-ink);
+    font-size: 26px;
+    font-weight: 700;
+  }
+  .mint {
+    fill: var(--fr-mint);
+    font-weight: 700;
+  }
+  .slabl {
+    fill: var(--fr-stage-ink);
+    font-size: var(--fs);
+  }
+
+  /* Boxes. A box gets a light outline while its code runs. */
+  .bx {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    transition: stroke 0.3s;
+  }
+  .bx-geo {
+    fill: var(--fr-stage);
+  }
+  .se.now1 .bx-eng,
+  .se.now1.b1 .bx-det,
+  .se.now2 .bx-gen,
+  .se.now2.b2 .bx-st,
+  .se.now3 .bx-st,
+  .se.now3 .bx-eng,
+  .se.now4 .bx-eng,
+  .se.now4 .bx-geo,
+  .se.now4.b1 .bx-det,
+  .se.now5 .bx-eng,
+  .se.now5.b2 .bx-st,
+  .se.now6.b1 .bx-det,
+  .se.now6.b4 .bx-st,
+  .se.now7 .bx-eng,
+  .se.now7 .bx-st,
+  .se.now8.b1 .bx-st,
+  .se.now8.b2 .bx-det,
+  .se.now9.b1:not(.b2) .bx-det,
+  .se.now9.b2:not(.b3) .bx-out,
+  .se.now9.b3:not(.b4) .bx-det,
+  .se.now9.b4 .bx-st {
+    stroke: var(--fr-stage-ink);
+  }
+
+  /* Generators */
+  .row rect {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-line);
+    transition: stroke 0.3s;
+  }
+  .row text {
+    fill: var(--fr-stage-ink);
+    font-size: var(--fs);
+  }
+  .se.now2.b1:not(.b3) .row0 rect,
+  .se.now2.b3:not(.b5) .row1 rect {
+    stroke: var(--fr-saffron);
+    stroke-width: 1.6;
+  }
+  .arr-add {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .se.now2 .arr-add {
+    opacity: 1;
+  }
+  .arr {
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.4;
+  }
+  .arrhead {
+    fill: var(--fr-sky-bright);
+  }
+  .arrlabel {
+    fill: var(--fr-sky-bright);
+    font-size: var(--fs);
+    font-weight: 600;
+  }
+
+  /* Stack and engine */
+  .pile {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.4;
+  }
+  .hold,
+  .mcbox {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-dasharray: 3 3;
+  }
+  /* Fades in, but goes at once, so that it does not show through the chip #1 when the reader steps back. */
+  .null {
+    fill: var(--fr-stage-dim);
+    font-size: var(--fs-tight);
+    opacity: 0;
+  }
+  .se.now7.b9 .null {
+    opacity: 1;
+    transition: opacity 0.3s;
+  }
+
+  /* Tracks as chips. --a: start, --b: place on the stack, --c: in the engine. */
+  .chip {
+    opacity: 0;
+    transform: translate(var(--ax), var(--ay));
+    transition:
+      transform 0.55s cubic-bezier(0.45, 0, 0.2, 1),
+      opacity 0.3s;
+  }
+  .chip .body {
+    fill: var(--fr-saffron);
+  }
+  .chip.sec .body {
+    fill: var(--fr-sky-bright);
+  }
+  .chip text {
+    fill: var(--fr-on-saffron);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .badge {
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .badge circle,
+  .mc circle {
+    fill: var(--fr-mint);
+    stroke: var(--fr-stage-2);
+    stroke-width: 1.5;
+  }
+  .badge text,
+  .mc text.bn,
+  .mc.sec text.bn {
+    fill: var(--fr-on-saffron);
+    font-size: var(--fs);
+    font-weight: 700;
+  }
+  /* #0 and #1: pushed in step 2. #1: popped in step 3, done in step 7. #0: popped and done in step 7. */
+  .se.now2.b2 .c0,
+  .se.r3 .c0,
+  .se.now2.b4 .c1,
+  .se.r3 .c1 {
+    transform: translate(var(--bx), var(--by));
+    opacity: 1;
+  }
+  .se.now3.b1 .c1,
+  .se.r4 .c1,
+  .se.now7.b3 .c2,
+  .se.now7.b6 .c0 {
+    transform: translate(var(--cx), var(--cy));
+  }
+  /* #2: made in the engine in step 5, pushed onto the stack, popped and done in step 7. */
+  .se.now5.b1 .c2 {
+    opacity: 1;
+  }
+  .se.now5.b2 .c2,
+  .se.r6 .c2 {
+    transform: translate(var(--bx), var(--by));
+    opacity: 1;
+  }
+  .se.now7.b2 .c1,
+  .se.now7.b6 .c2,
+  .se.now7.b9 .c0,
+  .se.r8 .chip {
+    opacity: 0;
+  }
+  .se.now6.b4 .c1 .badge,
+  .se.r7 .c1 .badge,
+  .se.now7.b5 .c2 .badge,
+  .se.now7.b8 .c0 .badge {
+    opacity: 1;
+  }
+
+  /* MCTrack array of the stack */
+  .mc {
+    opacity: 0;
+    transition: opacity 0.3s var(--d, 0s);
+  }
+  .mc rect {
+    fill: var(--fr-stage);
+    stroke: var(--fr-saffron);
+    stroke-width: 1.4;
+  }
+  .mc.sec rect {
+    stroke: var(--fr-sky-bright);
+  }
+  .mc text {
+    fill: var(--fr-saffron);
+    font-size: var(--fs);
+    font-weight: 700;
+  }
+  .mc.sec text {
+    fill: var(--fr-sky-bright);
+  }
+  .se.now8.b1 .mc,
+  .se.r9 .mc {
+    opacity: 1;
+  }
+  .se.now9.b4 .mc {
+    opacity: 0;
+  }
+
+  /* Geometry */
+  .slab {
+    fill: var(--fr-mint);
+    fill-opacity: 0.12;
+    stroke: var(--fr-mint);
+    stroke-width: 1.2;
+    transition: fill-opacity 0.3s;
+  }
+  .se.now4.b1 .slab,
+  .se.now5.b1 .slab,
+  .se.now6:not(.b2) .slab,
+  .se.now7.b4:not(.b5) .slab,
+  .se.now7.b7:not(.b8) .slab {
+    fill-opacity: 0.35;
+  }
+  .lnk {
+    fill: none;
+    stroke: var(--fr-mint);
+    stroke-width: 1.2;
+    stroke-dasharray: 2 3;
+    opacity: 0.6;
+    transition: opacity 0.3s;
+  }
+  .se.now4.b1 .lnk,
+  .se.now6.b1:not(.b3) .lnk {
+    opacity: 1;
+    stroke-dasharray: none;
+    stroke-width: 2;
+  }
+  .vtx,
+  .trk,
+  .born {
+    transition: opacity 0.4s;
+  }
+  .vtx {
+    opacity: 0;
+  }
+  .vtx path {
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.8;
+  }
+  .se.r2 .vtx {
+    opacity: 1;
+  }
+  .trk {
+    --on: 0;
+  }
+  .seg {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 1.5;
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: calc((1 - var(--on)) * 1px);
+    transition: stroke-dashoffset var(--dur) linear var(--del);
+  }
+  .dot {
+    fill: var(--fr-saffron);
+    opacity: var(--on);
+    transition: opacity 0.12s var(--d);
+  }
+  .trk.sec .seg {
+    stroke: var(--fr-sky-bright);
+  }
+  .trk.sec .dot {
+    fill: var(--fr-sky-bright);
+  }
+  .se.now4 .g-p1a,
+  .se.now4.b1 .g-p1b,
+  .se.r5 .g-p1a,
+  .se.r5 .g-p1b,
+  .se.now6 .g-p1c,
+  .se.r7 .g-p1c,
+  .se.now7.b1 .g-p1d,
+  .se.now7.b4 .g-p2,
+  .se.now7.b7 .g-p0a,
+  .se.now7.b7 .g-p0b,
+  .se.now7.b8 .g-p0c,
+  .se.r8 .trk {
+    --on: 1;
+  }
+  .born {
+    fill: none;
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.5;
+    opacity: 0;
+  }
+  .se.now5.b1 .born,
+  .se.r6 .born {
+    opacity: 1;
+  }
+  /* The part of a track in the volume turns mint when the detector makes its point. */
+  .inseg {
+    fill: none;
+    stroke: var(--fr-mint);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .se.now6.b2 .i0,
+  .se.r7 .i0,
+  .se.now7.b5 .i1,
+  .se.r8 .i1,
+  .se.now7.b8 .i2,
+  .se.r8 .i2 {
+    opacity: 1;
+  }
+  .se.now9.b3 .inseg {
+    opacity: 0;
+  }
+  .se.now9.b4 .trk,
+  .se.now9.b4 .vtx,
+  .se.now9.b4 .born {
+    opacity: 0.25;
+  }
+
+  /* Points of the detector */
+  .pt {
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .pt rect {
+    fill: var(--fr-mint);
+    stroke: var(--fr-mint);
+    stroke-width: 1.5;
+    transition: stroke 0.3s;
+  }
+  .pt text {
+    fill: var(--fr-on-saffron);
+    font-size: var(--fs-tight);
+    font-weight: 700;
+  }
+  .se.now6.b2 .q0,
+  .se.r7 .q0,
+  .se.now7.b5 .q1,
+  .se.r8 .q1,
+  .se.now7.b8 .q2,
+  .se.r8 .q2 {
+    opacity: 1;
+  }
+  .se.now9.b3 .pt {
+    opacity: 0;
+  }
+  .se.now8.b2 .pt rect {
+    stroke: var(--fr-stage-ink);
+  }
+
+  /* FinishEvent() in order: to do (dim), now (saffron), done (light). The list fades in at step 8, but it goes
+     at once when the reader steps back, so that it does not cover the calls of step 7 on the same lines. */
+  .fe {
+    opacity: 0;
+    font-size: var(--fs-tight);
+    font-weight: 600;
+  }
+  .fe .n,
+  .fe .f {
+    fill: var(--fr-stage-dim);
+    transition: fill 0.3s;
+  }
+  .se.r8 .fe {
+    opacity: 1;
+    transition: opacity 0.3s;
+  }
+  .se.now8.b2 .fe1 .f,
+  .se.r9 .fe1 .f,
+  .se.r9 .fe2 .f,
+  .se.now9.b2 .fe3 .f,
+  .se.now9.b3 .fe4 .f,
+  .se.now9.b4 .fe5 .f,
+  .se.now9.b5 .fe6 .f {
+    fill: var(--fr-stage-ink);
+  }
+  .se.now8.b1:not(.b2) .fe1 .f,
+  .se.now8.b2 .fe2 .f,
+  .se.now9.b1:not(.b2) .fe3 .f,
+  .se.now9.b2:not(.b3) .fe4 .f,
+  .se.now9.b3:not(.b4) .fe5 .f,
+  .se.now9.b4:not(.b5) .fe6 .f {
+    fill: var(--fr-saffron);
+  }
+
+  /* The tree */
+  .cell rect {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-dasharray: 3 3;
+    transition:
+      fill 0.4s,
+      stroke 0.4s;
+  }
+  .cell text {
+    fill: var(--fr-stage-dim);
+    font-size: var(--fs-tight);
+    transition: fill 0.4s;
+  }
+  .cell .cnt {
+    opacity: 0;
+    font-weight: 700;
+    transition: opacity 0.4s;
+  }
+  .se.now9.b2 .cell rect {
+    stroke-dasharray: none;
+  }
+  .se.now9.b2 .cell0 rect {
+    fill: color-mix(in srgb, var(--fr-sky-bright) 16%, transparent);
+    stroke: var(--fr-sky-bright);
+  }
+  .se.now9.b2 .cell1 rect {
+    fill: color-mix(in srgb, var(--fr-saffron) 16%, transparent);
+    stroke: var(--fr-saffron);
+  }
+  .se.now9.b2 .cell2 rect {
+    fill: color-mix(in srgb, var(--fr-mint) 16%, transparent);
+    stroke: var(--fr-mint);
+  }
+  .se.now9.b2 .cell text,
+  .se.now9.b2 .ent {
+    fill: var(--fr-stage-ink);
+  }
+  .se.now9.b2 .cell .cnt {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .se * {
+      transition: none !important;
+    }
+  }
+</style>

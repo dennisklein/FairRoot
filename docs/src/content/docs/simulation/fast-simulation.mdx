@@ -1,0 +1,228 @@
+---
+title: 'Fast simulation'
+description: 'Replace the transport in selected volumes with your own code: a FairFastSimDetector moves, stops or replaces each particle, and a Geant4 fast simulation model or Geant3 applies the result.'
+sidebar:
+  order: 10
+code: [fairroot/fastsim/FairFastSimDetector.h, fairroot/fastsim/FairFastSimDetector.cxx, fairroot/fastsim/FairFastSimModel.cxx, fairroot/fastsim/FairFastSimulation.cxx, fairroot/fastsim/FairFastSimRunConfiguration.cxx, fairroot/base/sim/FairGenericStack.h, fairroot/base/sim/FairGenericStack.cxx, examples/common/mcstack/FairStack.cxx, examples/simulation/Tutorial1/src/FairFastSimExample.cxx, examples/simulation/Tutorial1/macros/run_tutorial1_fastsim.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A fast simulation replaces the full transport in some volumes with your own code. When a particle
+enters such a volume, your code decides where the particle continues, with which momentum, and
+which secondaries it makes. Use it for a parameterized detector response, or to skip a region that
+costs much time and is not important for your study.
+
+In FairRoot, a fast simulation detector derives from `FairFastSimDetector`. Your code gives its
+decision to the stack. With Geant4, a Geant4 fast simulation model applies the decision. With
+Geant3, the stack replaces the current track with a new one.
+
+## The parts
+
+| Class | Library | Role |
+| --- | --- | --- |
+| [`FairFastSimDetector`](/api/FairFastSimDetector/) | `FairRoot::FastSim` | Base class of your detector. It makes the medium `FastSimMedium`. Its `ProcessHits()` calls your `FastSimProcessParticle()`. |
+| [`FairGenericStack`](/api/FairGenericStack/) | `FairRoot::Base` | Gives the functions that your code calls: move the particle, stop it, or add a secondary. |
+| [`FairFastSimRunConfiguration`](/api/FairFastSimRunConfiguration/) | `FairRoot::FastSim` | Geant4 run configuration, derived from `TG4RunConfiguration`. It creates the `FairFastSimulation`. |
+| [`FairFastSimulation`](/api/FairFastSimulation/) | `FairRoot::FastSim` | Geant4 VMC fast simulation. It registers the model for all particles in the medium `FastSimMedium`. |
+| [`FairFastSimModel`](/api/FairFastSimModel/) | `FairRoot::FastSim` | Geant4 fast simulation model (`G4VFastSimulationModel`). Its `DoIt()` runs your code and applies the result. |
+
+## Build requirements
+
+The library `FairFastSim` (CMake target `FairRoot::FastSim`) links to Geant4 and Geant4 VMC. CMake
+builds it only when it finds both:
+
+<Snippet file="fairroot/CMakeLists.txt" start="if(Geant4_FOUND AND Geant4VMC_FOUND)" end="endif()" title="fairroot/CMakeLists.txt" />
+
+You need the library also when your setup has no fast simulation detector:
+
+- The example configuration `g4Config.C` always creates a `FairFastSimRunConfiguration`
+  ([code](/source/examples/common/gconfig/g4Config.C/#L35-L41)).
+- The library `FairRoot::MCConfigurator` with `FairYamlVMCConfig` builds only with
+  `FairRoot::FastSim` ([CMake](/repo/fairroot/CMakeLists.txt)).
+- Tutorial 1, which has the fast simulation example, builds only with `FairRoot::FastSim` and Boost
+  `program_options` ([CMake](/repo/examples/CMakeLists.txt)).
+
+:::note
+On some Linux systems, linking through other libraries to `FairRoot::FastSim` fails, because
+dependencies have no RUNPATH entries. The Catch2 tests of Tutorial 1 set `LD_LIBRARY_PATH` as a
+workaround, see [tests/examples/simulation/Tutorial1/CMakeLists.txt](/repo/tests/examples/simulation/Tutorial1/CMakeLists.txt).
+:::
+
+## Write a fast simulation detector
+
+Derive your detector from `FairFastSimDetector`:
+
+<Snippet file="fairroot/fastsim/FairFastSimDetector.h" start="class FairFastSimDetector : public FairDetector" title="FairFastSimDetector.h" />
+
+`ProcessHits()` is `final`. It calls `FastSimProcessParticle()` and returns `kTRUE`:
+
+<Snippet file="fairroot/fastsim/FairFastSimDetector.cxx" start="Bool_t FairFastSimDetector::ProcessHits(FairVolume*)" title="FairFastSimDetector.cxx" />
+
+Implement these functions:
+
+| Function | What it must do |
+| --- | --- |
+| `FastSimProcessParticle()` | Your fast simulation. Read the particle from the transport engine, then move it or stop it, and add secondaries. |
+| `ConstructGeometry()` | Call `FairFastSimDetector::ConstructGeometry()` first. Then build your volumes with the medium `fFastSimMedium` and call `AddSensitiveVolume()` for them. |
+| `Register()`, `GetCollection()`, `Reset()` | Pure virtual. Register and give back your MC point collection, as in each detector. |
+| `IsSensitive()` | Accept the names of your volumes. MT mode needs it, see [Multithreaded Geant4](/simulation/geant4-mt/). |
+| `CloneModule()` | Give back a copy of the detector, for MT mode. |
+
+`FairFastSimDetector::ConstructGeometry()` looks for the medium `FastSimMedium` in the geometry and
+then in the media file. If neither has it, the function makes it: one component with A = 1 and
+Z = 1, and the density `1e-16`
+([code](/source/fairroot/fastsim/FairFastSimDetector.cxx/#L36-L60)). All fast simulation detectors
+share this medium.
+
+The example `FairFastSimExample` of Tutorial 1 builds one box with this medium:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairFastSimExample.cxx" start="void FairFastSimExample::ConstructGeometry()" title="FairFastSimExample.cxx" />
+
+:::caution
+Use the medium `FastSimMedium` only for sensitive volumes of fast simulation detectors. With
+Geant4, the model runs in each volume of this medium. If no detector moves or stops the particle
+there, `DoIt()` reads an invalid index from the stack.
+:::
+
+## Move, stop or add particles
+
+Your `FastSimProcessParticle()` calls these functions of the stack. Give the values in the units of
+the VMC: cm, GeV and s ([`PushTrack()`](/source/fairroot/base/sim/FairGenericStack.h/#L62-L78)).
+
+| Function | What it does |
+| --- | --- |
+| [`FastSimMoveParticleTo(x, y, z, t, px, py, pz, e)`](/api/FairGenericStack/#FastSimMoveParticleTo) | Pushes a new track at the given point with the given momentum and total energy. The stack maps the new track to the current track. |
+| [`FastSimStopParticle()`](/api/FairGenericStack/#FastSimStopParticle) | Stops the current track. |
+| [`FastSimPushSecondary(parent, pdg, x, y, z, t, px, py, pz, e, ...)`](/api/FairGenericStack/#FastSimPushSecondary) | Pushes a secondary track and counts it. |
+
+`FairFastSimExample` makes four electrons for each pion and moves each particle behind the box:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairFastSimExample.cxx" start="void FairFastSimExample::FastSimProcessParticle()" title="FairFastSimExample.cxx" />
+
+Obey these rules:
+
+- Call `FastSimMoveParticleTo()` or `FastSimStopParticle()` once in each call of
+  `FastSimProcessParticle()`. With Geant4, `DoIt()` needs one of them.
+- Move the particle to a point in another volume. `FastSimMoveParticleTo()` logs a fatal error if
+  the target volume has the same name as the current volume
+  ([code](/source/fairroot/base/sim/FairGenericStack.cxx/#L114-L122)).
+- Do not stop a particle that you moved. `FastSimStopParticle()` logs a fatal error if the track is
+  already stopped ([code](/source/fairroot/base/sim/FairGenericStack.cxx/#L148-L154)).
+- Use a stack that gives its particle array with `GetListOfParticles()`. The default in
+  `FairGenericStack` returns `nullptr`. `FairStack` returns its array.
+
+A fatal error stops the program only after a call of `FairLogger::GetLogger()`, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does). `run_tutorial1_fastsim.C` makes
+this call through `gLogger`.
+
+## How the transport engine applies the result
+
+### Geant4
+
+<Steps>
+
+1. The configuration creates a `FairFastSimRunConfiguration`. `g4Config.C` always does this. With
+   `FairYamlVMCConfig`, set the key `UseFastSim: true` in the YAML file. The default is `false`
+   ([code](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L192-L200)).
+
+2. Geant4 VMC calls [`CreateUserFastSimulation()`](/api/FairFastSimRunConfiguration/#CreateUserFastSimulation).
+   It returns a new `FairFastSimulation`.
+
+3. The constructor of `FairFastSimulation` names the model `fairFastSimModel`. It applies the
+   model to all particles and to the medium `FastSimMedium`. `Construct()` creates the
+   `FairFastSimModel` and registers it.
+
+4. A particle enters a volume of the medium. `IsApplicable()` and `ModelTrigger()` always return
+   `true`, so Geant4 calls `DoIt()` of the model.
+
+5. `DoIt()` calls `FairMCApplication::Stepping()`. The stepping calls `ProcessHits()` of your
+   detector, and so `FastSimProcessParticle()`.
+
+6. `DoIt()` reads the result from the stack. It creates the pushed secondaries as Geant4 tracks. It
+   gives the position, time, direction and kinetic energy of the moved particle to the current
+   Geant4 track.
+
+</Steps>
+
+The constructor of `FairFastSimulation` sets up the model:
+
+<Snippet file="fairroot/fastsim/FairFastSimulation.cxx" start="FairFastSimulation::FairFastSimulation()" title="FairFastSimulation.cxx" />
+
+`DoIt()` runs your code through the stepping when no particle was moved yet:
+
+<Snippet file="fairroot/fastsim/FairFastSimModel.cxx" start="std::tie(movedParticleIndex, firstSecondary, nofSecondaries) =" end="TClonesArray* particles =" title="FairFastSimModel.cxx" />
+
+The model converts cm to mm and GeV to MeV for Geant4. At the end, `DoIt()` clears the moved index
+in the stack ([code](/source/fairroot/fastsim/FairFastSimModel.cxx/#L113-L147)).
+
+### Geant3
+
+Geant3 does not use `FairFastSimRunConfiguration`. For Geant3, `FastSimMedium` is a normal medium.
+Geant3 calls the stepping in each step, and the stepping calls `ProcessHits()` of your detector.
+
+`FastSimMoveParticleTo()` pushes the new track with the flag `toBeDone = 1`. If the name of the
+transport engine is `TGeant3TGeo`, it also stops the current track
+([code](/source/fairroot/base/sim/FairGenericStack.cxx/#L124-L146)). The documentation of the
+function says: "In Geant3 it stops the current trajectory, and starts it again in the position given
+by the user". `g3Config.C` creates the transport engine `TGeant3TGeo` for the default TGeo geometry.
+
+## Track bookkeeping
+
+The moved particle is a new track in the stack, but it continues the original particle. `FairStack`
+hides the new track:
+
+- While the transport engine transports the new track, `GetCurrentTrackNumber()` returns the ID of
+  the original track ([code](/source/examples/common/mcstack/FairStack.cxx/#L240-L243)). Your MC
+  points get the original ID.
+- `UpdateTrackIndex()` calls `FastSimUpdateTrackIndex()` for each MC point. It replaces the ID of a
+  new track with the ID of the original track ([code](/source/examples/common/mcstack/FairStack.cxx/#L280-L294)).
+- `SelectTracks()` does not store the new tracks in the `MCTrack` branch. Daughters of a new track
+  get the original track as mother ([code](/source/examples/common/mcstack/FairStack.cxx/#L388-L439)).
+
+`MyProjStack` of the templates does none of this. If you write your own stack, copy these parts of
+`FairStack`.
+
+## Run the example
+
+The macro [`run_tutorial1_fastsim.C`](/source/examples/simulation/Tutorial1/macros/run_tutorial1_fastsim.C/)
+adds two fast simulation detectors to the setup of Tutorial 1:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1_fastsim.C" start='FairModule* cave = new FairCave("CAVE");' end="run.AddModule(tutdet);" title="run_tutorial1_fastsim.C" />
+
+The macro also calls `run.SetStoreTraj(kTRUE)`
+([code](/source/examples/simulation/Tutorial1/macros/run_tutorial1_fastsim.C/#L114)). Its default
+transport engine is `TGeant3`. CMake makes no test for this macro and does not install it. Run it with ROOT
+in the same environment as the other macros of Tutorial 1:
+
+```sh
+root -b -q 'run_tutorial1_fastsim.C(10, "TGeant4")'
+```
+
+The two fast detectors write the branches `FastSimPoint` and `FastSimPoint2`.
+
+## Limits
+
+- **Store trajectories with Geant4.** `DoIt()` calls `FairTrajFilter::Instance()` for a moved
+  particle and does not check for a null pointer
+  ([code](/source/fairroot/fastsim/FairFastSimModel.cxx/#L139-L142)). The filter exists only after
+  `SetStoreTraj(kTRUE)`, see
+  [Store trajectories in the simulation](/reconstruction/event-display/#store-trajectories-in-the-simulation).
+- **Time after a move.** `DoIt()` multiplies the time from the stack with `10.e9`, with the comment
+  `change from ns to s` ([moved particle](/source/fairroot/fastsim/FairFastSimModel.cxx/#L125),
+  [secondaries](/source/fairroot/fastsim/FairFastSimModel.cxx/#L104)). The stack holds the time in
+  s, and one second is `1e9` in Geant4 units. With Geant4, do not trust the time of the moved
+  particles and of the secondaries.
+- **One model, one medium.** All fast simulation detectors share the model `fairFastSimModel` and the
+  medium `FastSimMedium`. The model applies to all particles.
+
+## Related pages
+
+- [Transport engines and their configuration](/simulation/engines/): `g4Config.C`, the YAML files
+  and the run configuration.
+- [Write a detector](/simulation/detectors/): `ProcessHits()`, MC points and sensitive volumes.
+- [The particle stack and MC tracks](/simulation/stack/): how `FairStack` selects and stores tracks.
+- [Multithreaded Geant4](/simulation/geant4-mt/): `CloneModule()` and `IsSensitive()` for MT mode.
+- [Tutorial 1: a simple detector](/examples/tutorial1/): the example that contains the fast
+  simulation detectors.

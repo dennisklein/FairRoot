@@ -1,0 +1,1063 @@
+---
+// A map of the FairRoot libraries in four bands: the external packages at the bottom, the core,
+// the libraries on top of Base, and the online libraries. Select a box: the boxes of its direct
+// links light up, and the panel shows the CMake target, what it does, when CMake builds it, and a
+// link to its section of the API reference.
+//
+// Facts and where they come from (paths relative to the FairRoot repository):
+// - Targets: each fairroot/<dir>/CMakeLists.txt sets `target` (for example fairroot/base/CMakeLists.txt:9),
+//   and fairroot_library_settings() adds the alias FairRoot::<target> (cmake/private/FairRootTargets.cmake:35-42).
+// - Build conditions: fairroot/CMakeLists.txt:12-54. Always: Tools, MCStepLogger, Alignment, Base, GeoBase,
+//   ParBase, Generators, TrackBase, DataMatch. Geane if Geant3_FOUND (:22-24). FastSim if Geant4_FOUND and
+//   Geant4VMC_FOUND (:26-28). MbsAPI if BUILD_MBS (:30-32). Online if BUILD_ONLINE (:33-35). EventDisplay if
+//   ROOT_opengl_FOUND (:37-41). MCConfigurator if Geant3_FOUND, Geant4VMC_FOUND, yaml-cpp_FOUND and the target
+//   FairRoot::FastSim exists (:43-46). FairMQ, BaseMQ and ParMQ if BUILD_BASEMQ (:50-54).
+// - Options (CMakeLists.txt): BUILD_ONLINE ON (:125), BUILD_MBS OFF and BUILD_MBS sets BUILD_ONLINE ON (:126-129),
+//   BUILD_BASEMQ ON (:130).
+// - External packages: only those that a library in fairroot/ links. ROOT required, 6.18.00 (:145-148).
+//   ${VMCLIB} is ROOT::VMC, or VMCLibrary of the required VMC package if ROOT has no vmc (:166-171).
+//   Geant3, Geant4, Geant4VMC optional (:191-196). FairMQ 1.4.0 required if BUILD_BASEMQ (:202-204).
+//   FairLogger 1.2.0 required (:207). Boost 1.67 required if BUILD_BASEMQ, BUILD_EXAMPLES or BUILD_TESTING
+//   (:211-241). yaml-cpp optional (:254). Pythia, Protobuf, Flatbuffers, VGM, GSL, DDS and fmt are found too,
+//   but no library target links them, so the map does not show them.
+// - Links (target_link_libraries, PUBLIC / PRIVATE / INTERFACE): tools/CMakeLists.txt:37-48,
+//   alignment/CMakeLists.txt:25-32, geobase/CMakeLists.txt:56-66, parbase/CMakeLists.txt:38-47,
+//   base/CMakeLists.txt:103-124, generators/CMakeLists.txt:35-49, trackbase/CMakeLists.txt:33-45,
+//   geane/CMakeLists.txt:26-43 (geant321), fastsim/CMakeLists.txt:31-53 (G4processes, geant4vmc),
+//   mcconfigurator/CMakeLists.txt:25-39, eventdisplay/CMakeLists.txt:60-83, datamatch/CMakeLists.txt:36-40,
+//   mcsteplogger/CMakeLists.txt:28-39, online/CMakeLists.txt:41-55 (MbsAPI only with BUILD_MBS),
+//   mbsapi/CMakeLists.txt (no links), fairmq/CMakeLists.txt:18-28, basemq/CMakeLists.txt:24-51,
+//   parmq/CMakeLists.txt:25-38. FairMQ and BaseMQ are INTERFACE (header-only) targets: their links go on to
+//   each user, so the map shows them as public. ROOT counts as public if one ROOT component is PUBLIC.
+// - Alignment is below Base, not on top of it: Base links FairRoot::Alignment as PUBLIC (base/CMakeLists.txt:105).
+// - Bands: with these links, a library links only libraries in its own band or in a lower band.
+// - Base reaches Geant3 and Geant4 only through VMC: it does not link them; FairGenericVMCConfig::Setup() loads
+//   the engine macros at run time (base/sim/FairGenericVMCConfig.cxx:54-169).
+// - Texts: Tools (tools/CMakeLists.txt:11-25), Alignment (alignment/FairAlignmentHandler.cxx:10-56), GeoBase
+//   (geobase/FairGeoInterface.cxx:412, FairGeoRootBuilder.h:18-28), ParBase (parbase/CMakeLists.txt:11-26),
+//   Geane (FairGeanePro.cxx:33 takes TGeant3, :380,397,750 call the GEANE routine Ertrak),
+//   DataMatch deprecated (datamatch/FairMCObject.h:18-20), MCStepLogger counts steps of each volume, with
+//   LD_PRELOAD (mcsteplogger/MCStepInterceptor.cxx:26,76, MCStepLoggerImpl.cxx:57-117), MCConfigurator makes
+//   TGeant3 or TGeant4 from a YAML file (mcconfigurator/FairYamlVMCConfig.cxx:44-53,124-128,203),
+//   Online classes and the sources with BUILD_MBS (online/CMakeLists.txt:11-29), MbsAPI input modes (mbsapi/f_evt.h:119-123),
+//   FairMQ wrapper (fairmq/CMakeLists.txt:9, FairMQ.h, FairRunFairMQDevice.h), BaseMQ headers
+//   (basemq/CMakeLists.txt:13-22), ParMQ device and parmq-server (parmq/CMakeLists.txt:11-13,43-49).
+// - API anchors: docs/src/pages/api/index.astro:13,44 (id = library name in lower case). The API page has no
+//   section for MCStepLogger and FairMQ (no public types), so these link to their folder in the source browser.
+
+type Band = 'online' | 'top' | 'core' | 'ext';
+type Vis = 'pub' | 'priv';
+interface Node {
+  label: string;
+  title: string;
+  kind: string;
+  what: string;
+  when: string;
+  opt?: boolean;
+  href?: string;
+  hrefLabel?: string;
+}
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const api = (a: string) => ({ href: `${base}/api/#${a}`, hrefLabel: 'API reference' });
+const src = (a: string) => ({ href: `${base}/source/#${a}`, hrefLabel: 'Source files' });
+const SO = 'Shared library';
+const HO = 'Header-only library';
+const EXT = 'External package';
+const ALWAYS = 'always';
+const MQ = 'if `BUILD_BASEMQ` is ON (default ON)';
+
+// Text in backticks is code.
+const N: Record<string, Node> = {
+  Online: {
+    label: 'Online',
+    title: 'FairRoot::Online',
+    kind: SO,
+    what: '`FairRunOnline`, `FairOnlineSource` and `FairUnpack`. With `BUILD_MBS`, also the MBS and LMD sources.',
+    when: 'if `BUILD_ONLINE` is ON (default ON). `BUILD_MBS` sets it ON.',
+    opt: true,
+    ...api('online'),
+  },
+  MbsAPI: {
+    label: 'MbsAPI',
+    title: 'FairRoot::MbsAPI',
+    kind: 'Shared C library',
+    what: 'A C library that reads MBS events from LMD files and from MBS servers.',
+    when: 'if `BUILD_MBS` is ON (default OFF)',
+    opt: true,
+    ...api('mbsapi'),
+  },
+  BaseMQ: {
+    label: 'BaseMQ',
+    title: 'FairRoot::BaseMQ',
+    kind: HO,
+    what: 'Serializers for ROOT and Boost, and the devices `FairMQLmdSampler` and `FairMQUnpacker`.',
+    when: MQ,
+    opt: true,
+    ...api('basemq'),
+  },
+  ParMQ: {
+    label: 'ParMQ',
+    title: 'FairRoot::ParMQ',
+    kind: SO,
+    what: '`ParameterMQServer`, a FairMQ device that sends parameters, and the program `parmq-server`.',
+    when: MQ,
+    opt: true,
+    ...api('parmq'),
+  },
+  FairMQ: {
+    label: 'FairMQ',
+    title: 'FairRoot::FairMQ',
+    kind: HO,
+    what: 'A wrapper of `FairMQ::FairMQ`. It gives one API for old and new FairMQ versions.',
+    when: MQ,
+    opt: true,
+    ...src('fairroot-fairmq'),
+  },
+  Generators: {
+    label: 'Generators',
+    title: 'FairRoot::Generators',
+    kind: SO,
+    what: 'Event generators for `FairPrimaryGenerator`, for example `FairBoxGenerator`.',
+    when: ALWAYS,
+    ...api('generators'),
+  },
+  FastSim: {
+    label: 'FastSim',
+    title: 'FairRoot::FastSim',
+    kind: SO,
+    what: 'Fast simulation models for Geant4.',
+    when: 'if Geant4 and Geant4 VMC are found',
+    opt: true,
+    ...api('fastsim'),
+  },
+  MCConfigurator: {
+    label: 'MCConfigurator',
+    title: 'FairRoot::MCConfigurator',
+    kind: SO,
+    what: '`FairYamlVMCConfig`. It makes `TGeant3` or `TGeant4` and sets it up from a YAML file.',
+    when: 'if Geant3, Geant4 VMC and yaml-cpp are found, and FastSim is built',
+    opt: true,
+    ...api('mcconfigurator'),
+  },
+  MCStepLogger: {
+    label: 'MCStepLogger',
+    title: 'FairRoot::MCStepLogger',
+    kind: SO,
+    what: 'Counts the steps in each volume. You load it with `LD_PRELOAD`.',
+    when: ALWAYS,
+    ...src('fairroot-mcsteplogger'),
+  },
+  TrackBase: {
+    label: 'TrackBase',
+    title: 'FairRoot::TrackBase',
+    kind: SO,
+    what: 'Track parameters and propagators, for example `FairTrackParP` and `FairRKPropagator`.',
+    when: ALWAYS,
+    ...api('trackbase'),
+  },
+  Geane: {
+    label: 'Geane',
+    title: 'FairRoot::Geane',
+    kind: SO,
+    what: '`FairGeanePro` propagates track parameters and their errors with GEANE, a part of Geant3.',
+    when: 'if Geant3 is found',
+    opt: true,
+    ...api('geane'),
+  },
+  DataMatch: {
+    label: 'DataMatch',
+    title: 'FairRoot::DataMatch',
+    kind: SO,
+    what: 'Matches reconstructed data to MC data. It is deprecated.',
+    when: ALWAYS,
+    ...api('datamatch'),
+  },
+  EventDisplay: {
+    label: 'EventDisplay',
+    title: 'FairRoot::EventDisplay',
+    kind: SO,
+    what: 'The event display with ROOT Eve: `FairEventManager` and its draw classes.',
+    when: 'if ROOT has OpenGL support',
+    opt: true,
+    ...api('eventdisplay'),
+  },
+  Base: {
+    label: 'Base',
+    title: 'FairRoot::Base',
+    kind: SO,
+    what: 'Runs, tasks, the I/O manager, sources, sinks, event headers, detectors and the MC application.',
+    when: ALWAYS,
+    ...api('base'),
+  },
+  Tools: {
+    label: 'Tools',
+    title: 'FairRoot::Tools',
+    kind: SO,
+    what: 'The logger class `FairLogger`, `FairMonitor`, `FairSystemInfo` and the version header.',
+    when: ALWAYS,
+    ...api('tools'),
+  },
+  Alignment: {
+    label: 'Alignment',
+    title: 'FairRoot::Alignment',
+    kind: SO,
+    what: '`FairAlignmentHandler`. It applies alignment matrices to the ROOT geometry.',
+    when: ALWAYS,
+    ...api('alignment'),
+  },
+  GeoBase: {
+    label: 'GeoBase',
+    title: 'FairRoot::GeoBase',
+    kind: SO,
+    what: 'Reads the detector geometry from ASCII `.geo` files and builds ROOT volumes.',
+    when: ALWAYS,
+    ...api('geobase'),
+  },
+  ParBase: {
+    label: 'ParBase',
+    title: 'FairRoot::ParBase',
+    kind: SO,
+    what: 'The runtime database `FairRuntimeDb`, the parameter containers and their I/O.',
+    when: ALWAYS,
+    ...api('parbase'),
+  },
+  'x-ROOT': {
+    label: 'ROOT',
+    title: 'ROOT',
+    kind: EXT,
+    what: 'The data analysis framework: I/O, `TTree`, the geometry manager `TGeoManager`, Eve and more.',
+    when: 'required, version 6.18.00 or later',
+  },
+  'x-VMC': {
+    label: 'VMC',
+    title: 'VMC',
+    kind: EXT,
+    what: 'The Virtual Monte Carlo interface `TVirtualMC`. Base uses Geant3 and Geant4 only through it.',
+    when: 'required: `ROOT::VMC`, or the VMC package if ROOT has no `vmc`',
+  },
+  'x-FairLogger': {
+    label: 'FairLogger',
+    title: 'FairLogger',
+    kind: EXT,
+    what: 'The logging library with the `LOG()` macro.',
+    when: 'required, version 1.2.0 or later',
+  },
+  'x-Geant3': {
+    label: 'Geant3',
+    title: 'Geant3',
+    kind: EXT,
+    what: 'The Geant3 engine with GEANE. CMake target `geant321`.',
+    when: 'optional',
+    opt: true,
+  },
+  'x-Geant4': {
+    label: 'Geant4',
+    title: 'Geant4',
+    kind: EXT,
+    what: 'The Geant4 toolkit. FastSim links `G4processes`.',
+    when: 'optional',
+    opt: true,
+  },
+  'x-Geant4VMC': {
+    label: 'Geant4 VMC',
+    title: 'Geant4 VMC',
+    kind: EXT,
+    what: 'The VMC interface of Geant4, `TGeant4`. CMake target `geant4vmc`.',
+    when: 'optional',
+    opt: true,
+  },
+  'x-yaml-cpp': {
+    label: 'yaml-cpp',
+    title: 'yaml-cpp',
+    kind: EXT,
+    what: 'A YAML parser. CMake target `yaml-cpp::yaml-cpp`.',
+    when: 'optional',
+    opt: true,
+  },
+  'x-Boost': {
+    label: 'Boost',
+    title: 'Boost',
+    kind: EXT,
+    what: 'C++ libraries. BaseMQ links `Boost::serialization` and `Boost::filesystem`.',
+    when: 'required, version 1.67 or later, if `BUILD_BASEMQ`, `BUILD_EXAMPLES` or `BUILD_TESTING` is ON',
+    opt: true,
+  },
+  'x-FairMQ': {
+    label: 'FairMQ',
+    title: 'FairMQ',
+    kind: EXT,
+    what: 'The message queuing library and framework. CMake target `FairMQ::FairMQ`.',
+    when: 'required, version 1.4.0 or later, if `BUILD_BASEMQ` is ON',
+    opt: true,
+  },
+};
+
+// Direct links: [from, to, visibility, note]. INTERFACE links count as public: they go on to each user.
+const E: [string, string, Vis, string?][] = [
+  ['Tools', 'x-FairLogger', 'pub'],
+  ['Tools', 'x-ROOT', 'pub'],
+  ['Alignment', 'x-ROOT', 'pub'],
+  ['Alignment', 'Tools', 'priv'],
+  ['GeoBase', 'x-ROOT', 'pub'],
+  ['GeoBase', 'Tools', 'priv'],
+  ['ParBase', 'x-ROOT', 'pub'],
+  ['ParBase', 'Tools', 'priv'],
+  ['ParBase', 'x-FairLogger', 'priv'],
+  ['Base', 'Alignment', 'pub'],
+  ['Base', 'Tools', 'pub'],
+  ['Base', 'ParBase', 'pub'],
+  ['Base', 'GeoBase', 'pub'],
+  ['Base', 'x-ROOT', 'pub'],
+  ['Base', 'x-VMC', 'pub'],
+  ['Generators', 'Base', 'pub'],
+  ['Generators', 'x-ROOT', 'pub'],
+  ['Generators', 'Tools', 'priv'],
+  ['TrackBase', 'x-ROOT', 'pub'],
+  ['TrackBase', 'Base', 'priv'],
+  ['TrackBase', 'x-FairLogger', 'priv'],
+  ['Geane', 'Base', 'pub'],
+  ['Geane', 'TrackBase', 'pub'],
+  ['Geane', 'x-Geant3', 'pub'],
+  ['Geane', 'x-ROOT', 'pub'],
+  ['Geane', 'Tools', 'priv'],
+  ['Geane', 'x-VMC', 'priv'],
+  ['FastSim', 'Base', 'pub'],
+  ['FastSim', 'x-ROOT', 'pub'],
+  ['FastSim', 'x-Geant4', 'pub'],
+  ['FastSim', 'x-Geant4VMC', 'pub'],
+  ['FastSim', 'Tools', 'priv'],
+  ['FastSim', 'GeoBase', 'priv'],
+  ['FastSim', 'x-VMC', 'priv'],
+  ['MCConfigurator', 'Base', 'pub'],
+  ['MCConfigurator', 'x-yaml-cpp', 'pub'],
+  ['MCConfigurator', 'Tools', 'priv'],
+  ['MCConfigurator', 'FastSim', 'priv'],
+  ['MCConfigurator', 'x-Geant3', 'priv'],
+  ['MCConfigurator', 'x-Geant4VMC', 'priv'],
+  ['MCConfigurator', 'x-ROOT', 'priv'],
+  ['MCConfigurator', 'x-VMC', 'priv'],
+  ['EventDisplay', 'Base', 'pub'],
+  ['EventDisplay', 'x-FairLogger', 'pub'],
+  ['EventDisplay', 'x-ROOT', 'pub'],
+  ['DataMatch', 'Base', 'pub'],
+  ['DataMatch', 'x-ROOT', 'pub'],
+  ['MCStepLogger', 'Base', 'priv'],
+  ['MCStepLogger', 'x-ROOT', 'priv'],
+  ['MCStepLogger', 'x-VMC', 'priv'],
+  ['Online', 'Base', 'pub'],
+  ['Online', 'x-ROOT', 'pub'],
+  ['Online', 'Tools', 'priv'],
+  ['Online', 'ParBase', 'priv'],
+  ['Online', 'MbsAPI', 'priv', 'with BUILD_MBS'],
+  ['FairMQ', 'x-FairMQ', 'pub'],
+  ['BaseMQ', 'Base', 'pub'],
+  ['BaseMQ', 'FairMQ', 'pub'],
+  ['BaseMQ', 'ParBase', 'pub'],
+  ['BaseMQ', 'Tools', 'pub'],
+  ['BaseMQ', 'MbsAPI', 'pub', 'with BUILD_MBS'],
+  ['BaseMQ', 'x-Boost', 'pub'],
+  ['BaseMQ', 'x-ROOT', 'pub'],
+  ['ParMQ', 'FairMQ', 'pub'],
+  ['ParMQ', 'Base', 'priv'],
+  ['ParMQ', 'BaseMQ', 'priv'],
+  ['ParMQ', 'ParBase', 'priv'],
+  ['ParMQ', 'x-FairLogger', 'priv'],
+  ['ParMQ', 'x-ROOT', 'priv'],
+];
+
+const bands: { id: Band; label: string; short?: string; aria: string; ids: string[] }[] = [
+  { id: 'online', label: 'Online', aria: 'Online libraries', ids: ['Online', 'MbsAPI', 'BaseMQ', 'ParMQ', 'FairMQ'] },
+  {
+    id: 'top',
+    label: 'On Base',
+    aria: 'Libraries on top of Base',
+    ids: ['Generators', 'FastSim', 'MCConfigurator', 'MCStepLogger', 'TrackBase', 'Geane', 'DataMatch', 'EventDisplay'],
+  },
+  { id: 'core', label: 'Core', aria: 'Core libraries', ids: ['Base', 'Alignment', 'GeoBase', 'ParBase', 'Tools'] },
+  {
+    id: 'ext',
+    label: 'External packages',
+    short: 'External',
+    aria: 'External packages',
+    ids: ['x-ROOT', 'x-VMC', 'x-FairLogger', 'x-Geant3', 'x-Geant4', 'x-Geant4VMC', 'x-yaml-cpp', 'x-Boost', 'x-FairMQ'],
+  },
+];
+
+// The first view shows Base. The script keeps the same state, so the page also works before it runs.
+const START = 'Base';
+const isExt = (id: string) => id.startsWith('x-');
+const linksOf = (id: string) =>
+  E.filter((e) => (isExt(id) ? e[1] === id : e[0] === id)).map((e) => ({ id: isExt(id) ? e[0] : e[1], vis: e[2], note: e[3] }));
+const startLinks = linksOf(START);
+const visOf = new Map(startLinks.map((l) => [l.id, l.vis]));
+const parts = (s: string) => s.split('`');
+const n0 = N[START];
+const data = JSON.stringify({ N, E, start: START });
+---
+
+<figure class="fr-arch not-content" data-arch={data}>
+  <div class="ar-head">
+    <span class="ar-tip"
+      ><span class="t-fine">Hover a box, or use the arrow keys, to see its direct links.</span><span class="t-touch"
+        >Tap a box to see its direct links.</span
+      ></span
+    >
+    <span class="ar-keys" aria-hidden="true">
+      <span><i class="k-sel"></i>selected</span>
+      <span><i class="k-pub"></i>public</span>
+      <span><i class="k-priv"></i>private</span>
+      <span><i class="k-opt"></i>optional</span>
+    </span>
+  </div>
+  <div class="ar-map" role="group" aria-label="FairRoot libraries and the external packages that they link">
+    {
+      bands.map((b) => (
+        <div class={`ar-band ar-${b.id}`} role="group" aria-label={b.aria}>
+          <p class="ar-lab" aria-hidden="true">
+            {b.short ? (
+              <>
+                <span class="l-long">{b.label}</span>
+                <span class="l-short">{b.short}</span>
+              </>
+            ) : (
+              b.label
+            )}
+          </p>
+          <div class="ar-row">
+            {b.ids.map((id) => {
+              const n = N[id];
+              const v = visOf.get(id);
+              const cls = [
+                'ar-b',
+                isExt(id) ? 'ext' : 'lib',
+                n.opt ? 'opt' : isExt(id) && 'req',
+                id === 'Base' && 'base',
+                (id === 'Base' || id === 'Tools') && 'full',
+                id === START && 'is-sel',
+                v && `is-${v}`,
+              ]
+                .filter(Boolean)
+                .join(' ');
+              return (
+                <button type="button" class={cls} data-id={id} aria-pressed={String(id === START)} tabindex={id === START ? 0 : -1}>
+                  {n.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))
+    }
+  </div>
+  <div class="ar-panel" data-panel>
+    <div class="ar-ph">
+      <div class="ar-id">
+        <p class="ar-kind" data-kind>{n0.kind}</p>
+        <p class="ar-title" data-title>{n0.title}</p>
+      </div>
+      <a class="ar-link" data-link href={n0.href}>{n0.hrefLabel}<span aria-hidden="true"> →</span></a>
+    </div>
+    <p class="ar-what" data-what>{parts(n0.what).map((s, i) => (i % 2 ? <code>{s}</code> : s))}</p>
+    <dl class="ar-dl">
+      <div>
+        <dt data-when-k>Built</dt>
+        <dd data-when>{parts(n0.when).map((s, i) => (i % 2 ? <code>{s}</code> : s))}</dd>
+      </div>
+      <div data-row="pub">
+        <dt data-pub-k>Links</dt>
+        <dd data-pub>
+          {
+            startLinks
+              .filter((l) => l.vis === 'pub')
+              .map((l) => (
+                <span class={`ar-chip pub ${isExt(l.id) ? 'ext' : 'lib'}`}>{N[l.id].label}</span>
+              ))
+          }
+        </dd>
+      </div>
+      <div data-row="priv" hidden={!startLinks.some((l) => l.vis === 'priv')}>
+        <dt data-priv-k>Privately</dt>
+        <dd data-priv>
+          {
+            startLinks
+              .filter((l) => l.vis === 'priv')
+              .map((l) => (
+                <span class={`ar-chip priv ${isExt(l.id) ? 'ext' : 'lib'}`}>{N[l.id].label}</span>
+              ))
+          }
+        </dd>
+      </div>
+    </dl>
+  </div>
+  <p class="ar-sr" aria-live="polite" data-live></p>
+  <figcaption>
+    The FairRoot boxes are CMake targets, for example <code>FairRoot::Base</code>. A library links only libraries in its own band or in a lower
+    band. CMake builds or uses a dashed box only if it finds the packages for it, or if a build option is on.
+  </figcaption>
+</figure>
+
+<script>
+  type Vis = 'pub' | 'priv';
+  interface ArNode {
+    label: string;
+    title: string;
+    kind: string;
+    what: string;
+    when: string;
+    href?: string;
+    hrefLabel?: string;
+  }
+  type Edge = [string, string, Vis, string?];
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-arch')) {
+    const { N, E, start } = JSON.parse(root.dataset.arch!) as { N: Record<string, ArNode>; E: Edge[]; start: string };
+    const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
+    const map = $('.ar-map');
+    const bricks = [...root.querySelectorAll<HTMLButtonElement>('.ar-b')];
+    const live = $('[data-live]');
+    const link = $<HTMLAnchorElement>('[data-link]');
+    const isExt = (id: string) => id.startsWith('x-');
+    const linksOf = (id: string) =>
+      E.filter((e) => (isExt(id) ? e[1] === id : e[0] === id)).map((e) => ({ id: isExt(id) ? e[0] : e[1], vis: e[2], note: e[3] }));
+    // Text in backticks is code.
+    const rich = (el: HTMLElement, text: string) => {
+      el.replaceChildren();
+      text.split('`').forEach((s, i) => {
+        if (!s) return;
+        if (i % 2) {
+          const c = document.createElement('code');
+          c.textContent = s;
+          el.append(c);
+        } else el.append(s);
+      });
+    };
+    // The package FairMQ and the wrapper FairRoot::FairMQ have the same label: the panel of the
+    // package names the wrapper in full.
+    const chips = (el: HTMLElement, list: { id: string; vis: Vis; note?: string }[], self: string) => {
+      el.replaceChildren(
+        ...list.map((l) => {
+          const c = document.createElement('span');
+          c.className = `ar-chip ${l.vis} ${isExt(l.id) ? 'ext' : 'lib'}`;
+          c.textContent = N[l.id].label === N[self].label ? N[l.id].title : N[l.id].label;
+          if (l.note) {
+            const s = document.createElement('small');
+            s.textContent = l.note;
+            c.append(' ', s);
+          }
+          return c;
+        })
+      );
+    };
+    const plain = (s: string) => s.replace(/`/g, '');
+    let pinned = start;
+    let shown = '';
+
+    const show = (id: string) => {
+      if (id === shown) return;
+      shown = id;
+      const ext = isExt(id);
+      const links = linksOf(id);
+      const vis = new Map(links.map((l) => [l.id, l.vis]));
+      for (const b of bricks) {
+        const k = b.dataset.id!;
+        b.classList.toggle('is-sel', k === id);
+        b.classList.toggle('is-pub', vis.get(k) === 'pub');
+        b.classList.toggle('is-priv', vis.get(k) === 'priv');
+      }
+      const n = N[id];
+      $('[data-panel]').classList.toggle('ext', ext);
+      $('[data-kind]').textContent = n.kind;
+      $('[data-title]').textContent = n.title;
+      rich($('[data-what]'), n.what);
+      $('[data-when-k]').textContent = ext ? 'Found' : 'Built';
+      rich($('[data-when]'), n.when);
+      const pub = links.filter((l) => l.vis === 'pub');
+      const priv = links.filter((l) => l.vis === 'priv');
+      $('[data-pub-k]').textContent = ext ? 'Linked by' : 'Links';
+      $('[data-priv-k]').textContent = ext ? 'Privately by' : 'Privately';
+      chips($('[data-pub]'), pub, id);
+      if (!pub.length) $('[data-pub]').textContent = 'none';
+      chips($('[data-priv]'), priv, id);
+      $('[data-row="priv"]').hidden = !priv.length;
+      if (n.href) {
+        link.href = n.href;
+        link.firstChild!.textContent = n.hrefLabel!;
+        link.hidden = false;
+      } else link.hidden = true;
+    };
+
+    const say = (id: string) => {
+      const n = N[id];
+      const ext = isExt(id);
+      const links = linksOf(id);
+      const names = (v: Vis) =>
+        links
+          .filter((l) => l.vis === v)
+          .map((l) => N[l.id].title + (l.note ? ` ${l.note}` : ''))
+          .join(', ');
+      const pub = names('pub');
+      const priv = names('priv');
+      live.textContent = [
+        `${n.title}, ${n.kind}.`,
+        plain(n.what),
+        `${ext ? 'Found' : 'Built'}: ${plain(n.when)}.`,
+        pub ? `${ext ? 'Linked by' : 'Links'} ${pub}.` : '',
+        priv ? `${ext ? 'Privately by' : 'Privately'} ${priv}.` : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+    };
+
+    const pin = (id: string, focus = false) => {
+      const changed = id !== pinned;
+      pinned = id;
+      for (const b of bricks) {
+        const on = b.dataset.id === id;
+        b.setAttribute('aria-pressed', String(on));
+        b.tabIndex = on ? 0 : -1;
+        if (on && focus) b.focus();
+      }
+      show(id);
+      if (changed) say(id);
+    };
+
+    // Arrow up and down go to the nearest box in the row above or below.
+    const near = (i: number, dir: number) => {
+      const r = bricks.map((b) => b.getBoundingClientRect());
+      const cy = r[i].top + r[i].height / 2;
+      const cx = r[i].left + r[i].width / 2;
+      let best = -1;
+      let bdy = Infinity;
+      let bdx = Infinity;
+      r.forEach((q, k) => {
+        const dy = (q.top + q.height / 2 - cy) * dir;
+        if (dy < 4) return;
+        const dx = Math.abs(q.left + q.width / 2 - cx);
+        if (dy < bdy - 4 || (Math.abs(dy - bdy) <= 4 && dx < bdx)) {
+          best = k;
+          bdy = dy;
+          bdx = dx;
+        }
+      });
+      return best;
+    };
+
+    map.addEventListener('keydown', (ev) => {
+      const i = bricks.indexOf(ev.target as HTMLButtonElement);
+      if (i < 0 || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      let j: number;
+      if (ev.key === 'ArrowRight') j = (i + 1) % bricks.length;
+      else if (ev.key === 'ArrowLeft') j = (i - 1 + bricks.length) % bricks.length;
+      else if (ev.key === 'ArrowUp') j = near(i, -1);
+      else if (ev.key === 'ArrowDown') j = near(i, 1);
+      else if (ev.key === 'Home') j = 0;
+      else if (ev.key === 'End') j = bricks.length - 1;
+      else return;
+      ev.preventDefault();
+      if (j >= 0) pin(bricks[j].dataset.id!, true);
+    });
+    for (const b of bricks) {
+      b.addEventListener('pointerenter', (ev) => {
+        if (ev.pointerType === 'mouse') show(b.dataset.id!);
+      });
+      b.addEventListener('click', () => pin(b.dataset.id!));
+      b.addEventListener('focus', () => pin(b.dataset.id!));
+    }
+    map.addEventListener('pointerleave', (ev) => {
+      if (ev.pointerType === 'mouse') show(pinned);
+    });
+    pin(start);
+  }
+</script>
+
+<style>
+  .fr-arch {
+    container-type: inline-size;
+    min-width: 0;
+    margin: 1.5rem 0;
+    border: 1px solid var(--fr-rule);
+    border-radius: 6px;
+    background: var(--fr-paper);
+    padding: 0.75rem;
+  }
+  .ar-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.35rem 1rem;
+    margin: 0 0 0.6rem;
+    font-size: 0.8125rem;
+    color: var(--fr-ink-3);
+  }
+  .ar-tip .t-touch {
+    display: none;
+  }
+  @media (hover: none) {
+    .ar-tip .t-fine {
+      display: none;
+    }
+    .ar-tip .t-touch {
+      display: inline;
+    }
+  }
+  .ar-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.85rem;
+  }
+  .ar-keys > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .ar-keys i {
+    width: 14px;
+    height: 10px;
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 2px;
+    background: var(--fr-paper);
+  }
+  .ar-keys .k-sel {
+    background: var(--fr-saffron);
+    border-color: var(--fr-bar);
+  }
+  .ar-keys .k-pub {
+    background: var(--fr-saffron-tint);
+    border-color: var(--fr-bar);
+  }
+  .ar-keys .k-priv {
+    border-color: var(--fr-bar);
+  }
+  .ar-keys .k-opt {
+    border-style: dashed;
+    border-color: var(--fr-ink-3);
+  }
+
+  .ar-map {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  /* A band: its label in a column at the left, its boxes in a grid. */
+  .ar-band {
+    display: grid;
+    grid-template-columns: 5.25rem minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: start;
+    border: 1px solid var(--fr-rule);
+    border-radius: 4px;
+    background: var(--fr-paper-2);
+    padding: 0.4rem;
+  }
+  .ar-band.ar-ext {
+    background: none;
+  }
+  .ar-lab {
+    font: 600 0.6875rem/1.25 var(--fr-font-body);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fr-ink-3);
+    margin: 0.55rem 0 0 0.2rem;
+  }
+  .ar-lab .l-short {
+    display: none;
+  }
+  .ar-row {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    gap: 6px;
+  }
+  .ar-online .ar-row {
+    --cols: 5;
+  }
+  .ar-top .ar-row {
+    --cols: 4;
+  }
+  /* Core: Base on top of Alignment, GeoBase and ParBase, and these on top of Tools. */
+  .ar-core .ar-row {
+    --cols: 3;
+  }
+  .ar-ext .ar-row {
+    --cols: 6;
+  }
+
+  /* The boxes. Flex centers the label, also when it is a little wider than the box. */
+  .ar-b {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 2.1rem;
+    margin: 0;
+    padding: 0.3rem 0.4rem;
+    font: 600 0.78rem/1.2 var(--fr-font-mono);
+    color: var(--fr-ink-3);
+    background: var(--fr-paper);
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      background-color 0.15s,
+      border-color 0.15s,
+      color 0.15s;
+  }
+  .ar-b.ext {
+    font: 600 0.8125rem/1.2 var(--fr-font-body);
+  }
+  /* The required packages fill the first row of their band, the optional ones the next. */
+  .ar-b.req {
+    grid-column: span 2;
+  }
+  .ar-b.opt {
+    border-style: dashed;
+  }
+  .ar-b.full {
+    grid-column: 1 / -1;
+  }
+  .ar-b.base {
+    min-height: 2.6rem;
+    font-size: 0.9375rem;
+    font-weight: 700;
+  }
+  .ar-b:hover {
+    border-color: var(--fr-ink-3);
+    color: var(--fr-ink);
+  }
+  .ar-b.is-pub {
+    background: var(--fr-saffron-tint);
+    border-color: var(--fr-bar);
+    color: var(--fr-ink);
+  }
+  .ar-b.is-priv {
+    border-color: var(--fr-bar);
+    color: var(--fr-ink);
+  }
+  .ar-b.is-sel {
+    background: var(--fr-saffron);
+    border-color: var(--fr-bar);
+    color: var(--fr-on-saffron);
+  }
+  /* Narrow (phones, and a figure narrower than about 42rem): the band label reads along the left edge,
+     and fewer columns. The query measures the inside of .fr-arch. Below 40rem, the six optional
+     packages do not fit in one row ("Geant4 VMC" and "MCConfigurator" ran over their borders). */
+  @container (max-width: 39.99rem) {
+    .ar-band {
+      grid-template-columns: 0.9rem minmax(0, 1fr);
+      gap: 0.3rem;
+      padding: 0.35rem 0.35rem 0.35rem 0.2rem;
+    }
+    /* The label reads from bottom to top along the left edge of the band. */
+    .ar-lab {
+      align-self: stretch;
+      margin: 0;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      text-align: center;
+      white-space: nowrap;
+    }
+    .ar-lab .l-long {
+      display: none;
+    }
+    .ar-lab .l-short {
+      display: inline;
+    }
+    .ar-row {
+      gap: 5px;
+    }
+    .ar-top .ar-row {
+      --cols: 2;
+    }
+    .ar-ext .ar-row {
+      --cols: 3;
+    }
+    /* Online: the MBS libraries in one row, the FairMQ libraries in the next. */
+    .ar-online .ar-row {
+      --cols: 6;
+    }
+    .ar-online .ar-b {
+      grid-column: span 2;
+    }
+    .ar-online .ar-b:is([data-id='Online'], [data-id='MbsAPI']) {
+      grid-column: span 3;
+    }
+    .ar-b.req {
+      grid-column: span 1;
+    }
+    .ar-b {
+      min-height: 1.85rem;
+      padding: 0.2rem;
+      font-size: 0.75rem;
+    }
+    /* "Geant4 VMC" goes on two lines if the box is too narrow (below 340 px). */
+    .ar-b.ext {
+      font-size: 0.78rem;
+      white-space: normal;
+    }
+  }
+
+  /* The panel */
+  .ar-panel {
+    margin-top: 0.75rem;
+    border: 1px solid var(--fr-rule);
+    border-radius: 4px;
+    padding: 0.7rem 0.85rem 0.75rem;
+    /* Room for each text but the long list of ROOT, so that the page below does not jump while the
+       pointer moves over the boxes. */
+    min-height: 13.5rem;
+  }
+  .ar-ph {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem 1rem;
+    flex-wrap: wrap;
+  }
+  .ar-id {
+    min-width: 0;
+  }
+  .ar-kind {
+    font: 600 0.6875rem/1.2 var(--fr-font-body);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fr-ink-3);
+    margin: 0;
+  }
+  .ar-title {
+    font: 700 1.05rem/1.3 var(--fr-font-mono);
+    color: var(--fr-ink);
+    margin: 0.2rem 0 0;
+    overflow-wrap: anywhere;
+  }
+  .ar-panel.ext .ar-title {
+    font-family: var(--fr-font-body);
+  }
+  .ar-link {
+    font: 500 0.8125rem/1.2 var(--fr-font-body);
+    color: var(--fr-link);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+    margin-top: 0.15rem;
+  }
+  .ar-link:hover {
+    color: var(--fr-ink);
+  }
+  .ar-what {
+    margin: 0.45rem 0 0.55rem;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: var(--fr-ink-2);
+  }
+  /* The script makes the code elements of the panel, so they need a global selector. */
+  .ar-panel :global(code),
+  figcaption code {
+    font-family: var(--fr-font-mono);
+    font-size: 0.86em;
+    color: var(--fr-ink);
+  }
+  /* Keep names such as parmq-server and yaml-cpp::yaml-cpp on one line. */
+  .ar-panel :global(code) {
+    white-space: nowrap;
+  }
+  .ar-dl {
+    margin: 0;
+    display: grid;
+    gap: 0.35rem;
+    border-top: 1px solid var(--fr-rule);
+    padding-top: 0.55rem;
+  }
+  .ar-dl > div {
+    display: grid;
+    grid-template-columns: 6.75rem minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: baseline;
+  }
+  .ar-dl > div[hidden] {
+    display: none;
+  }
+  .ar-dl dt {
+    font: 600 0.6875rem/1.2 var(--fr-font-body);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fr-ink-3);
+  }
+  .ar-dl dd {
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1.45;
+    color: var(--fr-ink-2);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .ar-dl dd[data-when] {
+    display: block;
+  }
+  .ar-panel :global(.ar-chip) {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    font: 600 0.75rem/1.2 var(--fr-font-mono);
+    color: var(--fr-ink);
+    border: 1px solid var(--fr-bar);
+    border-radius: 3px;
+    padding: 0.2rem 0.4rem;
+  }
+  .ar-panel :global(.ar-chip.ext) {
+    font-family: var(--fr-font-body);
+  }
+  .ar-panel :global(.ar-chip.pub) {
+    background: var(--fr-saffron-tint);
+  }
+  /* ink-2: ink-3 on the tint of a public chip is below 4.5:1 in the dark theme. */
+  .ar-panel :global(.ar-chip small) {
+    font: 500 0.6875rem/1.2 var(--fr-font-body);
+    color: var(--fr-ink-2);
+  }
+  .ar-link[hidden] {
+    display: none;
+  }
+  .ar-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  figcaption {
+    margin-top: 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--fr-ink-3);
+  }
+  /* A container query cannot style the container itself, so the padding of the figure uses the viewport. */
+  @media (max-width: 33.99rem) {
+    .fr-arch {
+      padding: 0.5rem;
+    }
+  }
+  @container (max-width: 39.99rem) {
+    .ar-panel {
+      min-height: 0;
+      padding: 0.6rem 0.65rem 0.65rem;
+    }
+    .ar-dl > div {
+      grid-template-columns: 6.75rem minmax(0, 1fr);
+      gap: 0.35rem;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ar-b {
+      transition: none;
+    }
+  }
+</style>

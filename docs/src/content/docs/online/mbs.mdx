@@ -1,0 +1,239 @@
+---
+title: 'Read MBS and LMD data'
+description: 'Three sources read MBS data from LMD files, a stream server or a remote event server, and give each subevent to the matching unpackers. The MbsAPI library is deprecated.'
+sidebar:
+  order: 3
+code: [fairroot/online/source/FairMbsSource.cxx, fairroot/online/source/FairLmdSource.cxx, fairroot/online/source/FairMbsStreamSource.cxx, fairroot/online/source/FairRemoteSource.cxx, fairroot/online/source/MRevBuffer.cxx, fairroot/mbsapi/f_evt.c]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+MBS (Multi Branch System) is the data acquisition system of GSI. It writes events to files in the
+List Mode Data (LMD) format, and it sends events over the network. FairRoot has three sources that
+read MBS events and give each subevent to the unpackers that match it. Use them with
+[`FairRunOnline`](/online/run-online/).
+
+:::caution[Deprecated]
+The MBS code is deprecated since FairRoot 18.8. Since FairRoot 19, it is not built by default, and
+the [changelog](/repo/CHANGELOG.md) plans to remove MbsAPI in the next major release.
+:::
+
+## Build with MBS support
+
+Configure FairRoot with `-DBUILD_MBS=ON`. This option has three effects
+([CMakeLists.txt](/repo/CMakeLists.txt#L125-L129),
+[fairroot/online/CMakeLists.txt](/repo/fairroot/online/CMakeLists.txt#L18-L29)):
+
+- CMake builds the C library `FairRoot::MbsAPI` from [`fairroot/mbsapi/`](/repo/fairroot/mbsapi/).
+  It reads LMD files and talks to the MBS servers.
+- CMake adds `FairMbsSource`, `FairLmdSource`, `FairMbsStreamSource`, `FairRemoteSource`,
+  `MRevBuffer` and `REvent` to `FairRoot::Online`.
+- CMake sets `BUILD_ONLINE` to `ON`.
+
+CMake builds the [MBS tutorial](/examples/mbs-tutorial/) and the example
+[MQ: LMD sampler and unpacker](/examples/mq-lmd/) only with `BUILD_MBS`.
+
+## The three sources
+
+All three sources derive from [`FairMbsSource`](/api/FairMbsSource/), which derives from
+[`FairOnlineSource`](/api/FairOnlineSource/):
+
+| | [`FairLmdSource`](/api/FairLmdSource/) | [`FairMbsStreamSource`](/api/FairMbsStreamSource/) | [`FairRemoteSource`](/api/FairRemoteSource/) |
+| --- | --- | --- | --- |
+| Reads from | LMD files | An MBS stream server | An MBS remote event server |
+| Input | `AddFile()`, `AddPath()` | The server name in the constructor | The node name in the constructor |
+| Port | None | 6002, or the port in `host:port` | 6003 |
+| MBS headers to the unpackers | File, buffer and event header | None | Event header |
+| Skips the event (returns 2) if | No unpacker took a subevent | One subevent was not taken | No unpacker took the event header or a subevent |
+| Ends (returns 1) if | The last file ends or fails, the next file does not open, or a subevent cannot be read | A read fails | `MRevBuffer::RevGet()` fails, for example when the server closes the connection |
+
+[The return value of ReadEvent()](/online/run-online/#the-return-value-of-readevent) explains what
+the run does with these values. All three sources ignore the event number of `ReadEvent()`. They
+can only read the next event.
+
+## How a source selects the unpackers
+
+The header of each MBS subevent has five values: type, subtype, processor ID, subcrate and control
+([s_ves10_1.h](/source/fairroot/mbsapi/s_ves10_1.h/#L29-L37)). Each unpacker gets five values in
+the constructor of [`FairUnpack`](/api/FairUnpack/#FairUnpack). For each subevent, the source calls
+[`FairMbsSource::Unpack()`](/api/FairMbsSource/#Unpack), which compares the values:
+
+<Snippet file="fairroot/online/source/FairMbsSource.cxx" start="for (Int_t i = 0; i < fUnpackers->GetEntriesFast(); i++) {" title="FairMbsSource.cxx" />
+
+These rules follow from the code:
+
+- The source gives the subevent to each unpacker with the same five values, in the order of
+  `AddUnpacker()`. Thus two unpackers can get the same subevent.
+- An unpacker with a negative subcrate gets the subevents of all subcrates. Then only type, subtype,
+  processor ID and control must be equal.
+- If `DoUnpack()` returns `kFALSE`, the next unpackers do not get the subevent, and `Unpack()`
+  returns `kFALSE`. A source cannot tell this error from a subevent without an unpacker.
+
+`DoUnpack(data, size)` gets a pointer to the first data word after the subevent header. `size` is
+the number of 32-bit words of the data. MbsAPI and `MRevBuffer` calculate it from the length field
+of the header as `l_dlen / 2 - 1` ([f_evt.c](/source/fairroot/mbsapi/f_evt.c/#L245-L247)).
+
+:::tip
+Set the log severity to `debug2`, for example with `fair::Logger::SetConsoleSeverity("debug2")`. Then
+`Unpack()` logs the five values of each subevent, in the line
+`FairMbsSource::Unpack => Found Sub-event with flags:  Type … SubType … ProcId … SubCrate … Control …`.
+Use these values for the constructor of your unpacker. See [Logging](/tools/logging/).
+:::
+
+### The MBS headers
+
+`FairLmdSource` and `FairRemoteSource` also give MBS headers to the unpackers. For a header, all
+five values are -4 or -2:
+
+| Values | Data | Who gives it, and when |
+| --- | --- | --- |
+| -4 | File header (`s_filhe`) | `FairLmdSource`, after it opens a file |
+| -4 | Buffer header (`s_bufhe`) | `FairLmdSource`, in the first event of a file and when it closes a file |
+| -2 | Event header (`s_ve10_1`) | `FairLmdSource`, in each event |
+| -2 | Event header (`sMbsEv101`) | `FairRemoteSource`, in each event |
+
+For a header, `size` is the size of the structure in bytes, not in 32-bit words. An unpacker for the
+event header reads, for example, the trigger number and the event counter of MBS:
+
+```cpp title="MyEventHeaderUnpack.cxx"
+#include "MyEventHeaderUnpack.h"   // your class, derived from FairUnpack
+
+#include "s_ve10_1.h"   // MbsAPI: s_ve10_1, the MBS event header
+
+// Init(), Reset() and Register() as in each unpacker.
+
+MyEventHeaderUnpack::MyEventHeaderUnpack()
+    : FairUnpack(-2, -2, -2, -2, -2)
+{}
+
+Bool_t MyEventHeaderUnpack::DoUnpack(Int_t* data, Int_t /*size*/)
+{
+    auto header = reinterpret_cast<s_ve10_1*>(data);
+    fTrigger = header->i_trigger;
+    fEventNumber = header->l_count;
+    return kTRUE;
+}
+```
+
+`FairLmdSource` ignores the return value for the event header. `FairRemoteSource` counts it: with an
+event header unpacker, it skips no event.
+
+:::caution
+The pointers to the file header and to the buffer header can be null, because MbsAPI does not give
+these headers for all LMD files. When `FairLmdSource` closes a file, MbsAPI has already freed the
+buffer, but the source gives the buffer header again
+([FairLmdSource.cxx](/source/fairroot/online/source/FairLmdSource.cxx/#L247-L257)). Check the
+pointers, and do not read the buffer header in this last call.
+:::
+
+## Read LMD files with FairLmdSource
+
+Add the files before `Init()` of the run:
+
+- [`AddFile(fileName)`](/api/FairLmdSource/#AddFile) adds one file. If the file does not exist, the
+  source logs the warning `FairLmdSource: not found: <file>` and does not add it.
+- [`AddPath(dir, wildCard)`](/api/FairLmdSource/#AddPath) adds each file in the folder `dir` whose
+  name matches the wildcard, for example `*.lmd`. It does not sort the names.
+
+The source reads the files in the order of the list
+([FairLmdSource.cxx](/source/fairroot/online/source/FairLmdSource.cxx/#L104-L184)). `Init()` opens
+the first file. When a file ends, `ReadEvent()` opens the next file. After the last file,
+`ReadEvent()` returns 1. [`GetCurrentFile()`](/api/FairLmdSource/#GetCurrentFile) returns the number
+of files that the source opened, and [`GetFileNames()`](/api/FairLmdSource/#GetFileNames) returns
+the list.
+
+For each event, the source gives each subevent to the unpackers. It skips the event only if no
+unpacker took a subevent:
+
+<Snippet file="fairroot/online/source/FairLmdSource.cxx" start="for (Int_t i = 1; i <= nrSubEvts; i++) {" title="FairLmdSource.cxx" />
+
+MbsAPI opens the files with these rules ([f_evt.c](/source/fairroot/mbsapi/f_evt.c/#L589-L647)):
+
+- The name must end with `.lmd` or `.LMD`. MbsAPI adds `.lmd` to other names, and then tries to open
+  the file with the new name.
+- The path must have fewer than 128 characters. For a longer path, MbsAPI prints
+  `file name to long!` and does not open the file.
+- A name with a colon (`:`) is an RFIO path for MbsAPI. This build does not support RFIO, so the
+  file does not open.
+- A file with fewer than 512 bytes does not open. MbsAPI prints `LMD format error: no LMD file: <file>`.
+
+The source writes these log lines:
+
+| Log line | Meaning |
+| --- | --- |
+| `File <file> will be opened.` and `File <file> opened.` | The source opened the next file. |
+| `File <file> opening failed.` | MbsAPI could not open the file. |
+| `FairMbsStreamSource::ReadEvent()` | A file ended or a read failed. `FairLmdSource` writes this line with the wrong class name. |
+| `-I-f_evt: no more event` | MbsAPI prints this text to the standard output at the end of a file. |
+
+## Read from a stream server with FairMbsStreamSource
+
+[`FairMbsStreamSource(serverName)`](/api/FairMbsStreamSource/#FairMbsStreamSource) connects in its
+`Init()` to the stream server of MBS. The default port is 6002. Give `host:port` for another port
+([f_evt.c](/source/fairroot/mbsapi/f_evt.c/#L579-L586)). The source logs
+`- open connection to MBS stream server <name>...` and, after a connection,
+`- connection to MBS stream server <name> established.`
+
+This source is stricter than the file source
+([FairMbsStreamSource.cxx](/source/fairroot/online/source/FairMbsStreamSource.cxx/#L99-L119)):
+
+- It gives the subevents only. It gives no MBS headers.
+- If one subevent of an event has no unpacker, the source returns 2 at once. The next subevents of
+  this event go to no unpacker. Thus give each kind of subevent in the stream an unpacker.
+- If a read fails, `ReadEvent()` returns 1, and the run ends.
+
+## Read from a remote event server with FairRemoteSource
+
+[`FairRemoteSource(node)`](/api/FairRemoteSource/#FairRemoteSource) connects in its `Init()` to the
+remote event server of MBS on the node `node`, port 6003. It uses the client class
+[`MRevBuffer`](/api/MRevBuffer/) and asks for all events: `MRevBuffer` then uses the limit
+2000000000. The source keeps the pointer `node` and does not copy the text. Thus the text must
+exist as long as the source.
+
+<Snippet file="fairroot/online/source/FairRemoteSource.cxx" start="Int_t FairRemoteSource::ReadEvent(UInt_t)" title="FairRemoteSource.cxx" />
+
+The code shows these properties:
+
+- The source waits 10 ms before it reads each event. Thus it reads 100 events per second at most.
+- If `RevGet()` gives no event, `ReadEvent()` returns 1, and the run ends. This occurs after an
+  error, or when the server closes the connection
+  ([MRevBuffer.cxx](/source/fairroot/online/source/MRevBuffer.cxx/#L780-L801)).
+- While the data acquisition has no events, the server sends dummy buffers without events.
+  `RevGet()` then waits for the next buffer and does not return
+  ([MRevBuffer.cxx](/source/fairroot/online/source/MRevBuffer.cxx/#L563-L583)).
+- The source gives the event header to the unpackers with the values -2, and then each subevent.
+- [`REvent`](/api/REvent/) keeps the subevents of an event in arrays of 100 entries. `MRevBuffer`
+  does not check this limit.
+
+## MBS data in FairMQ devices
+
+The library `FairRoot::BaseMQ` has two devices for MBS data:
+
+- [`FairMQLmdSampler`](/api/FairMQLmdSampler/) reads an LMD file with MbsAPI. It sends the data of
+  each subevent with the selected five values to a channel. It compares all five values; a negative
+  subcrate has no special meaning. It sends no MBS headers.
+- [`FairMQUnpacker`](/api/FairMQUnpacker/) makes an unpacker with the five values from its options.
+  For each message, it calls `DoUnpack()`, serializes the output of the unpacker and sends it.
+
+The example [MQ: LMD sampler and unpacker](/examples/mq-lmd/) connects these devices to a sink.
+
+## Problems that can occur
+
+- **The run crashes in the first event:** `FairLmdSource` has no file, or the first file did not
+  open. Look for `not found` or `opening failed` in the log.
+- **`File <file> opening failed.` for a file that exists:** the name does not end with `.lmd`, or
+  the path has 128 characters or more. A name with a colon and a file with fewer than 512 bytes also
+  do not open.
+- **The tasks never execute:** no unpacker has the five values of the subevents. Log the values
+  with the severity `debug2`.
+- **The stream source skips all events:** a subevent of each event has no unpacker. Add an unpacker
+  for it.
+- **The remote source is slow:** it waits 10 ms before each event.
+
+## Related pages
+
+- [Process live data with FairRunOnline](/online/run-online/): the run, the event loop and the
+  unpackers.
+- [MBS tutorial](/examples/mbs-tutorial/): an LMD file, an unpacker and a task.
+- [MQ: LMD sampler and unpacker](/examples/mq-lmd/): MBS data in FairMQ devices.
+- [Online processing and FairMQ](/online/overview/): the libraries and the build options.

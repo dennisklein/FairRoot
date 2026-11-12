@@ -1,0 +1,154 @@
+---
+title: 'Log the MC steps'
+description: 'The MC step logger counts the steps of the transport engine in each volume, for each event and for the run. Load it with LD_PRELOAD into a simulation, with no change to your code.'
+sidebar:
+  order: 3
+code: [fairroot/mcsteplogger/MCStepInterceptor.cxx, fairroot/mcsteplogger/MCStepLoggerImpl.cxx, fairroot/base/sim/FairMCApplication.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The library `FairMCStepLogger` counts the steps that the transport engine makes in each volume of the
+geometry. For each event, it also counts the different tracks and particle types. You load the
+library into a simulation with `LD_PRELOAD`. FairRoot and your code stay the same, and a run without
+the library has no extra work. Use it to find the volumes that take the most steps.
+
+## How the logger works
+
+The transport engine calls `FairMCApplication::Stepping()` after each step, and `FinishEvent()` at the
+end of each event (see [How a simulation runs](/simulation/overview/)). The logger library has its
+own definitions of three functions of `FairMCApplication`, with the same symbol names as in the
+library `libBase`:
+
+<Snippet file="fairroot/mcsteplogger/MCStepInterceptor.cxx" start="// the runtime will now dispatch to these functions due to LD_PRELOAD" end="INTERCEPT_FINISHRUN(FairMCApplication" title="MCStepInterceptor.cxx" />
+
+`LD_PRELOAD` makes the dynamic linker load the logger before all other libraries. Thus its
+definitions replace the functions of `libBase` in the process. Each replacement first does its own
+work and then calls the original function:
+
+| Function | The logger first | Then |
+| --- | --- | --- |
+| [`Stepping()`](/api/FairMCApplication/#Stepping) | Counts the step for the current volume, and keeps the track number and the PDG code | The original `Stepping()` |
+| [`FinishEvent()`](/api/FairMCApplication/#FinishEvent) | Prints the counts of the event and clears them | The original `FinishEvent()` |
+| [`FinishRun()`](/api/FairMCApplication/#FinishRun) | Prints the counts of the run and writes the file `stepLogger.root` | The original `FinishRun()` |
+
+The macro for `Stepping()` shows the pattern:
+
+<Snippet file="fairroot/mcsteplogger/MCStepInterceptor.cxx" start="#define INTERCEPT_STEPPING(APP, LIB, SYMBOL)" end="^    }" title="MCStepInterceptor.cxx" />
+
+To find an original function, the logger opens `libBase` with `dlopen()`. It tries the names
+`libBase`, `libBase.so` and `libBase.dylib`. Then it gets the address of the function from its symbol
+name with `dlsym()`, and it keeps the address for later calls
+([MCStepLoggerImpl.cxx](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L133-L160)).
+
+No FairRoot library links `FairMCStepLogger`. Without `LD_PRELOAD`, the simulation runs the normal
+functions. The logger reads no environment variables and has no options.
+
+## Run a simulation with the logger
+
+CMake always builds the library ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L13),
+[mcsteplogger/CMakeLists.txt](/repo/fairroot/mcsteplogger/CMakeLists.txt)). On Linux, the file is
+`libFairMCStepLogger.so` in the library folder of the build or of the installation. These steps run
+the macro of Tutorial 1 with the logger, in your build folder `<build>`:
+
+<Steps>
+
+1. Set the environment. `config.sh` sets `FAIRLIBDIR` to the library folder, and adds this folder to
+   `LD_LIBRARY_PATH`. Thus `dlopen()` finds `libBase`.
+
+   ```sh
+   source <build>/config.sh
+   ```
+
+2. Go to a work folder. The logger writes `stepLogger.root` into the current folder, and the macro
+   writes its output files there.
+
+   ```sh
+   cd <build>/examples/simulation/Tutorial1/macros
+   ```
+
+3. Start the macro with the library in `LD_PRELOAD`. The third argument `false` switches off the
+   multithreaded mode of Geant4.
+
+   ```sh
+   LD_PRELOAD=$FAIRLIBDIR/libFairMCStepLogger.so root -q -b "$VMCWORKDIR/simulation/Tutorial1/macros/run_tutorial1.C(2,\"TGeant4\",false)"
+   ```
+
+</Steps>
+
+Give `LD_PRELOAD` only to this command, as in step 3. After `export LD_PRELOAD=…`, each later program
+of the shell also loads the logger.
+
+:::caution[One thread only]
+The logger keeps all counts in one global object without a lock. It also keeps the `TVirtualMC`
+pointer of the first step for all later steps
+([MCStepLoggerImpl.cxx](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L127),
+[L228-L232](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L228-L232)). Do not use it with
+[multithreaded Geant4](/simulation/geant4-mt/). The third argument of `run_tutorial1.C` has the
+default `true`, the multithreaded mode. Thus give `false`.
+:::
+
+On macOS, CMake names the file `libFairMCStepLogger.dylib`, and the dynamic linker reads
+`DYLD_INSERT_LIBRARIES` in place of `LD_PRELOAD`. No FairRoot test runs the logger, on Linux
+or on macOS.
+
+## The output of each event
+
+At the end of each event, the logger prints the counts of the event, before the original
+`FinishEvent()` runs:
+
+<Snippet file="fairroot/mcsteplogger/MCStepLoggerImpl.cxx" start="void flush()" title="MCStepLoggerImpl.cxx" />
+
+| Line | Stream | Content |
+| --- | --- | --- |
+| `did <n> steps` | `stderr` | The number of steps in the event |
+| `transported <n> different tracks` | `stderr` | The number of different track numbers of the stack |
+| `transported <n> different types` | `stderr` | The number of different PDG codes |
+| ` VolName <volume> COUNT <n>` | `stdout` | One line for each volume with steps in the event, in the order of the volume IDs |
+
+The logger writes directly to `std::cerr` and `std::cout`, not through FairLogger. Thus the log
+severity does not change this output. If you redirect both streams into one file, the lines of the two
+streams can be in another order.
+
+## The output of the run
+
+At the end of the run, the logger prints a ` VolName <volume> COUNT <n>` line for each volume, with
+the counts of all events. Then it writes the file `stepLogger.root`:
+
+<Snippet file="fairroot/mcsteplogger/MCStepLoggerImpl.cxx" start="void flushFinal()" title="MCStepLoggerImpl.cxx" />
+
+- The file is in the current folder. Each run overwrites it.
+- The histogram `stepLoggerHistogram` has one bin for each volume. The label of the bin is the
+  volume name, and the content is the count of the volume.
+- The logger also draws a copy of the histogram with `DrawClone()`.
+
+## What the counts mean
+
+The logger takes these values from the transport engine at each step
+([MCStepLoggerImpl.cxx](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L61-L84)):
+
+| Count | Value of the step |
+| --- | --- |
+| Steps of a volume | The volume ID from `CurrentVolID()`. All copies of a volume share one count, because the logger does not use the copy number. |
+| Volume name | `CurrentVolName()`, at the first step in the volume |
+| Tracks | `GetCurrentTrackNumber()` of the stack |
+| Types | `TrackPid()`, the PDG code of the particle |
+
+The logger counts all steps, also the steps in volumes that are not sensitive.
+
+:::caution[Each volume count is 1 too small]
+For the first step in a volume, the logger stores 0, and it adds 1 for each further step
+([MCStepLoggerImpl.cxx](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L71-L80)). Thus each
+`COUNT` and each bin of the histogram is the number of steps minus 1. The line `did <n> steps` gives
+the correct total of the event.
+:::
+
+## Related pages
+
+- [How a simulation runs](/simulation/overview/): the calls of `Stepping()` and `FinishEvent()`.
+- [Multithreaded Geant4](/simulation/geant4-mt/): the mode that the logger does not support.
+- [Measure time and memory](/tools/monitor/): the time and the memory of the tasks and events.
+- [Libraries and headers](/reference/libraries/#fairrootmcsteplogger): the library `FairRoot::MCStepLogger`.
+- [Environment variables](/reference/environment/): `config.sh` and the library path.
+- [License and citation](/project/license/): the GPL notice of the logger source files.

@@ -1,0 +1,393 @@
+---
+title: 'Configuration files'
+description: 'The files that FairRoot reads at run time: rootmanager.dat, the engine macros and YAML files, the Geant4 command files, the decay macros and the XML file of the event display.'
+sidebar:
+  order: 3
+code:
+  [
+    fairroot/base/steer/FairRootManager.cxx,
+    fairroot/base/sim/FairGenericVMCConfig.cxx,
+    fairroot/mcconfigurator/FairYamlVMCConfig.cxx,
+    fairroot/base/sim/FairMCApplication.cxx,
+    fairroot/base/steer/FairRunSim.cxx,
+    fairroot/geane/FairGeane.cxx,
+    fairroot/eventdisplay/FairEventManager.cxx,
+    fairroot/eventdisplay/FairXMLNode.cxx,
+    fairroot/eventdisplay/xml/FairXMLEveConf.cxx,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot reads some files at run time, not at build time. They set the names in the output file, the
+transport engine and its physics, the decays and the colors of the event display. This page gives,
+for each file, the code that reads it, the time when it reads it and the exact format.
+
+For the directories where FairRoot looks for these files, see
+[Environment variables](/reference/environment/). For the use of the engine configuration in a
+simulation, see [Transport engines and their configuration](/simulation/engines/).
+
+## Overview
+
+| File | Read by | When | Content |
+| --- | --- | --- | --- |
+| `rootmanager.dat` | `FairRootManager` | Each time the code asks for the tree name or the folder name | Lines `treename=` and `foldername=` |
+| `g4Config.C`, `g3Config.C`, `flConfig.C` | `FairGenericVMCConfig::Setup()` | `FairRunSim::Init()` | ROOT macro with `Config()` |
+| `g4libs.C`, `g3libs.C`, `fllibs.C` | `FairGenericVMCConfig::Setup()` | `FairRunSim::Init()` | ROOT macro with `g4libs()`, `g3libs()` or `fllibs()` |
+| `SetCuts.C` | `FairGenericVMCConfig::Setup()` | `FairRunSim::Init()` | ROOT macro with `SetCuts()` |
+| `g4ConfigPostInit.C` | `FairGenericVMCConfig::SetupPostInit()` | End of `FairRunSim::Init()` | ROOT macro with `ConfigPostInit()` |
+| `g4Config.yaml`, `g3Config.yaml` | `FairYamlVMCConfig::Setup()` | `FairRunSim::Init()` | YAML keys |
+| `g4ConfigPostInit.yaml` | `FairYamlVMCConfig::SetupPostInit()` | End of `FairRunSim::Init()` | YAML list of Geant4 commands |
+| `g4config.in`, `g4configPostInit.in` | The macros `g4Config.C` and `g4ConfigPostInit.C` | When the macro runs | Geant4 commands |
+| `DecayConfig.C`, `UserDecay.C` | `FairMCApplication::AddDecayModes()` | `AddParticles()` of the MC application, see [Order of loading](#order-of-loading) | ROOT macro with `DecayConfig()` or `UserDecayConfig()` |
+| `Geane.C`, `g3libs.C` | `FairGeane::Init()` | `Init()` of the `FairGeane` task | ROOT macro with `Config()`, `g3libs()` |
+| `run_fluka.sh` | `FairRunSim::Init()`, for `TFluka` only | Start of `Init()` | Shell script |
+| An XML file, for example `conf.xml` | `FairEventManager` | `Init()` of the event display | Colors and transparency |
+| `urqmd_pdg.dat` | `FairUrqmdGenerator` | Constructor | Particle codes |
+
+The media file, the geometry files and the ASCII parameter files have their own pages:
+[Geometry and media file format](/reference/geo-format/) and
+[ASCII parameter file format](/reference/par-format/).
+
+## rootmanager.dat
+
+`rootmanager.dat` sets the name of the output tree and the name of the main folder. FairRoot reads
+it from `$VMCWORKDIR/config/rootmanager.dat`. The file is optional, and the FairRoot repository has
+no such file. This is the parser:
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="std::string FairRootManager::GetNameFromFile" title="FairRootManager.cxx" />
+
+A file that sets both names:
+
+```txt title="$VMCWORKDIR/config/rootmanager.dat"
+treename=mytree
+foldername=myfolder
+```
+
+The format has these rules:
+
+- The key must be at the start of the line: `treename=` or `foldername=`, with no spaces.
+- FairRoot uses the first line with the key. It ignores all other lines.
+- The name is the rest of the line. FairRoot does not remove spaces, so `treename= mytree` gives a
+  name that starts with a space.
+- An empty name, as in `treename=`, gives the default name.
+- Without `VMCWORKDIR`, or without the file, FairRoot uses the defaults.
+
+[`SetTreeName()`](/api/FairRootManager/#SetTreeName) and
+[`SetFolderName()`](/api/FairRootManager/#SetFolderName) of `FairRootManager` have priority over
+the file ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L961)):
+
+| Name | First | Second | Default |
+| --- | --- | --- | --- |
+| Tree | `FairRootManager::SetTreeName()` | `treename=` | `cbmsim` |
+| Folder | `FairRootManager::SetFolderName()` | `foldername=` | `cbmroot` in a simulation, `cbmout` in `FairRunAna` and `FairRunOnline` |
+
+The names apply to the output and to the input:
+
+- [`FairRootFileSink::WriteFolder()`](/api/FairRootFileSink/#WriteFolder) writes the folder with
+  the folder name, and makes the output tree with the tree name
+  ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L238-L249)).
+- [`FairFileSource::Init()`](/api/FairFileSource/#Init) makes the input chain with the tree name.
+  For the folder, it tries the folder name, then `cbmroot`, then `cbmout`
+  ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L155-L175)).
+
+:::caution
+The input chain has no second choice for the tree name. To read a file, the reading program must
+use the same tree name as the program that wrote the file.
+:::
+
+## Engine configuration macros
+
+The macro configuration ([`FairGenericVMCConfig`](/api/FairGenericVMCConfig/)) loads ROOT macros
+with `gROOT->LoadMacro()`, and then calls one function of each macro with `gROOT->ProcessLine()`.
+The macro must define this function with the exact name.
+
+### Order of loading
+
+In a simulation with `FairRunSim`, FairRoot loads the macros in this order:
+
+1. With `TFluka` only: [`FairRunSim::Init()`](/api/FairRunSim/#Init) runs `run_fluka.sh` first. Then
+   it changes the working directory to `$PWD/fluka_out`
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L267-L297)).
+2. [`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup) loads the library macro and
+   calls `g4libs()`, `g3libs()` or `fllibs()`. For Geant3 and Geant4, it does this only if it finds
+   the library macro.
+3. It loads the configuration macro and calls `Config()`. This function must make the transport
+   engine and the stack.
+4. It loads the cuts macro and calls `SetCuts()`
+   ([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L159-L169)).
+5. [`AddDecayModes()`](/api/FairMCApplication/#AddDecayModes) loads `DecayConfig.C` and calls
+   `DecayConfig()`, if you called `SetPythiaDecayer()`. Then it loads `UserDecay.C` and calls
+   `UserDecayConfig()`, if you called `SetUserDecay()`. `AddParticles()` of the MC application
+   calls `AddDecayModes()`. Geant3 calls `AddParticles()` in its `Init()`, after step 4. Geant4
+   calls it in step 3, when `Config()` makes the `TGeant4` object.
+6. At the end, if you called `UsePostInitConfig()`,
+   [`SetupPostInit()`](/api/FairGenericVMCConfig/#SetupPostInit) loads `g4ConfigPostInit.C` and
+   calls `ConfigPostInit()`. It does this for `TGeant4` only.
+
+For the decay macros, FairRoot calls the function only if `LoadMacro()` returns 0
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1130-L1162)). For the
+other macros, it does not check the result.
+
+### The files in examples/common/gconfig
+
+The examples keep their macros in [`examples/common/gconfig/`](/repo/examples/common/gconfig/):
+
+| File | Loaded by | Function that FairRoot calls | Content |
+| --- | --- | --- | --- |
+| `g4Config.C` | `FairGenericVMCConfig::Setup()`, `TGeant4` | `Config()` | Makes a `FairFastSimRunConfiguration`, `TGeant4` and a `FairStack`. Runs `g4config.in`. |
+| `g3Config.C` | `FairGenericVMCConfig::Setup()`, `TGeant3` | `Config()` | Makes `TGeant3TGeo` or `TGeant3` and a `FairStack`. Sets the Geant3 options. |
+| `flConfig.C` | `FairGenericVMCConfig::Setup()`, `TFluka` | `Config()` | Makes `TFluka`. Does not compile, see below. |
+| `g3libs.C` | `FairGenericVMCConfig::Setup()`, `TGeant3`; `FairGeane::Init()` | `g3libs()` | An empty function |
+| `fllibs.C` | `FairGenericVMCConfig::Setup()`, `TFluka` | `fllibs()` | Loads `libfluka.so` |
+| `SetCuts.C` | `FairGenericVMCConfig::Setup()` | `SetCuts()` | Process switches and energy cuts, see [Transport engines and their configuration](/simulation/engines/) |
+| `g4ConfigPostInit.C` | `FairGenericVMCConfig::SetupPostInit()`, `TGeant4` | `ConfigPostInit()` | Runs `g4configPostInit.in` |
+| `DecayConfig.C` | `FairMCApplication::AddDecayModes()` | `DecayConfig()` | Makes `TPythia6Decayer` the external decayer |
+| `DecayConfigPythia8.C` | `FairMCApplication::AddDecayModes()`, if you give its path | `DecayConfig()` | Makes `TPythia8Decayer` the external decayer |
+| `UserDecay.C` | `FairMCApplication::AddDecayModes()` | `UserDecayConfig()` | Sets a decay of `He5`. Does not compile, see below. |
+| `Geane.C` | `FairGeane::Init()` | `Config()` | Makes `TGeant3TGeo` for GEANE, with its own process switches and cuts |
+| `run_fluka.sh` | `FairRunSim::Init()`, `TFluka` | None, FairRoot runs the script | Makes the directory `fluka_out` and links the Fluka files into it |
+| `g3Config_new.C` | No code | None | Does not compile, see below |
+| `basiclibs.C`, `rootlogon.C` | No FairRoot code | None | Empty functions |
+
+For Geant4, FairRoot looks for `g4libs.C`, but the folder has no such file. Geant4 VMC has it in
+`share/Geant4VMC-<version>/examples/macro`
+([FindGeant4VMC.cmake](/repo/cmake/modules/FindGeant4VMC.cmake#L25-L28)). FairRoot finds it there only
+through the environment variable `GEANT4VMC_MACRO_DIR`, see
+[Environment variables](/reference/environment/).
+
+:::caution[Macros that do not compile]
+- `flConfig.C` and `UserDecay.C` call `TVirtual::GetMC()`
+  ([UserDecay.C](/source/examples/common/gconfig/UserDecay.C/#L40)). There is no class `TVirtual`.
+  Use `TVirtualMC::GetMC()` in your copy.
+- `g3Config_new.C` has the number `1. e - 3`
+  ([g3Config_new.C](/source/examples/common/gconfig/g3Config_new.C/#L54)). No FairRoot code loads
+  this file.
+:::
+
+### GEANE
+
+The task [`FairGeane`](/api/FairGeane/) has its own configuration. Its `Init()` loads `g3libs.C`
+and calls `g3libs()`. Then it loads `Geane.C`, or the file that you give to the constructor, and
+calls `Config()` ([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L59-L136)).
+
+`FairGeane::Init()` does not load a cuts macro, so the constructor argument `UserCuts` has no
+effect. Set the cuts in `Geane.C`, as the example does with `SetCUTS()`.
+
+## YAML files
+
+The YAML configuration ([`FairYamlVMCConfig`](/api/FairYamlVMCConfig/)) reads one YAML file with
+yaml-cpp. It reads only the keys in the tables below. It ignores other keys without a message.
+
+### Keys for Geant4
+
+| Key | Type | Without the key | Effect |
+| --- | --- | --- | --- |
+| `Geant4_UserGeometry` | String | Fatal error `User geometry not provided` | First argument of the run configuration, for example `geomRoot` |
+| `Geant4_PhysicsList` | String | Fatal error `Physics list not provided` | The physics list, for example `QGSP_BERT_EMV` |
+| `Geant4_SpecialProcess` | String | Fatal error `Special processy not provided` | The special processes, joined with `+` |
+| `Geant4_SpecialStacking` | Boolean | `false` | Special stacking of Geant4 VMC |
+| `Geant4_Multithreaded` | Boolean | [`FairRunSim::IsMT()`](/api/FairRunSim/#IsMT) | Multithreaded Geant4, see [Multithreaded Geant4](/simulation/geant4-mt/) |
+| `UseFastSim` | Boolean | `false` | `true` makes a `FairFastSimRunConfiguration`, `false` a `TG4RunConfiguration` |
+| `Geant4_MaxNStep` | Integer | Not set | `SetMaxNStep()` of `TGeant4`. Logs `execute SetMaxNStep (<n>)`. |
+| `Geant4_Commands` | List of strings | No commands | Each command goes to `ProcessGeantCommand()` before `Init()` of the transport engine. Logs `execute command "<command>"`. |
+
+FairRoot reads these keys in
+[`SetupGeant4()`](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L161-L218). It makes the
+transport engine with the name `TGeant4`. A fatal error on this page is a log line with the severity
+`fatal`. It stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+### Keys for Geant3
+
+| Key | Type | Effect |
+| --- | --- | --- |
+| `G3_TRIG`, `G3_RAYL`, `G3_STRA`, `G3_AUTO`, `G3_ABAN`, `G3_OPTI`, `G3_CKOV` | Integer | The `TGeant3` function with the same name, for example `SetTRIG()` |
+| `G3_ERAN` | Number | `SetERAN()` |
+| `G3_SWIT` | List of 2 integers | `SetSWIT()`. Another count gives the fatal error `FairSetupGeant3: expecting 2 integers to setup G3_SWIT`. |
+| `G3_DEBU` | List of 3 integers | `SetDEBU()`. Another count gives the fatal error `FairSetupGeant3: expecting 3 integers to setup G3_DEBU`. |
+
+All Geant3 keys are optional. Without a key, FairRoot does not call the function
+([FairYamlVMCConfig.cxx](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L119-L159)). It makes
+`TGeant3TGeo` if the geometry model starts with `TGeo`, else `TGeant3`.
+
+### Keys for both transport engines
+
+| Key | Type | Effect |
+| --- | --- | --- |
+| `MonteCarlo_Process` | Map of names to integers | `SetProcess(name, value)` for each entry |
+| `MonteCarlo_Cut` | Map of names to numbers | `SetCut(name, value)` for each entry |
+| `FairStack_StoreSecondaries` | Boolean | `StoreSecondaries()` of the stack. Only `FairVMCConfig` reads it. |
+| `FairStack_MinPoints` | Integer | `SetMinPoints()` of the stack. Only `FairVMCConfig` reads it. |
+
+`SetupStack()` of your class reads the stack keys, so the stack keys depend on the class. The class
+`FairVMCConfig` of the examples reads the two keys above
+([FairVMCConfig.cxx](/source/examples/common/gconfig/FairVMCConfig.cxx/#L26-L34)).
+
+The example file for Geant4:
+
+<Snippet file="examples/common/gconfig/g4Config.yaml" start="Geant4_UserGeometry" end="FairStack_MinPoints" title="examples/common/gconfig/g4Config.yaml" />
+
+`g3Config.yaml` has the same `MonteCarlo_Process`, `MonteCarlo_Cut` and `FairStack_` entries, and
+the Geant3 keys with the values of `g3Config.C`.
+
+### The post-init file
+
+`g4ConfigPostInit.yaml` has one key, `Geant4_PostInit_Commands`: a list of Geant4 commands.
+[`FairYamlVMCConfig::SetupPostInit()`](/api/FairYamlVMCConfig/#SetupPostInit) reads it only after
+`UsePostInitConfig()`. It gives each command to `ProcessGeantCommand()` after the initialization of
+the transport engine. For a transport engine other than `TGeant4`, it logs the fatal error
+`FairYamlVMCConfig::SetupPostInit() only valid for TGeant4.`
+([FairYamlVMCConfig.cxx](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L62-L71)).
+
+<Snippet file="examples/common/gconfig/g4ConfigPostInit.yaml" start="Geant4_PostInit_Commands" end="/tracking/verbose 1" title="examples/common/gconfig/g4ConfigPostInit.yaml" />
+
+### The copy in the output file
+
+`Setup()` writes the name of the transport engine and the YAML configuration to the sink, as a
+`TObjString` with the key `SimulationSetup`
+([FairYamlVMCConfig.cxx](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L287-L297)). The
+first line is the name of the transport engine. Then follows the YAML node as yaml-cpp writes it, not
+the original text of the file. `Setup()` uses the sink without a check, so give the run a sink before
+`Init()`. Read the copy back in a ROOT macro:
+
+```cpp title="Sketch: read the stored configuration"
+TFile file("sim.root");   // the output file of the simulation
+auto setup = file.Get<TObjString>("SimulationSetup");
+std::cout << setup->GetString() << std::endl;
+```
+
+The post-init file is not in this copy.
+
+## Geant4 command files
+
+`g4config.in` and `g4configPostInit.in` are Geant4 macro files: one Geant4 command on each line.
+Lines that start with `#` are comments.
+
+| File | Run by | When | Commands that are not comments |
+| --- | --- | --- | --- |
+| `g4config.in` | `g4Config.C`, with `ProcessGeantMacro()` | In the setup, before `Init()` of the transport engine | `/cuts/setHighEdge 100 GeV`, `/tracking/verbose 0` |
+| `g4configPostInit.in` | `g4ConfigPostInit.C`, with `ProcessGeantMacro()` | After the initialization | `/tracking/verbose 1` |
+
+FairRoot does not search these files. The two macros give the path
+`$VMCWORKDIR/common/gconfig/<file>` ([g4Config.C](/source/examples/common/gconfig/g4Config.C/#L61-L67)).
+Thus they work only in the layout of the FairRoot examples. Change the path in your copy of the
+macros.
+
+The YAML configuration has no command files. It has the lists `Geant4_Commands` and
+`Geant4_PostInit_Commands` in the YAML files.
+
+## Event display XML file
+
+The event display can read the colors and the transparency of the volumes, and the colors of the MC
+tracks, from an XML file. Give the file name to
+[`FairEventManager::SetXMLConfig()`](/api/FairEventManager/#SetXMLConfig). The propagator example
+does this:
+
+<Snippet file="examples/advanced/propagator/macros/eventDisplay.C" start="FairEventManager *fMan = new FairEventManager();" end="fMan->SetXMLConfig" title="examples/advanced/propagator/macros/eventDisplay.C" />
+
+The file name is relative to the working directory. Run the macro in the directory that has the
+file. FairRoot reads the file in these cases:
+
+- [`FairEventManager::Init()`](/api/FairEventManager/#Init), after it makes the top node of the
+  geometry.
+- [`SetTransparency()`](/api/FairEventManager/#SetTransparency) with `use_xml` true. The
+  control `Global transparency` of the event display calls it when you switch its check box off.
+
+### Format
+
+This is the file of the propagator example:
+
+<Snippet file="examples/advanced/propagator/macros/conf.xml" lines="1-19" lang="xml" title="examples/advanced/propagator/macros/conf.xml" />
+
+[`LoadXMLSettings()`](/source/fairroot/eventdisplay/FairEventManager.cxx/#L298-L320) reads the
+direct children of the root element. The name of the root element has no effect.
+
+- `Detectors`: FairRoot uses only its first child element. It applies this element to the top node
+  of the geometry. Give it the name of the top node, for example `cave_1`. With another name and a
+  value in `recursive`, the element has no effect.
+- `MCTracksColors`: each child element sets the color of the MC tracks for one PDG code, with the
+  attributes `pdg` and `color`.
+
+The names of the child elements, such as `detector` and `mctrack`, have no effect.
+
+### Attributes of a volume element
+
+Each element below `Detectors` must have the four attributes, but a value can be empty
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L322-L361)):
+
+| Attribute | Meaning |
+| --- | --- |
+| `name` | The name of the geometry node, with the copy number, for example `Pixel1_0` |
+| `color` | Fill color and line color of the volume. Empty: no change. |
+| `transparency` | Transparency of the volume, an integer from 0 to 100. Empty: no change. |
+| `recursive` | Empty: no recursion. A number `n`: the same color and transparency also apply to `n` levels of daughter nodes. `0` applies them to this node only. |
+
+A nested element applies to a daughter node of the node of its parent element. FairRoot compares
+the `name` of the element with the names of the direct daughters. An element that matches no
+daughter has no effect. The nested elements come after `recursive`, so they can change the color of
+single daughters.
+
+:::caution
+FairRoot does not check that an attribute exists. It reads each attribute with
+`GetAttrib(...)->GetValue()`. A missing attribute gives a null pointer. FairRoot also does not check
+that the parser read the file ([FairXMLNode.cxx](/source/fairroot/eventdisplay/FairXMLNode.cxx/#L141-L142)).
+
+[`FairXMLNode::Copy()`](/source/fairroot/eventdisplay/FairXMLNode.cxx/#L54-L82) skips only text
+nodes. It keeps an XML comment as a child element without attributes, so do not put comments below
+`Detectors` or `MCTracksColors`. It also skips the last child node of an element with two or more
+child nodes. Keep a line break before each closing tag, so that the last child node is text.
+:::
+
+### Colors
+
+A color is a number or a name. A number is a ROOT color index. A name is one of the ROOT color names
+below, with an optional `+n` or `-n`, for example `kRed+1`
+([FairXMLEveConf.cxx](/source/fairroot/eventdisplay/xml/FairXMLEveConf.cxx/#L19-L74)):
+
+| Name | Value | Name | Value | Name | Value |
+| --- | --- | --- | --- | --- | --- |
+| `kWhite` | 0 | `kGreen` | 416 | `kOrange` | 800 |
+| `kBlack` | 1 | `kBlue` | 600 | `kSpring` | 820 |
+| `kGray` | 920 | `kYellow` | 400 | `kTeal` | 840 |
+| `kRed` | 632 | `kMagenta` | 616 | `kAzure` | 860 |
+| `kCyan` | 432 | `kViolet` | 880 | `kPink` | 900 |
+
+FairRoot treats each value that contains the letter `k` as a name. An unknown name gives 0 (white)
+plus the offset.
+
+Without an entry in `MCTracksColors`, an MC track gets its default color. `FairXMLPdgColor` has
+default colors for some PDG codes
+([FairXMLPdgColor.cxx](/source/fairroot/eventdisplay/xml/FairXMLPdgColor.cxx/#L56-L107)). For other
+PDG codes, [`GetColor()`](/api/FairXMLPdgColor/#GetColor) returns 0.
+
+## Other input files
+
+### urqmd_pdg.dat
+
+[`FairUrqmdGenerator`](/api/FairUrqmdGenerator/) needs a table that converts UrQMD particle codes
+to PDG codes. Give its path as the second argument of the constructor. Without it, FairRoot reads
+`$VMCWORKDIR/input/urqmd_pdg.dat`
+([FairUrqmdGenerator.cxx](/source/fairroot/generators/FairUrqmdGenerator.cxx/#L323-L355)). If it
+cannot open the file, it logs the fatal error `Could not open Urqmd->PDG input file <name>`.
+
+Each line has two integers: the UrQMD code and the PDG code. The UrQMD code combines the UrQMD
+particle type `ityp` and the charge `ichg`: `1000 * (ichg + 2) + ityp` for `ityp >= 0`, else
+`-1000 * (ichg + 2) + ityp`. The generator logs a warning and skips each particle without an entry.
+
+The table of the examples is
+[`examples/common/input/urqmd_pdg.dat`](/repo/examples/common/input/urqmd_pdg.dat). In the FairRoot
+examples, `VMCWORKDIR` is the folder `examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L66)), so
+the default path does not exist. Tutorial 1 gives the path of the table to the constructor
+([run_tutorial1_urqmd.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1_urqmd.C/#L80)).
+
+## Related pages
+
+- [Transport engines and their configuration](/simulation/engines/): select the transport engine and
+  use these files.
+- [Environment variables](/reference/environment/): `VMCWORKDIR`, `CONFIG_DIR` and the search order
+  of the files.
+- [Geometry and media file format](/reference/geo-format/): the `.geo` files.
+- [ASCII parameter file format](/reference/par-format/): the parameter files.
+- [Event display](/reconstruction/event-display/): the event display that reads the XML file.
+- [Common parts of the examples](/examples/common/): the folders `gconfig/`, `geometry/` and `input/`.

@@ -1,0 +1,313 @@
+---
+title: 'Tutorial 4: geometry and misalignment'
+description: 'A detector of 40 planes from a ROOT geometry file, misaligned in the simulation. The reconstruction keeps the ideal geometry, fits straight lines and writes the input for Millepede-II.'
+sidebar:
+  order: 4
+code: [examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C, examples/simulation/Tutorial4/macros/run_tutorial4.C, examples/simulation/Tutorial4/macros/run_reco.C, examples/simulation/Tutorial4/macros/plots.C, examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx, examples/simulation/Tutorial4/src/param/FairTutorialDet4MisalignPar.cxx, examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx, examples/simulation/Tutorial4/src/reco/FairTutorialDet4StraightLineFitter.cxx, examples/simulation/Tutorial4/src/reco/FairTutorialDet4MilleWriter.cxx, examples/simulation/Tutorial4/src/tools/FairTutorialDet4GeoHandler.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+Tutorial 4 simulates a telescope of 40 silicon planes. The detector reads its geometry from a ROOT file, and a
+parameter file shifts the planes during the simulation. The reconstruction keeps the ideal geometry. It makes hits,
+fits a straight line in each event and writes the input for the alignment program Millepede-II.
+
+The example does not correct the geometry. It makes the data from which an alignment program can find the shifts.
+[Alignment and misalignment](/reconstruction/alignment/) explains the alignment matrices that the simulation applies.
+
+## Files
+
+<FileTree>
+- examples/simulation/Tutorial4/
+  - src/
+    - mc/FairTutorialDet4.cxx the detector, which adds the misalignment matrices
+    - param/ the parameter containers and the container factory
+    - reco/ the hit task, the straight-line fit and the writer of the Millepede-II input
+    - tools/ the geometry handler and the class Mille
+    - data/ the MC point and the hit
+    - display/ the drawing of the MC points for eventDisplay.C
+  - parameters/example.par the shifts of the 40 planes
+  - gconfig/ the configuration macros of the transport engines
+  - macros/
+    - Create_Tutorial4_Geometry.C makes tutorial4.root
+    - run_tutorial4.C simulation
+    - run_reco.C reconstruction
+    - plots.C checks the hits
+    - eventDisplay.C and three helper macros
+    - analysis/ input files for Millepede-II and a comparison program
+    - CMakeLists.txt the tests
+</FileTree>
+
+The classes are in the library `ExSimulation4` ([src/CMakeLists.txt](/repo/examples/simulation/Tutorial4/src/CMakeLists.txt)).
+
+## Run the example
+
+The file [`macros/CMakeLists.txt`](/repo/examples/simulation/Tutorial4/macros/CMakeLists.txt) makes a shell script
+in the build folder `examples/simulation/Tutorial4/macros/` for each macro, except for `Create_Tutorial4_Geometry.C`
+and `eventDisplay.C`. It also defines three tests for each transport engine. CTest fixtures run them in this order:
+
+| Test | Macro call | Reads | Writes |
+| --- | --- | --- | --- |
+| `ex_sim_tutorial4_<engine>` | `run_tutorial4.C(10, "<engine>")` | `tutorial4.root`, `example.par` | `data/testrun_align_<engine>.root`, `data/testparams_align_<engine>.root` |
+| `ex_sim_tutorial4_reco_<engine>` | `run_reco.C("<engine>")` | The two files of the simulation, `example.par` | `data/testreco_align_<engine>.root`, `data/testmille_align_<engine>.bin` |
+| `ex_sim_tutorial4_plots_<engine>` | `plots.C(1000, 1, "align_<engine>")` | The files of the simulation and the reconstruction | `data/test.ana.root` |
+
+The transport engine is `TGeant4`. With Geant3 and the option `ENABLE_GEANT3_TESTING`, the tests also run with `TGeant3`
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt)). A test passes if its output contains
+`Macro finished successfully` within 60 seconds. Run all tests from the build folder:
+
+```bash
+ctest -R ex_sim_tutorial4
+```
+
+You can also start the scripts yourself. A script joins its arguments with commas and calls `root -q -b` with the
+macro ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). Put a string argument in double quotes inside
+single quotes:
+
+```bash
+cd <build>/examples/simulation/Tutorial4/macros
+./run_tutorial4.sh 10 '"TGeant4"'
+./run_reco.sh '"TGeant4"'
+./plots.sh 1000 1 '"align_TGeant4"'
+```
+
+For a detector without misalignment, add the argument `false` to `run_tutorial4.sh` and `run_reco.sh`. The file
+names then have no `align_`, so give `'"TGeant4"'` to `plots.sh`.
+
+## The geometry
+
+`Create_Tutorial4_Geometry.C` builds the detector with the ROOT geometry classes. It takes the media `air` and
+`silicon` from `examples/common/geometry/media.geo`. Then it places 40 silicon boxes of 80 × 80 × 0.04 cm along the
+z axis:
+
+<Snippet file="examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C" start="/^void position_detector\(\)$/" />
+
+Plane n is at z = 10 + 10·n cm. Its copy number n is the detector ID of its MC points. The macro writes two files to
+the current folder ([Create_Tutorial4_Geometry.C](/source/examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C/#L84-L90)):
+
+| File | Content | Used by |
+| --- | --- | --- |
+| `tutorial4.root` | The top volume `TOP` with the assembly `tutorial4` | The simulation |
+| `tutorial4_geomanager.root` | The `TGeoManager`, with the alignable entries `Tutorial4/det00` to `Tutorial4/det39` | No macro of the example |
+
+No test runs `Create_Tutorial4_Geometry.C`. The simulation reads the file `tutorial4.root` in
+[`examples/common/geometry/`](/repo/examples/common/geometry/), which has the same volume tree: `TOP`, `tutorial4`
+and the 40 planes `tut4_det`. `run_tutorial4.C` sets `GEOMPATH` to this folder, so put a new file there to use it.
+
+### The detector
+
+The simulation macro adds the cave and the detector:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start='FairModule* cave = new FairCave("CAVE");' end="run.AddModule(tutdet);" title="run_tutorial4.C" />
+
+- [`SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) looks for the file in `GEOMPATH` first
+  ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L188-L211)).
+- For a file name that ends with `.root`, `FairTutorialDet4::ConstructGeometry()` calls
+  [`ConstructRootGeometry()`](/api/FairModule/#ConstructRootGeometry). This function takes the first node of the
+  volume in the file and adds its volume to the cave with the copy number 0
+  ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L350-L421)). Thus the path of plane 3 is
+  `/cave_1/tutorial4_0/tut4_det_3`.
+- Each volume with `tut4` in its name is a sensitive volume
+  ([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L237-L254)).
+- `SetModifyGeometry(doAlign)` turns the misalignment on or off.
+
+With the misalignment on, the detector stores its MC points in the local coordinates of the planes:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="if (fModifyGeometry) {" end="par->setInputVersion" />
+
+`ProcessHits()` converts the position with `Gmtod()` to the coordinates of the current plane
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L181-L194)). The local
+position does not show the shift of the plane. The reconstruction converts it to a global position with its own
+geometry.
+
+## The misalignment parameters
+
+`parameters/example.par` gives the shifts and the rotations of the 40 planes:
+
+<Snippet file="examples/simulation/Tutorial4/parameters/example.par" start="[FairTutorialDet4MissallignPar]" end="0.737682 0.227649" />
+
+- `ShiftX` and `ShiftY` are in cm. The first and the last plane have no shift. Plane 1 has a shift of almost 11 cm in
+  x. All other shifts are between −1 and 1 cm. The code does not tell why plane 1 is different.
+- `ShiftZ`, `RotationX`, `RotationY` and `RotationZ` are 0 for all planes.
+- `FairTutorialDet4MisalignPar` reads these keys
+  ([FairTutorialDet4MisalignPar.cxx](/source/examples/simulation/Tutorial4/src/param/FairTutorialDet4MisalignPar.cxx/#L42-L79)).
+  The container factory registers the container as `FairTutorialDet4MissallignPar`
+  ([FairTutorialDet4ContFact.cxx](/source/examples/simulation/Tutorial4/src/param/FairTutorialDet4ContFact.cxx/#L32-L34)).
+  The block in the file and each `getContainer()` call must use this spelling.
+
+The detector requests the container in `SetParContainers()` and copies the arrays in `InitParContainers()`
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L107-L153)). After the
+MC application closes the geometry, it calls `RegisterAlignmentMatrices()`:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="void FairTutorialDet4::RegisterAlignmentMatrices()" />
+
+Each matrix is a rotation followed by the translation (`ShiftX`, `ShiftY`, `ShiftZ`). The run applies the matrices
+before the transport and undoes them after the last event.
+[Alignment and misalignment](/reconstruction/alignment/) gives the order of these steps.
+
+`TGeoRotation` takes the three rotation values as Euler angles in degrees. The hit task uses `RotationZ` as an angle
+in radians ([FairTutorialDet4HitProducerIdealMisalign.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx/#L150-L151)).
+All rotations in `example.par` are 0, so this difference has no effect here.
+
+## Simulation: run_tutorial4.C
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `nEvents` | `10` | The number of events. |
+| `mcEngine` | `"TGeant3"` | The transport engine, `TGeant3` or `TGeant4`. |
+| `doAlign` | `true` | Shift the planes, and put `align_` in the file names. |
+| `isMT` | `false` | Use multithreaded Geant4. |
+
+The macro sets two environment variables first:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start="TString dir = getenv(" end='gSystem->Setenv("GEOMPATH", tut_geomdir.Data());' title="run_tutorial4.C" />
+
+The primary generator makes one proton in each event. The momentum is 2.00 to 2.01 GeV/c, the polar angle 2.0° to
+2.1°, and the azimuth 0° to 360°. The vertex is random in x and y from −20 to 20 cm, at z = 0
+([run_tutorial4.C](/source/examples/simulation/Tutorial4/macros/run_tutorial4.C/#L100-L114)). These values keep
+the protons inside the planes.
+
+The runtime database reads `example.par` and writes the ROOT parameter file:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start="Bool_t kParameterMerged = kTRUE;" end="rtdb->setOutput(parOut);" title="run_tutorial4.C" />
+
+The macro calls `saveOutput()` after `Run()`. At that time, the MC application has undone the misalignment, so the
+container `FairGeoParSet` holds the ideal geometry. With `isMT = true`, the MC application skips this step
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L376-L378)).
+
+### The gconfig folder
+
+`run_tutorial4.C` sets `CONFIG_DIR` to the folder `gconfig/` of the example. It does not call
+`SetSimulationConfig()`, so the run uses [`FairGenericVMCConfig`](/api/FairGenericVMCConfig/)
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L309)). This class looks in `CONFIG_DIR` first
+for `g3Config.C` or `g4Config.C` and for `SetCuts.C`. Then it runs these macros
+([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L153-L169)). It also logs a
+warning that this way is deprecated
+([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L26-L29)).
+
+Each file of the folder also exists in [`examples/common/gconfig/`](/repo/examples/common/gconfig/). The files
+differ in these points:
+
+| File | Tutorial 4 | `examples/common/gconfig/` |
+| --- | --- | --- |
+| `SetCuts.C` | `MULS` 0: no multiple scattering | `MULS` 1 |
+| `g4Config.C` | `TG4RunConfiguration` of Geant4 VMC. Reads `g4config.in` from `CONFIG_DIR`. | `FairFastSimRunConfiguration`: a `TG4RunConfiguration` with the FairRoot fast simulation. Reads `common/gconfig/g4config.in`. |
+| Other macros | The same, except for log lines and the form of some calls | |
+
+The code does not tell why the example has its own folder. For the physics, the difference is `MULS`. Without
+multiple scattering and without a magnetic field, each proton moves on a straight line. The reconstruction fits
+straight lines and has no term for scattering.
+
+## Reconstruction: run_reco.C
+
+`run_reco.C(mcEngine, AlignDone)` reads the MC file and the parameter file of the simulation. `AlignDone` selects
+the file names with `align_`. The macro adds no alignment matrices. Thus `FairRunAna` uses the ideal geometry of the
+container `FairGeoParSet` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L145-L151)). The macro adds
+three tasks:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_reco.C" start="FairTutorialDet4HitProducerIdealMisalign* hitProducer" end="fRun->AddTask(writer);" title="run_reco.C" />
+
+### Hits
+
+The hit task reads the branch `TutorialDetPoint` and writes the branch `TutorialDetHit`. With
+`DoMisalignment(kFALSE)`, it converts the local position of each MC point with the geometry:
+
+<Snippet file="examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx" start="x = point->GetX();" end="nHits++;" />
+
+- `LocalToGlobal()` goes to the node `/cave_1/tutorial4_0/tut4_det_<detID>` and calls `LocalToMaster()`
+  ([FairTutorialDet4GeoHandler.cxx](/source/examples/simulation/Tutorial4/src/tools/FairTutorialDet4GeoHandler.cxx/#L45-L58)).
+- `GetHitErr(0.1)` gives a Gaussian smearing with σ = 0.1 cm, limited to ±3σ. The hit error is 0.1 cm in x and y.
+- The task logs each position with the severity `info`. With many events, these lines fill the log.
+
+The geometry has each plane at its ideal position. Thus each hit is off its true position by minus the shift of its
+plane. The hits of a track are not on a straight line. With `DoMisalignment(kTRUE)`, the task subtracts the
+shifts from the local position instead. It does not convert the result to global coordinates, so these hits keep a z
+near 0 ([FairTutorialDet4HitProducerIdealMisalign.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx/#L148-L175)).
+
+### Straight-line fit
+
+`FairTutorialDet4StraightLineFitter` fits x(z) and, with version 2, also y(z) with a straight line. It stores one
+[`FairTrackParam`](/api/FairTrackParam/) with the offsets at z = 0 and the slopes in the branch `TutorialDetTrack`.
+It skips an event with two hits in one plane, and then leaves the track of the previous event in the branch
+([FairTutorialDet4StraightLineFitter.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4StraightLineFitter.cxx/#L55-L165)).
+
+### Input for Millepede-II
+
+`FairTutorialDet4MilleWriter` makes the same check of the event. With version 2, which `run_reco.C` sets, it then
+gives two measurements for each hit to the class `Mille`:
+
+<Snippet file="examples/simulation/Tutorial4/src/reco/FairTutorialDet4MilleWriter.cxx" start="Float_t hitY = hit->GetY();" end="fMille->end();" />
+
+The local parameters are the offset and the slope in x and in y. The global parameters are the shifts of the
+planes. The label is n + 1 for x and n + 101 for y, where n is the index of the hit. The residual is the fit minus
+the hit, with σ = 0.1 cm.
+
+`Init()` adds `.bin` to the file name. With `SetWriteAscii(kTRUE)`, the writer makes a text file with `.ascii`
+instead ([FairTutorialDet4MilleWriter.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4MilleWriter.cxx/#L57-L64)).
+The text file is for debugging, because `pede` cannot read it
+([Mille.h](/source/examples/simulation/Tutorial4/src/tools/Mille.h/#L13-L31)).
+
+:::caution[Labels and the end of the file]
+The labels come from the index of the hit, not from the detector ID. They name the correct plane only if the event
+has one hit in each plane, in the order of the planes. Also, the writer never deletes its `Mille` object. Thus
+nothing closes the file, and its last records can be missing.
+:::
+
+### Check the hits: plots.C
+
+`plots.C(nEvents, iout, mcEngine)` reads the files of the simulation and the reconstruction. Its third argument is
+the middle part of the file names, for example `align_TGeant4`. For each hit, the macro fills histograms with the
+position of the MC point minus the position of the hit. With `iout = 1`, it writes them to `data/test.ana.root`.
+
+The local x and y of a plane are equal to the global x and y of the ideal geometry. Thus the differences show the
+smearing, not the shifts. The macro reports success if it reads at least 10 events with more than 35 hits for each
+event on average. Also, the standard deviation of the differences must be within 0.03 cm (x) and 0.04 cm (y) of
+0.1 cm ([plots.C](/source/examples/simulation/Tutorial4/macros/plots.C/#L193-L199)).
+
+## Determine the shifts with Millepede-II
+
+Millepede-II is not part of FairRoot, and no test runs it. See the
+[Millepede-II documentation](https://www.desy.de/~kleinwrt/MP2/doc/html/index.html) for its program `pede`. The
+folder `macros/analysis/` has two input files for `pede`:
+
+- [`mp2str.txt`](/repo/examples/simulation/Tutorial4/macros/analysis/mp2str.txt) is the steering file. It names the
+  constraint file `mp2con.txt` and the binary file `mp2tst.bin`, the default name of the writer. Change this name to
+  the file of `run_reco.C`.
+- [`mp2con.txt`](/repo/examples/simulation/Tutorial4/macros/analysis/mp2con.txt) fixes four global parameters at 0:
+
+<Snippet file="examples/simulation/Tutorial4/macros/analysis/mp2con.txt" start="Constraint  0.0" end="140    1.00000" lang="text" />
+
+The labels 1 and 40 are the x shifts of the first and the last plane, 101 and 140 their y shifts. A straight line
+absorbs a common shift of all planes and a shift that changes linearly with z. Two fixed planes in each direction
+remove these freedoms. `example.par` gives these two planes no shift.
+
+`compare.cxx` is a standalone program that CMake does not build. It compares the result file `millepede.res` of
+`pede` with the true shifts in `shifts.txt`. It expects each result to be the negative of the shift
+([compare.cxx](/source/examples/simulation/Tutorial4/macros/analysis/compare.cxx/#L138-L148)). Only
+`parameters/create_misalign_parameter.C` writes `shifts.txt`, but ROOT cannot compile this macro: it declares the
+variable `myfile` twice ([create_misalign_parameter.C](/source/examples/simulation/Tutorial4/parameters/create_misalign_parameter.C/#L174-L175)).
+
+To correct the geometry with a result, make one matrix for each plane and give the matrices to `FairRunAna`.
+[Alignment and misalignment](/reconstruction/alignment/) shows how.
+
+## Other macros
+
+No test runs these macros:
+
+| Macro | What it does |
+| --- | --- |
+| `eventDisplay.C(mcEngine, alignDone)` | Shows the MC tracks and the MC points of a simulation. |
+| `run_tutorial4_createMatrices.C` | Initializes a simulation without misalignment and gets the matrices with `getMisalignmentMatrices()`. Writes them to `misalignmentMatrices.txt`: the path, 9 rotation values and 3 translation values, one value on each line. |
+| `run_tutorial4_createGeometryFile.C` | Simulates one event without `example.par` and calls `CreateGeometryFile()`. Writes `data/makeGeoFile_<engine>_full.root`. |
+| `run_tutorial4_createParameterFile.C` | Reads `data/makeGeoFile_TGeant3_full.root` and gives the inner planes random x and y shifts from −1 to 1 cm. Writes `example.par` and `misalignment.txt` to the current folder. Its `example.par` has the matrix elements `R11` to `R33` and `TX` to `TZ`, which `FairTutorialDet4MisalignPar` cannot read. |
+
+## Related pages
+
+- [Alignment and misalignment](/reconstruction/alignment/): the alignment matrices and when the runs apply them.
+- [Geometry and materials](/simulation/geometry/): geometry files, media and `GEOMPATH`.
+- [Transport engines and their configuration](/simulation/engines/): the configuration macros and `CONFIG_DIR`.
+- [Parameters and the runtime database](/concepts/parameters/): parameter containers and container factories.
+- [ASCII parameter file format](/reference/par-format/): the format of `example.par`.
+- [Track parameters and propagation](/reconstruction/tracks/): `FairTrackParam` and the other track classes.
+- [Tests](/tools/testing/): how CTest runs the examples.

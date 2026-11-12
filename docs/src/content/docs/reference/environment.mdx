@@ -1,0 +1,304 @@
+---
+title: 'Environment variables'
+description: 'The environment variables that FairRoot reads at run time and at configure time, the files that they locate, and the scripts that CMake writes to set them.'
+sidebar:
+  order: 2
+code:
+  [
+    fairroot/base/sim/FairModule.cxx,
+    fairroot/base/steer/FairRunSim.cxx,
+    fairroot/mcconfigurator/FairYamlVMCConfig.cxx,
+    fairroot/base/sim/FairGenericVMCConfig.cxx,
+    fairroot/base/sim/FairMCApplication.cxx,
+    fairroot/base/steer/FairRootManager.cxx,
+    fairroot/parmq/ParameterMQServer.cxx,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot finds the geometry files, the configuration of the transport engine and some input files
+through environment variables. Most of these variables are directories. If a variable has a wrong
+value, FairRoot does not find the file that it needs.
+
+CMake writes the script `config.sh`, which sets the variables in a shell. This page lists each
+variable, the code that reads it, and the value that FairRoot uses when the variable is not set.
+
+## Summary
+
+| Variable | What it gives | Read by | When it is not set |
+| --- | --- | --- | --- |
+| `VMCWORKDIR` | The base directory of the project | Many classes, see [VMCWORKDIR](#vmcworkdir-the-project-directory) | FairRoot cannot make its default paths |
+| `GEOMPATH` | The directory of the geometry files and of the media file | [`FairModule::SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName), [`FairRunSim::SetMaterials()`](/api/FairRunSim/#SetMaterials) | `$VMCWORKDIR/geometry/` |
+| `CONFIG_DIR` | The directory of the engine configuration and of the macros for cuts, decays and Geane | The simulation configuration, [`FairMCApplication::AddDecayModes()`](/api/FairMCApplication/#AddDecayModes), [`FairGeane::Init()`](/api/FairGeane/#Init) | `$VMCWORKDIR/gconfig/` |
+| `GEANT4VMC_MACRO_DIR` | The directory of `g4libs.C` from Geant4 VMC | [`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup), with Geant4 only | FairRoot looks for `g4libs.C` in `CONFIG_DIR` and then in the working directory |
+| `DDS_SESSION_ID` | The ID of a DDS session | [`ParameterMQServer::InitTask()`](/api/ParameterMQServer/#InitTask) | The name of the output file does not change |
+| `FAIRMQ_SEVERITY` | The console severity of a FairMQ device | FairMQ, see [Variables for FairMQ devices](#variables-for-fairmq-devices) | The option `--severity` applies |
+| `PWD` | The working directory | `FairRunSim::Init()`, with the engine `TFluka` only ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L291-L295)) | Shells set it |
+| `USER` | The user name in the file header of a new LMD file | `f_evt_put_open()` of the MBS API ([f_evt.c](/source/fairroot/mbsapi/f_evt.c/#L1389-L1392)) | The field stays empty |
+
+The C++ code of FairRoot reads no other environment variable. The scripts of CMake set more
+variables, for ROOT and for the external packages. See
+[The scripts that CMake writes](#the-scripts-that-cmake-writes).
+
+## VMCWORKDIR: the project directory
+
+`VMCWORKDIR` is the base directory of your project. When you give no other location, FairRoot
+looks for its input in fixed subdirectories of `VMCWORKDIR`:
+
+| Path | Content | Read by |
+| --- | --- | --- |
+| `$VMCWORKDIR/geometry/` | The geometry files and the media file | [`FairModule::SetGeometryFileName()`](/source/fairroot/base/sim/FairModule.cxx/#L204-L210), [`FairRunSim::SetMaterials()`](/source/fairroot/base/steer/FairRunSim.cxx/#L349-L352) |
+| `$VMCWORKDIR/gconfig/` | The configuration of the transport engine, and the macros for cuts, decays and Geane | See [CONFIG_DIR](#config_dir-engine-configuration-and-macros) |
+| `$VMCWORKDIR/input/urqmd_pdg.dat` | The table that converts UrQMD particle codes to PDG codes | [`FairUrqmdGenerator`](/source/fairroot/generators/FairUrqmdGenerator.cxx/#L323-L332), when the constructor gets no table |
+| `$VMCWORKDIR/config/rootmanager.dat` | The names of the output tree and of the output folder | [`FairRootManager`](/source/fairroot/base/steer/FairRootManager.cxx/#L898-L930) |
+
+Set `VMCWORKDIR` before you start a macro. Usually `config.sh` sets it. The scripts of CMake give it
+these values:
+
+| Script | Value of `VMCWORKDIR` |
+| --- | --- |
+| `config.sh` in the build directory of FairRoot | `<source directory>/examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L66)) |
+| `FairRootConfig.sh` in `<prefix>/bin` | `<prefix>/share/fairbase/examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L342)) |
+| `config.sh` of a project from the project template | The source directory of the project ([template](/repo/templates/project_root_containers/CMakeLists.txt#L59)) |
+
+The project template has the folders `gconfig/` and `geometry/` directly in its source directory.
+Thus the default paths find its files. The FairRoot examples keep these files in
+`examples/common/gconfig/` and `examples/common/geometry/`. Thus each simulation macro of the
+examples sets `GEOMPATH` and `CONFIG_DIR` itself, see [Set the variables in a macro](#set-the-variables-in-a-macro).
+
+The default path of the UrQMD table does not exist in the FairRoot examples. The UrQMD macro of
+Tutorial 1 gives the table in `examples/common/input/` to the constructor
+([run_tutorial1_urqmd.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1_urqmd.C/#L25-L25)).
+
+### The names of the output tree and folder
+
+`rootmanager.dat` is a text file with the lines `treename=<name>` and `foldername=<name>`. Without
+`VMCWORKDIR`, or without the file, FairRoot uses the default names: `cbmsim` for the tree, and
+`cbmroot` or `cbmout` for the folder
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L961)). The section
+[rootmanager.dat](/reference/config-files/#rootmanagerdat) gives the format and the priorities. For
+the other configuration files, see [Configuration files](/reference/config-files/).
+
+## GEOMPATH: geometry and media files
+
+`GEOMPATH` is one directory. FairRoot appends the file name to it. The geometry files of the modules
+and the media file use two different searches.
+
+### Geometry files
+
+[`FairModule::SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) looks for the file in
+this order:
+
+1. A name that starts with `/` is an absolute path. FairRoot uses only this path.
+2. If `GEOMPATH` is set, FairRoot tries `$GEOMPATH/<name>`.
+3. Then it tries `$VMCWORKDIR/geometry/<name>`.
+4. If no file exists, FairRoot logs a fatal error:
+   `<module name>: geometry file <name> not found in standard path`. Without a fatal handler of
+   FairLogger, the program continues with an empty file name, see
+   [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+<Snippet file="fairroot/base/sim/FairModule.cxx" start="void FairModule::SetGeometryFileName" title="FairModule.cxx" />
+
+### The media file
+
+[`FairRunSim::SetMaterials()`](/api/FairRunSim/#SetMaterials) does not check that the file exists.
+If `GEOMPATH` is set, it uses `$GEOMPATH/<name>`. Else it uses `$VMCWORKDIR/geometry/<name>`. It logs
+the result as `Media file used: <path>`.
+
+<Snippet file="fairroot/base/steer/FairRunSim.cxx" start="void FairRunSim::SetMaterials" title="FairRunSim.cxx" />
+
+:::caution
+When `GEOMPATH` is set, the media file must be in `GEOMPATH`. Other than for the geometry files,
+`SetMaterials()` does not try `$VMCWORKDIR/geometry/` after `GEOMPATH`.
+:::
+
+Both functions read `GEOMPATH` when you call them, not at `Init()`. Set `GEOMPATH` before you call
+`SetMaterials()` and `SetGeometryFileName()`. For the geometry and the media files themselves, see
+[Geometry and materials](/simulation/geometry/).
+
+## CONFIG_DIR: engine configuration and macros
+
+The configuration of the transport engine is a YAML file or a set of ROOT macros. FairRoot finds each
+of these files with the same rule:
+
+1. A name that contains `/` is a path. FairRoot uses it as it is.
+2. Else FairRoot looks for the name in `CONFIG_DIR`, with `gSystem->FindFile()`.
+3. Else FairRoot uses `$VMCWORKDIR/gconfig/<name>`.
+
+This is the rule for the YAML configuration in
+[`FairYamlVMCConfig`](/api/FairYamlVMCConfig/):
+
+<Snippet file="fairroot/mcconfigurator/FairYamlVMCConfig.cxx" start="std::string FairYamlVMCConfig::ObtainYamlFileName" title="FairYamlVMCConfig.cxx" />
+
+When FairRoot uses a file from `CONFIG_DIR`, it logs a line with the directory. For the YAML
+configuration, the line also gives the full path of the file:
+`---------------CONFIG_DIR is used: <CONFIG_DIR> to get "<path of the file>"`.
+
+These files follow the rule:
+
+| File | Default name | Set another name with | Read by |
+| --- | --- | --- | --- |
+| Engine configuration, YAML | `g4Config.yaml`, `g3Config.yaml` | [`FairRunSim::SetUserConfig()`](/api/FairRunSim/#SetUserConfig) | [`FairYamlVMCConfig::Setup()`](/api/FairYamlVMCConfig/#Setup) |
+| Engine configuration, macro | `g4Config.C`, `g3Config.C`, `flConfig.C` | [`FairRunSim::SetUserConfig()`](/api/FairRunSim/#SetUserConfig) | [`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup) |
+| Cuts macro | `SetCuts.C` | [`FairRunSim::SetUserCuts()`](/api/FairRunSim/#SetUserCuts) | [`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup) |
+| Configuration after the engine initialization (Geant4 only) | `g4ConfigPostInit.yaml` or `g4ConfigPostInit.C` | [`FairYamlVMCConfig::UsePostInitConfig()`](/api/FairYamlVMCConfig/#UsePostInitConfig), [`FairGenericVMCConfig::UsePostInitConfig()`](/api/FairGenericVMCConfig/#UsePostInitConfig) | `SetupPostInit()` of the two classes |
+| Pythia decayer macro | `DecayConfig.C` | [`FairRunSim::SetPythiaDecayer(const TString&)`](/api/FairRunSim/#SetPythiaDecayer-2) | [`FairMCApplication::AddDecayModes()`](/api/FairMCApplication/#AddDecayModes) |
+| User decay macro | `UserDecay.C` | [`FairRunSim::SetUserDecay(const TString&)`](/api/FairRunSim/#SetUserDecay) | [`FairMCApplication::AddDecayModes()`](/api/FairMCApplication/#AddDecayModes) |
+| Geane configuration | `Geane.C` | The constructor of [`FairGeane`](/api/FairGeane/) | [`FairGeane::Init()`](/api/FairGeane/#Init) |
+| Fluka start script | `run_fluka.sh` | None | `FairRunSim::Init()`, with `TFluka` only ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L267-L297)) |
+
+The cuts macro and the Fluka start script have no step 1: FairRoot always looks in `CONFIG_DIR`
+first. The library macros of the macro configuration have their own search:
+
+| Library macro | Search order |
+| --- | --- |
+| `g4libs.C` (Geant4) | `CONFIG_DIR`, then `GEANT4VMC_MACRO_DIR` (the working directory if the variable is not set). If no file exists, FairRoot loads no library macro. |
+| `g3libs.C` (Geant3) | `CONFIG_DIR`, then `$VMCWORKDIR/gconfig/g3libs.C` if it exists. Else FairRoot loads no library macro. |
+| `fllibs.C` (Fluka) | `CONFIG_DIR`, then `$VMCWORKDIR/gconfig/fllibs.C` |
+| `g3libs.C` for Geane | `CONFIG_DIR`, then `$VMCWORKDIR/gconfig/g3libs.C` |
+
+[`FairRunSim::Init()`](/api/FairRunSim/#Init) reads `CONFIG_DIR` for the engine configuration, the
+decay macros and the configuration after the initialization. Set `CONFIG_DIR` before you call
+`Init()`. `FairGeane` reads it in its own `Init()`. For the content of the files, see
+[Transport engines and their configuration](/simulation/engines/).
+
+## GEANT4VMC_MACRO_DIR: the Geant4 VMC macros
+
+Only [`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup) reads `GEANT4VMC_MACRO_DIR`,
+for the engine `TGeant4`. It looks for `g4libs.C` in `CONFIG_DIR` first, and then in this directory:
+
+<Snippet file="fairroot/base/sim/FairGenericVMCConfig.cxx" start="if (TString(gSystem->FindFile(config_dir.Data(), g4LibMacro))" end='LibFunction = "g4libs()";' title="FairGenericVMCConfig.cxx" />
+
+:::caution[Upper case and lower case]
+The scripts of CMake export `Geant4VMC_MACRO_DIR` ([config.sh.in](/repo/cmake/scripts/config.sh.in#L13)).
+The code reads `GEANT4VMC_MACRO_DIR` ([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L38)).
+The names of environment variables are case sensitive. Thus the scripts do not set the variable that
+FairRoot reads. If you need this search, export `GEANT4VMC_MACRO_DIR` yourself.
+:::
+
+The YAML configuration does not use library macros, and it does not read `GEANT4VMC_MACRO_DIR`.
+
+## Set the variables in a macro
+
+A macro can set the variables for its own process with `gSystem->Setenv()`. Each simulation macro of
+the examples sets `GEOMPATH` and `CONFIG_DIR` from `VMCWORKDIR` at its start:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string dir = getenv("VMCWORKDIR");' end='gSystem->Setenv("CONFIG_DIR"' title="run_tutorial1.C" />
+
+Set each variable before the first call that reads it:
+
+| Variable | Set it before |
+| --- | --- |
+| `GEOMPATH` | `FairRunSim::SetMaterials()` and `FairModule::SetGeometryFileName()` |
+| `CONFIG_DIR` | `FairRunSim::Init()`, or `FairGeane::Init()` |
+| `VMCWORKDIR` | The start of the macro. Most simulation macros of the examples read it in their first line. |
+
+To write a complete simulation macro, see [Write a simulation macro](/simulation/run-macro/).
+
+## Variables for FairMQ devices
+
+`ParameterMQServer` adds the DDS session to the name of its output file. If `DDS_SESSION_ID` is set and
+the name has more than five characters, it replaces the last five characters with
+`.<session ID>.root`. The code expects a name that ends with `.root`:
+
+<Snippet file="fairroot/parmq/ParameterMQServer.cxx" start='if (const char* dds_session_env = ::getenv("DDS_SESSION_ID"))' title="ParameterMQServer.cxx" />
+
+With the output name `params.root` and the session `abc`, the file is `params.abc.root`. The file sink
+of the pixel example does the same with its option `file-name`
+([FairMQPixelFileSink.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx/#L44-L50)).
+
+The FairRoot devices start with [`FairRunFairMQDevice.h`](/source/fairroot/fairmq/FairRunFairMQDevice.h/).
+With FairMQ 1.4.34 or later, this header includes `fairmq/runDevice.h` of FairMQ
+([FairRunFairMQDevice.h](/source/fairroot/fairmq/FairRunFairMQDevice.h/#L23-L36)). Thus FairMQ reads
+its own variables for these devices. For example, `FAIRMQ_SEVERITY` replaces the value of
+`--severity` when `--log-to-file` is not set. See [Logging in the FairMQ documentation](https://fairrootgroup.github.io/FairMQ/tools/logging/).
+
+## The scripts that CMake writes
+
+The top-level `CMakeLists.txt` of FairRoot calls `WRITE_CONFIG_FILE()` four times
+([CMakeLists.txt](/repo/CMakeLists.txt#L340-L344)). The macro is in
+[WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake). It writes these files:
+
+| File | Use |
+| --- | --- |
+| `config.sh`, `config.csh` | In the build directory. The `.sh` script sets the environment for the build tree. |
+| `FairRootConfig.sh`, `FairRootConfig.csh` | `make install` copies them to `<prefix>/bin`. The `.sh` script sets the environment for the installation. |
+| `check_system.sh`, `check_system.csh` | Called by the scripts above. `make install` copies them to `<prefix>/libexec`. |
+
+:::caution
+The `.csh` scripts do not work in the C shell. The template
+[config.csh.in](/repo/cmake/scripts/config.csh.in#L5) loads `check_system.csh` with `.`, which is
+not a command of the C shell. Thus `tcsh` does not load the file and stops with the error
+`same_system: Undefined variable.` The last three `setenv` lines of the template use the form
+`setenv VAR=value`, which the C shell also does not accept. Use `config.sh` in `bash`.
+:::
+
+A project from the project template calls `WRITE_CONFIG_FILE(config.sh)` too
+([template](/repo/templates/project_root_containers/CMakeLists.txt#L149)). Load the script into the
+shell with `source`:
+
+```sh
+source <build directory>/config.sh
+```
+
+First, the script compares the system with the system at configure time. On Linux, it compares the
+output of `lsb_release -sd` and `uname -m`. On macOS, it compares `uname -sr` and `uname -m`
+([check_system.sh.in](/repo/cmake/scripts/check_system.sh.in),
+[check_system_mac.sh.in](/repo/cmake/scripts/check_system_mac.sh.in)). If a value is different, the script
+prints a message and does not set the environment. It exports only `Linux_Flavour_`, `System_` and
+`same_system`. Thus, after an update of the operating system, the script sets no environment. Then run
+CMake again to write a new script.
+
+If the system is the same, the script sets these variables:
+
+<Snippet file="cmake/scripts/config.sh.in" start="export Linux_Flavour_" end="^fi" lang="sh" title="cmake/scripts/config.sh.in" />
+
+| Variable | Value |
+| --- | --- |
+| `SIMPATH` | The value of the environment variable `SIMPATH` at configure time |
+| `FAIRROOTPATH` | The CMake variable `FAIRROOTPATH`. The CMake code of FairRoot does not set it, so it is empty in the scripts of FairRoot. In a project, `FindFairRoot.cmake` sets it to the prefix of FairRoot. |
+| `VMCWORKDIR` | See [VMCWORKDIR](#vmcworkdir-the-project-directory) |
+| `FAIRLIBDIR` | The library directory: `<build directory>/lib`, or the library directory of the installation |
+| `ROOT_INCLUDE_PATH` | The include directories of Geant3 and the include directory of the FairRoot installation, also in the `config.sh` of the build directory ([CMakeLists.txt](/repo/CMakeLists.txt#L284)). ROOT uses this path to find headers for macros. The script replaces the old value. |
+| `LD_LIBRARY_PATH` (Linux), `DYLD_LIBRARY_PATH` (macOS) | The library directories of FairRoot, Pythia6, Geant3 and Geant4 VMC, and `$SIMPATH/lib`, in front of the old value |
+| `PATH` | The `bin` directory of ROOT, in front of the old value |
+| `PYTHONPATH` | `<source directory>/python` and directories in `SIMPATH`. The script replaces the old value. |
+| `ROOT_LIBRARY_DIR`, `ROOT_LIBRARIES`, `Geant3_INCLUDE_DIRS` | The values that CMake found |
+| `Geant4_INCLUDE_DIRS`, `Geant4VMC_INCLUDE_DIRS`, `Geant4VMC_LIBRARY_DIR`, `Geant4VMC_MACRO_DIR`, `PYTHIA6_LIBRARY_DIR`, `G3SYS`, `Geant3_LIBRARY_DIR`, `USE_VGM`, `PYTHIA8DATA` | The values that CMake found. `USE_VGM` is `1`. The script sets them when the CMake variable `FULL_CONFIG_FILE` is true (default). |
+| The data set variables of Geant4 | One variable for each data set that the CMake package of Geant4 lists ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L15-L28)). The script also sets them only when `FULL_CONFIG_FILE` is true. |
+
+Of these variables, the C++ code of FairRoot reads only `VMCWORKDIR`.
+
+### The scripts of the tests
+
+CTest runs the example macros with shell scripts that
+[`GENERATE_ROOT_TEST_SCRIPT()`](/reference/cmake/#generate_root_test_script) writes. These scripts do
+not use `config.sh`. Each script sets its own environment, with `VMCWORKDIR`, `ROOT_INCLUDE_PATH`,
+`LD_LIBRARY_PATH` and the data set variables of Geant4. Then it loads `env.sh` of Geant4, if this file
+exists ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). [Macro tests](/tools/testing/#macro-tests)
+shows how the script then runs the macro.
+
+## Variables at configure time
+
+CMake reads some environment variables when it configures FairRoot or a project:
+
+| Variable | Read by | Effect |
+| --- | --- | --- |
+| `SIMPATH` | [CMakeLists.txt](/repo/CMakeLists.txt#L71-L75) of FairRoot | CMake adds it to the front of `CMAKE_PREFIX_PATH`, and puts `$SIMPATH/lib` into `LD_LIBRARY_PATH` of the scripts. |
+| `SIMPATH`, `FAIRSOFT_ROOT` | [CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L18-L46) | If you set no C++ standard and the target `ROOT::Core` does not exist yet, CMake looks for `fairsoft-config` in their `bin` directories and takes the standard from it. See [C++ standard](/reference/cmake/#c-standard). |
+| `FAIRROOTPATH` | [FindFairRoot.cmake](/repo/cmake/modules/FindFairRoot.cmake#L13-L21) | The prefix of FairRoot for a project. A CMake variable `FAIRROOTPATH` has priority. Without both, `CMAKE_PREFIX_PATH` must find FairRoot. |
+| `FAIRROOTPATH`, `SIMPATH` | [The project template](/repo/templates/project_root_containers/CMakeLists.txt#L19-L33) | The template stops with an error if `FAIRROOTPATH` is not set. It adds `SIMPATH` to the front of `CMAKE_PREFIX_PATH`. |
+| `PYTHIA8_DIR` | [FindPythia8.cmake](/repo/cmake/modules/FindPythia8.cmake#L18-L24) | A directory in which CMake looks for Pythia8 |
+| `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` | [ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L77-L81) | `FAIRROOT_GENERATE_DICTIONARY()` copies the value into the script that makes the dictionary. |
+
+For the CMake functions and options, see [CMake reference](/reference/cmake/) and
+[Use FairRoot in a CMake project](/start/cmake/).
+
+## Related pages
+
+- [Configuration files](/reference/config-files/): the files that these variables locate.
+- [Write a simulation macro](/simulation/run-macro/): a macro that sets `GEOMPATH` and `CONFIG_DIR`.
+- [Transport engines and their configuration](/simulation/engines/): the YAML files and the macros.
+- [Geometry and materials](/simulation/geometry/): the geometry files and the media file.
+- [Install FairRoot](/start/install/): the build and the installation that write the scripts.

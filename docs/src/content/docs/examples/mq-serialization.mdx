@@ -1,0 +1,270 @@
+---
+title: 'MQ: serialization'
+description: 'Four FairMQ devices send digis as a ROOT TMessage and hits as a Boost archive, with a Boost header part. A RooFit program makes the input. The devices, scripts and test.'
+sidebar:
+  order: 12
+code: [examples/MQ/serialization/sampler.cxx, examples/MQ/serialization/processor.cxx, examples/MQ/serialization/sink.cxx,
+  examples/MQ/serialization/ExHeader.h, examples/MQ/serialization/data/MyDigi.h, examples/MQ/serialization/data/MyHit.h,
+  examples/MQ/serialization/data_generator/dataGenerator.cxx, examples/MQ/serialization/data_generator/RooDataGenerator.h,
+  examples/MQ/serialization/data_generator/RootOutFileManager.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+This example sends FairRoot data classes between FairMQ devices in two formats. A sampler reads digis
+from a ROOT file and sends them as a `TMessage`, with a header part in a Boost archive. Two
+processors make hits from the digis and send them as a Boost archive. A sink writes the hits into a
+ROOT file.
+
+## The devices
+
+| Device | Program | Channels in the start script | Options |
+| --- | --- | --- | --- |
+| Sampler | `ex-serialization-sampler` | `data1`: push, binds `tcp://localhost:5565` | `--input-file` (no default) |
+| Processor, two of them | `ex-serialization-processor` | `data1`: pull, connects to port 5565. `data2`: push, connects to port 5570. | `--num-msgs` (0). The processor does not read it. |
+| Sink | `ex-serialization-sink` | `data2`: pull, binds `tcp://localhost:5570` | `--output-file` (no default), `--num-msgs` (0: no limit) |
+
+Each program includes `FairRunFairMQDevice.h` and defines `addCustomOptions()` and
+`fairGetDevice()`, see [Write the main function](/online/fairmq-devices/#write-the-main-function).
+The device classes are structs in the three source files. A fourth program,
+`ex-serialization-data-generator`, makes the input file.
+
+Each message has two parts:
+
+| Step | Part 0 | Part 1 |
+| --- | --- | --- |
+| Sampler to processor | `ExHeader` as a Boost archive | `TClonesArray` of `MyDigi` as a `TMessage` |
+| Processor to sink | The same header part | The hits as a Boost archive of a `std::vector<MyHit>` |
+
+## Files
+
+| File | Content |
+| --- | --- |
+| [`sampler.cxx`](/source/examples/MQ/serialization/sampler.cxx/), [`processor.cxx`](/source/examples/MQ/serialization/processor.cxx/), [`sink.cxx`](/source/examples/MQ/serialization/sink.cxx/) | The three devices and their programs |
+| [`ExHeader.h`](/source/examples/MQ/serialization/ExHeader.h/) | The header of the messages, with a free Boost `serialize()` function |
+| [`data/MyDigi.h`](/source/examples/MQ/serialization/data/MyDigi.h/), [`data/MyHit.h`](/source/examples/MQ/serialization/data/MyHit.h/) | The digi and the hit, with `ClassDefOverride` and a Boost `serialize()` function |
+| [`SerializationExampleLinkDef.h`](/source/examples/MQ/serialization/SerializationExampleLinkDef.h/) | The ROOT dictionary of `MyDigi` and `MyHit` |
+| [`data_generator/dataGenerator.cxx`](/source/examples/MQ/serialization/data_generator/dataGenerator.cxx/) | The program that makes the input file |
+| [`data_generator/RooDataGenerator.h`](/source/examples/MQ/serialization/data_generator/RooDataGenerator.h/) | The RooFit model of the digis |
+| [`data_generator/RootOutFileManager.h`](/source/examples/MQ/serialization/data_generator/RootOutFileManager.h/) | Writes the digis into the tree |
+| [`data_generator/startDataGenerator.sh.in`](/repo/examples/MQ/serialization/data_generator/startDataGenerator.sh.in) | The template of the generator script |
+| [`startSerializationEx.sh.in`](/repo/examples/MQ/serialization/startSerializationEx.sh.in), [`testSerializationEx.sh.in`](/repo/examples/MQ/serialization/testSerializationEx.sh.in) | The templates of the start script and the test script |
+| [`CMakeLists.txt`](/repo/examples/MQ/serialization/CMakeLists.txt) | The library `ExSerialization`, the four programs, the scripts and the test |
+
+The library `ExSerialization` holds the data classes and their dictionary, and links
+`FairRoot::BaseMQ`. `MyDigi` derives from `FairTimeStamp` and adds the integer position `fX`, `fY`
+and `fZ`. `MyHit` derives from `FairHit` and adds no members. For Boost, both classes write their
+base class with the support headers of BaseMQ. `ExHeader` has no dictionary, only a free Boost
+`serialize()` function. See [Serialize FairRoot data for messages](/online/serialization/).
+
+## Build and run
+
+CMake builds the example if `BUILD_EXAMPLES` is on and CMake finds FairMQ and Boost
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L43-L56)). CMake looks for FairMQ only if
+`BUILD_BASEMQ` is on. Both options are on by default ([CMakeLists.txt](/repo/CMakeLists.txt#L130-L131)).
+The data generator links RooFit, thus your ROOT must have RooFit
+([CMakeLists.txt](/repo/examples/MQ/serialization/CMakeLists.txt#L52-L60)).
+
+CMake writes the programs and the scripts into the build folder of the example. It also makes the
+folder `data_io` there ([CMakeLists.txt](/repo/examples/MQ/serialization/CMakeLists.txt#L62-L72)).
+The scripts use absolute paths.
+
+<Steps>
+
+1. Go to the build folder of the example:
+
+   ```sh
+   cd <build>/examples/MQ/serialization
+   ```
+
+2. Make the input file `data_io/input.root`:
+
+   ```sh
+   ./startDataGenerator.sh
+   ```
+
+3. Start the four devices. Each device opens in an `xterm` window:
+
+   ```sh
+   ./startSerializationEx.sh
+   ```
+
+4. Wait until the sampler logs `Sent <n> messages!`. With the default input, n is 100.
+
+5. Press `q` in the window of each device. The sink writes its tree when it resets.
+
+6. Close the windows. The script starts `xterm` with `-hold`, so the windows stay open.
+
+</Steps>
+
+The sink writes the file `data_io/output.root` with the tree `SerializationEx` and the branch
+`MyHit`. The start script sources `config.sh` of the FairRoot build folder, and starts each device
+with its channels:
+
+<Snippet file="examples/MQ/serialization/startSerializationEx.sh.in" start='SAMPLER="ex-serialization-sampler"' end="xterm +aw" lang="sh" title="startSerializationEx.sh.in" />
+
+The devices run in the default control mode of FairMQ, and their `Run()` loops do not end by
+themselves. Thus the devices stay in the state `RUNNING` until you press a key.
+
+:::note[Options of the data generator]
+`startDataGenerator.sh` does not pass its arguments to the program
+([startDataGenerator.sh.in](/repo/examples/MQ/serialization/data_generator/startDataGenerator.sh.in)).
+To give `--tmax`, `--Nmean` or `--Nsigma`, call the program itself, see
+[Make the input file](#make-the-input-file).
+:::
+
+## Make the input file
+
+`ex-serialization-data-generator` simulates bunches of digis with RooFit. It writes one tree entry
+for each bunch. It has these options
+([dataGenerator.cxx](/source/examples/MQ/serialization/data_generator/dataGenerator.cxx/#L69-L77)):
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--output-file` | Required | The output file |
+| `--tree` | `ExampleTree` | The name of the tree. The sampler reads the tree `cbmsim`. |
+| `--tmax` | 100 | The number of bunches, thus the number of entries and of messages |
+| `--Nmean` | 1595 | The mean number of digis in a bunch |
+| `--Nsigma` | 25.98 | The standard deviation of the number of digis in a bunch |
+
+The script gives `--output-file` with the path of `data_io/input.root`, and `--tree cbmsim`. To
+change the other values, call the program with these two options:
+
+```sh
+cd <build>/examples/MQ/serialization
+./ex-serialization-data-generator --output-file data_io/input.root --tree cbmsim --tmax 1000
+```
+
+The program has no option `--help`. Boost reports an unknown option, and the program prints its
+options and returns 1
+([dataGenerator.cxx](/source/examples/MQ/serialization/data_generator/dataGenerator.cxx/#L79-L93)).
+
+For each bunch t, from 0 to `tmax` − 1, the program draws the number of digis N. Then it draws N
+digis from a product of Gaussians and saves them:
+
+<Snippet file="examples/MQ/serialization/data_generator/dataGenerator.cxx" start="for (unsigned int t = 0; t < tmax; t++) {" title="dataGenerator.cxx" />
+
+| Value | Gaussian | Stored in `MyDigi` as |
+| --- | --- | --- |
+| N | Mean `--Nmean`, σ `--Nsigma` | The number of digis in the entry |
+| x | Mean −10, σ 3 | `fX`, rounded to an integer |
+| y | Mean 10, σ 2 | `fY`, rounded to an integer |
+| z | Mean 0, σ 0.5 | `fZ`, rounded to an integer |
+| t | Mean t + 0.5, σ 0.1, only between t and t + 1 | The time stamp |
+| Time error | Mean 0.005, σ 0.001 | The time stamp error |
+
+The range of each value except t is the mean ± 6σ
+([RooDataGenerator.h](/source/examples/MQ/serialization/data_generator/RooDataGenerator.h/#L41-L61)).
+The program sets the seed of the RooFit random generator from the time of day in seconds
+(`TDatime().GetTime()`). Thus runs at different times make other data ([RooDataGenerator.h](/source/examples/MQ/serialization/data_generator/RooDataGenerator.h/#L87-L111)).
+For each bunch, it logs the number of digis and the size of their data members.
+
+`RootOutFileManager` writes the digis as a `TClonesArray` into the branch `MyDigi`. It also writes a
+`BranchList` with the name of this branch
+([RootOutFileManager.h](/source/examples/MQ/serialization/data_generator/RootOutFileManager.h/#L33-L67)).
+
+## The sampler
+
+`Init()` opens the file of `--input-file`, gets the tree `cbmsim`, and connects the branch `MyDigi` to
+a `TClonesArray` ([sampler.cxx](/source/examples/MQ/serialization/sampler.cxx/#L38-L52)). `Run()`
+then sends one message for each entry of the tree:
+
+<Snippet file="examples/MQ/serialization/sampler.cxx" start="for (Long64_t idx = 0; idx < numEvents; idx++) {" title="sampler.cxx" />
+
+- The header holds the entry number in `eventNumber`. `detectorId` stays 0.
+- `BoostSerializer<ExHeader>` writes the header into part 0. `RootSerializer` writes the complete
+  `TClonesArray` of digis into part 1.
+- The sampler counts a message if `Send()` returns a value larger than 0.
+- If a transition is pending, the sampler stops the loop.
+- The sampler also calls `FindHits()` on the digis, but it does not use the result. A comment in the
+  code calls this a temporary check.
+
+After the loop, the sampler logs `Sent <n> messages!`. Then it waits in `Run()` until a transition is
+pending ([sampler.cxx](/source/examples/MQ/serialization/sampler.cxx/#L88-L93)). Thus it stays in
+the state `RUNNING` until you stop it.
+
+## The processors
+
+Each processor receives the messages in a loop:
+
+<Snippet file="examples/MQ/serialization/processor.cxx" start="void Run() override" title="processor.cxx" />
+
+- The processor reads the header, but does not use its values.
+- `DeserializeTo<TClonesArray>()` makes a new array of digis. The processor checks it for `nullptr`.
+- `FindHits()` makes one `MyHit` for each digi. The hit position is the digi position plus 0.5 in x,
+  y and z, and the position error is 1/√12 in each direction. The detector ID and the reference index
+  are 0. The hit gets the time stamp and the time stamp error of the digi
+  ([processor.cxx](/source/examples/MQ/serialization/processor.cxx/#L70-L88)).
+- The processor moves part 0 of the input into its output. Thus the header goes to the sink
+  unchanged, without a new serialization.
+- `BoostSerializer<MyHit>` writes the `TClonesArray` of hits as a `std::vector<MyHit>` into part 1.
+
+The two processors connect to the same push channel of the sampler. A push socket gives each message
+to one of its peers (ZeroMQ behavior). When `RUNNING` ends, each processor logs
+`Received <n> and sent <m> messages!`.
+
+## The sink
+
+<Snippet file="examples/MQ/serialization/sink.cxx" start="void Run() override" title="sink.cxx" />
+
+- `Init()` reads `--num-msgs` and `--output-file`. It opens the file with `RECREATE` and makes the
+  branch `MyHit` of the tree `SerializationEx`
+  ([sink.cxx](/source/examples/MQ/serialization/sink.cxx/#L35-L42)).
+- `BoostSerializer<MyHit>` reads part 1 into the `TClonesArray` of the branch. It deletes the old hits
+  and puts a copy of each received hit into the array.
+- With `--num-msgs` larger than 0, the sink ends `Run()` after this number of messages. Then the
+  device leaves `RUNNING` by itself.
+- `Reset()` writes the tree. FairMQ calls it in the state `RESETTING DEVICE`, which is a step of the
+  shutdown sequence ([sink.cxx](/source/examples/MQ/serialization/sink.cxx/#L73-L80)).
+
+## Test the example
+
+The test `ex_MQ_serialization` runs the test script
+([CMakeLists.txt](/repo/examples/MQ/serialization/CMakeLists.txt#L82-L83)). Start it in the build
+folder of FairRoot:
+
+```sh
+ctest -R ex_MQ_serialization
+```
+
+The script does these steps:
+
+1. It makes the folder `testsession_<session>` in the build folder of the example and works there.
+   `fairmq-uuid-gen` gives the session ID.
+2. It runs the generator with `--tree cbmsim` and the default values. Thus the input has 100 entries.
+3. It starts the sampler, one processor and the sink in the background. The devices use `ipc://`
+   addresses and `--control static`.
+4. The sink gets `--num-msgs 100`. After 100 messages, it logs `Received 100 messages!`, resets and
+   ends.
+5. The script waits for the sink. Then it sends `SIGINT` to the sampler and the processor.
+
+<Snippet file="examples/MQ/serialization/testSerializationEx.sh.in" start='FILESINK="ex-serialization-sink"' end="kill -SIGINT $PROCESSOR1_PID" lang="sh" title="testSerializationEx.sh.in" />
+
+The test passes when the output contains `Received 100 messages!`. CTest stops the test after 30 s.
+
+## Problems that can occur
+
+- **The sampler crashes in `Run()`:** the input file does not exist, or it has no tree `cbmsim`.
+  `Init()` logs `Could not open file <file> in SimpleTreeReader::InitSource()` or
+  `Could not find tree 'MyDigi'`, but it does not stop the device. Then `Run()` uses the missing tree.
+  Make the input file first, and give `--tree cbmsim` to the generator.
+- **The generator ignores your options:** you gave them to `startDataGenerator.sh`. Call the program
+  itself.
+- **The output file has no tree:** the sink writes the tree in `Reset()`. Stop the sink with `q` or
+  Ctrl-C, so that FairMQ runs the shutdown sequence.
+- **The processor logs `partsIn does not have 2 messages; skipping`:** a message on its input
+  channel does not have two parts. The processor skips the message. The sink logs
+  `parts does not have 2 messages; skipping` for such a message.
+- **The processor logs `Deserialization FAILED, skipping`:** `DeserializeTo()` returned no object
+  for part 1 of a message. Part 1 must hold a `TClonesArray` in a `TMessage`.
+
+## Related pages
+
+- [Serialize FairRoot data for messages](/online/serialization/): `RootSerializer`,
+  `BoostSerializer` and the Boost support headers.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): `FairRunFairMQDevice.h` and other
+  device patterns.
+- [Tutorial 3](/examples/tutorial3/): similar digis and hits in five formats.
+- [Data classes](/concepts/data-classes/): `FairTimeStamp`, `FairHit` and the other base classes.
+- [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/): devices, channels and states.

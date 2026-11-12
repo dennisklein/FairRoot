@@ -1,0 +1,910 @@
+---
+// The hooks that FairRunAna calls on a tree of tasks, step by step.
+// Facts (current FairRoot code):
+// - FairRun makes the main task fTask = new FairTask("FairTaskList"). AddTask() adds a task to it
+//   (fairroot/base/steer/FairRun.cxx:45, 110-114). A task holds its subtasks in the TTask list.
+// - The macro calls fRun->AddTask(), fRun->Init() and fRun->Run()
+//   (examples/simulation/Tutorial2/macros/create_digis.C:77-94).
+// - FairRunAna::Init() calls fTask->SetParTask() (FairRunAna.cxx:201 or 209), then
+//   fRtdb->initContainers(fRunId) (220), then fTask->InitTask() (238). With an input file, one more
+//   initContainers() comes before SetParTask() (198); the call in line 220 always comes after it.
+//   The run ID comes from the event header of the input (186-191), or FairRunIdGenerator makes one (205-208).
+//   FairFileSource::SpecifyRunId() reads entry 0 for it (fairroot/base/source/FairFileSource.cxx:300-304),
+//   so event 0 has the run ID of Init().
+// - SetParTask(): if the task is active, SetParContainers(), then SetParTask() of each subtask
+//   (FairTask.cxx:81-88, 220-228). A task requests its containers there with getContainer(); they are
+//   not filled yet (FairRuntimeDb.cxx:199-218, Tutorial2/src/FairTutorialDet2Digitizer.cxx:39-51).
+// - initContainers(runId) calls init() of each container that is not static (FairRuntimeDb.cxx:464-484, 508-564).
+// - InitTask(): if active, Init(). kFATAL: LOG(fatal) << "Initialization of Task ... failed fatally".
+//   kERROR: fActive = kFALSE. kSUCCESS: nothing changes. Then InitTask() of each subtask
+//   (FairTask.cxx:49-64, 118-126). The default Init() returns kSUCCESS (FairTask.h:29-34, 116).
+//   LOG(fatal) calls the fatal callback of FairLogger, if one is set (FairLogger Logger.cxx, ~Logger()). The
+//   constructor of FairRoot's FairLogger class (FairLogger::GetLogger(), gLogger) sets one that throws
+//   fair::FatalException (fairroot/tools/FairLogger.cxx:28-38, 179-202); without it, the run continues.
+//   So the diagram says LOG(fatal), not "the run stops".
+// - Run() without arguments processes all entries of the input (FairRunAna.h:43, FairRunAna.cxx:269-274).
+//   For each event: ReadEvent(i), FillEventHeader(), CheckRunIdChanged(), ExecuteTask(""), Fill(),
+//   FinishEvent() (FairRunAna.cxx:302-337).
+// - CheckRunIdChanged(): a new run ID -> Reinit(fRunId), which calls fRtdb->initContainers(runId),
+//   then fTask->ReInitTask(). With SetContainerStatic(kTRUE), neither (FairRunAna.cxx:568-592).
+//   ReInitTask() handles the return value of ReInit() like InitTask() (FairTask.cxx:66-79, 210-218).
+// - ExecuteTask(): Exec() of the task, then ExecuteTasks(): for each active subtask, Exec() and then its
+//   own subtasks. So a task comes before its subtasks, and its subtasks before the next task. An inactive
+//   task and its subtasks are skipped (FairTask.cxx:128-208).
+// - Fill() -> FairRootManager::Fill() -> FairRootFileSink::Fill() -> fOutTree->Fill()
+//   (FairRunAna.cxx:617-624, FairRootManager.cxx:331-335, FairRootFileSink.cxx:302-309). Init() makes the
+//   output tree after InitTask() (FairRunAna.cxx:250, FairRootFileSink.cxx:238-249). Its default name is
+//   cbmsim (FairRootManager.cxx:932-944). So the sink row appears with Run().
+// - FinishEvent(): if active, FinishEvent() of each subtask (FairTask.cxx:90-96, 240-248). FinishEvent() is
+//   itself the virtual hook: a task that overrides it must call FairTask::FinishEvent() to reach its subtasks.
+// - After the loop: fTask->FinishTask(): if active, Finish(), then FinishTask() of each subtask; then
+//   LastFill() and Write(); Write() writes the tree to the file (FairRunAna.cxx:339-345,
+//   FairTask.cxx:98-105, 230-238, FairRootManager.cxx:346-356, FairRootFileSink.cxx:311-332).
+// Example values, not from the code: the tasks A, A1 and B, the containers ParA, ParA1 and ParB, the
+// run IDs 1 and 2, and the 6 events. A1 is a subtask of A (not of B): then the order A, A1, B shows that
+// the order is depth first.
+import Explainer from './Explainer.astro';
+
+const steps = [
+  {
+    cap: 'The macro calls Init(). The run keeps the tasks under its main task, FairTaskList. AddTask() added A and B, and A has a subtask, A1.',
+    code: 'fRun->Init();',
+  },
+  {
+    cap: 'SetParTask() calls SetParContainers() on each task, in tree order: a task, then its subtasks, then the next task. Each task requests its parameter containers. The containers are still empty.',
+    code: 'fTask->SetParTask();',
+    set: { call: 'SetParTask()', hook: 'SetParContainers()', db: 'getContainer()' },
+  },
+  {
+    cap: 'The runtime database fills the containers with the parameters for the run ID, so Init() can use them. The run ID comes from the input, or the run makes a new one.',
+    code: 'fRtdb->initContainers(fRunId);',
+    set: { db: 'initContainers(fRunId)', rid: 'run ID 1' },
+  },
+  {
+    cap: 'InitTask() calls Init() on each task, in tree order. kSUCCESS keeps the task active. kERROR makes it inactive: the run calls no Exec() for it and its subtasks. kFATAL logs a message with the severity fatal.',
+    code: 'fTask->InitTask();',
+    set: { call: 'InitTask()', hook: 'Init()', rid: 'run ID 1' },
+  },
+  {
+    cap: 'The macro calls Run(). The source reads one event at a time. Event 0 has the run ID of Init(), so the parameters stay the same.',
+    code: 'fRootManager->ReadEvent(i);',
+    set: { ev: 'i = 0', rid: 'run ID 1' },
+  },
+  {
+    cap: 'ExecuteTask() calls Exec() on each active task, in tree order. Here the tasks do their work for the event.',
+    code: 'fTask->ExecuteTask("");',
+    set: { call: 'ExecuteTask("")', hook: 'Exec()', ev: 'i = 0', rid: 'run ID 1' },
+  },
+  {
+    cap: 'The run writes the event to the output tree. Then it calls FinishEvent() on each task, in tree order.',
+    code: 'fTask->FinishEvent();',
+    set: { call: 'FinishEvent()', hook: 'FinishEvent()', ev: 'i = 0', rid: 'run ID 1' },
+  },
+  {
+    cap: 'Events 1 and 2 go through the same steps. Event 3 has a new run ID, so the runtime database initializes the containers again. Then ReInitTask() calls ReInit() on each task.',
+    code: 'fTask->ReInitTask();',
+    set: { call: 'ReInitTask()', hook: 'ReInit()', db: 'initContainers(fRunId)', ev: 'i = 3', rid: 'run ID 2' },
+  },
+  {
+    cap: 'After the last event, FinishTask() calls Finish() on each task, in tree order. Then the run writes the output tree to the file.',
+    code: 'fTask->FinishTask();',
+    set: { call: 'FinishTask()', hook: 'Finish()', ev: '6 events', rid: 'run ID 2' },
+  },
+];
+
+// The tasks in tree order. n is the place in the call order.
+const tasks = [
+  { id: 'a', name: 'A', par: 'ParA', n: 1 },
+  { id: 'a1', name: 'A1', par: 'ParA1', n: 2 },
+  { id: 'b', name: 'B', par: 'ParB', n: 3 },
+] as const;
+type Id = (typeof tasks)[number]['id'];
+type Box = [number, number, number, number];
+type Layout = {
+  k: 'd' | 'm';
+  w: number;
+  h: number;
+  run: Box;
+  ttl: [number, number];
+  pill: { y: number; init: [number, number]; run: [number, number] };
+  root: { y: number; x: number; w: number };
+  rows: Record<Id, { y: number; x: number; w: number }>;
+  edges: string[];
+  badgeX: number;
+  hookX: number;
+  retR: number;
+  db: { box: Box; ttl: [number, number]; rid: [number, number]; call: [number, number]; sub?: [number, number] };
+  chips: Record<Id, Box>;
+  link?: [number, number];
+  // step: distance between two event cells. On the narrow stage, the six cells fill the width of the boxes.
+  src: { label: [number, number]; ev: [number, number]; x0: number; cw: number; step: number; y: number; band: number; blbl: number };
+  // wrEnd: Write() takes the place of the tree name (narrow stage), else it goes below the cells.
+  out: { label: [number, number]; name: [number, number]; x0: number; y: number; wr: [number, number]; wrEnd?: boolean };
+  legend: { kx: number; vx: number; head?: number; ys: [number, number, number] };
+};
+const CH = 26; // height of an event cell
+
+// Wide stage.
+const D: Layout = {
+  k: 'd',
+  w: 680,
+  h: 296,
+  run: [12, 10, 400, 186],
+  ttl: [28, 37],
+  pill: { y: 22, init: [274, 61], run: [342, 54] },
+  root: { y: 76, x: 28, w: 112 },
+  rows: { a: { y: 108, x: 52, w: 30 }, a1: { y: 140, x: 76, w: 36 }, b: { y: 172, x: 52, w: 30 } },
+  edges: ['M40 88V172H52', 'M40 108H52', 'M67 120V140H76'],
+  badgeX: 166,
+  hookX: 192,
+  retR: 396,
+  db: { box: [428, 10, 240, 186], ttl: [444, 37], rid: [652, 37], call: [444, 80], sub: [444, 56] },
+  chips: { a: [444, 96, 208, 24], a1: [444, 128, 208, 24], b: [444, 160, 208, 24] },
+  link: [336, 437],
+  src: { label: [12, 226], ev: [330, 226], x0: 12, cw: 48, step: 54, y: 234, band: 265, blbl: 282 },
+  out: { label: [346, 226], name: [664, 226], x0: 346, y: 234, wr: [346, 282] },
+  legend: { kx: 346, vx: 424, head: 226, ys: [248, 266, 284] },
+};
+// Narrow stage (phones): the same parts, stacked.
+const M: Layout = {
+  k: 'm',
+  w: 340,
+  h: 446,
+  run: [6, 6, 328, 186],
+  ttl: [18, 33],
+  pill: { y: 19, init: [207, 58], run: [271, 51] },
+  root: { y: 72, x: 18, w: 104 },
+  rows: { a: { y: 104, x: 40, w: 28 }, a1: { y: 136, x: 62, w: 34 }, b: { y: 168, x: 40, w: 28 } },
+  edges: ['M30 84V168H40', 'M30 104H40', 'M54 116V136H62'],
+  badgeX: 106,
+  hookX: 130,
+  retR: 322,
+  db: { box: [6, 202, 328, 86], ttl: [18, 226], rid: [322, 226], call: [18, 249] },
+  chips: { a: [18, 258, 98, 22], a1: [121, 258, 98, 22], b: [224, 258, 98, 22] },
+  src: { label: [6, 314], ev: [334, 314], x0: 6, cw: 50, step: 55.6, y: 322, band: 353, blbl: 370 },
+  out: { label: [6, 398], name: [334, 398], x0: 6, y: 406, wr: [334, 398], wrEnd: true },
+  legend: { kx: 6, vx: 82, ys: [398, 416, 434] },
+};
+const events = [0, 1, 2, 3, 4, 5];
+const cx = (g: Layout, x0: number, k: number) => x0 + k * g.src.step + g.src.cw / 2;
+---
+
+<Explainer title="The hooks of a task, in order" meta="FairRunAna · 3 tasks · 6 events" steps={steps}>
+  <div class="tl-wrap">
+    <svg
+      class="tl"
+      data-stage
+      role="img"
+      aria-label="The run FairRunAna with its main task FairTaskList and the tasks A, A1 and B, the runtime database with the parameter containers, the source with 6 events and the sink with the output tree."
+    >
+      {
+        [D, M].map((g) => (
+          <svg class={`lay lay-${g.k}`} viewBox={`0 0 ${g.w} ${g.h}`} width="100%" height="100%">
+            {/* the run and its task tree */}
+            <rect class="box" x={g.run[0]} y={g.run[1]} width={g.run[2]} height={g.run[3]} rx="4" />
+            <text class="ttl" x={g.ttl[0]} y={g.ttl[1]}>
+              FairRunAna
+            </text>
+            <g class="pill p-init">
+              <rect x={g.pill.init[0]} y={g.pill.y} width={g.pill.init[1]} height="22" rx="11" />
+              <text x={g.pill.init[0] + g.pill.init[1] / 2} y={g.pill.y + 15} text-anchor="middle">
+                Init()
+              </text>
+            </g>
+            <g class="pill p-run">
+              <rect x={g.pill.run[0]} y={g.pill.y} width={g.pill.run[1]} height="22" rx="11" />
+              <text x={g.pill.run[0] + g.pill.run[1] / 2} y={g.pill.y + 15} text-anchor="middle">
+                Run()
+              </text>
+            </g>
+            {g.edges.map((d) => (
+              <path class="edge" d={d} pathLength="1" />
+            ))}
+            <g class="row r0">
+              <rect class="node" x={g.root.x} y={g.root.y - 12} width={g.root.w} height="24" rx="3" />
+              <rect class="hl pass" x={g.root.x} y={g.root.y - 12} width={g.root.w} height="24" rx="3" />
+              <text class="nname" x={g.root.x + g.root.w / 2} y={g.root.y + 4.5} text-anchor="middle">
+                FairTaskList
+              </text>
+              <text class="call pass" x={g.hookX} y={g.root.y + 4.5} data-slot="call" />
+            </g>
+            {tasks.map((t) => {
+              const p = g.rows[t.id];
+              return (
+                <g class={`row r-${t.id}`}>
+                  <rect class="node" x={p.x} y={p.y - 12} width={p.w} height="24" rx="3" />
+                  <rect class="hl pass" x={p.x} y={p.y - 12} width={p.w} height="24" rx="3" />
+                  <text class="nname" x={p.x + p.w / 2} y={p.y + 4.5} text-anchor="middle">
+                    {t.name}
+                  </text>
+                  <g class="badge pass">
+                    <rect x={g.badgeX} y={p.y - 8.5} width="17" height="17" rx="2" />
+                    <text x={g.badgeX + 8.5} y={p.y + 4} text-anchor="middle">
+                      {t.n}
+                    </text>
+                  </g>
+                  <text class="hook pass" x={g.hookX} y={p.y + 4.5} data-slot="hook" />
+                  <g class="ret">
+                    <rect x={g.retR - 70} y={p.y - 9} width="70" height="18" rx="9" />
+                    <text x={g.retR - 35} y={p.y + 4} text-anchor="middle">
+                      kSUCCESS
+                    </text>
+                  </g>
+                  {g.link && (
+                    <g class="link">
+                      <path class="lk-line" d={`M${g.link[0]} ${p.y}H${g.link[1] - 6}`} />
+                      <path class="lk-head" d={`M${g.link[1] - 7} ${p.y - 4}L${g.link[1]} ${p.y}L${g.link[1] - 7} ${p.y + 4}z`} />
+                    </g>
+                  )}
+                </g>
+              );
+            })}
+
+            {/* the runtime database */}
+            <rect class="box" x={g.db.box[0]} y={g.db.box[1]} width={g.db.box[2]} height={g.db.box[3]} rx="4" />
+            <rect class="dbhl" x={g.db.box[0]} y={g.db.box[1]} width={g.db.box[2]} height={g.db.box[3]} rx="4" />
+            <text class="ttl" x={g.db.ttl[0]} y={g.db.ttl[1]}>
+              FairRuntimeDb
+            </text>
+            {g.db.sub && (
+              <text class="sub" x={g.db.sub[0]} y={g.db.sub[1]}>
+                parameter containers
+              </text>
+            )}
+            <text class="rid" x={g.db.rid[0]} y={g.db.rid[1]} text-anchor="end" data-slot="rid" />
+            <text class="dbcall" x={g.db.call[0]} y={g.db.call[1]} data-slot="db" />
+            {tasks.map((t) => {
+              const [x, y, w, h] = g.chips[t.id];
+              return (
+                <g class={`chip c-${t.id}`}>
+                  <rect class="bar1" x={x} y={y} width={w} height={h} rx="3" />
+                  <rect class="bar2" x={x} y={y} width={w} height={h} rx="3" />
+                  <rect class="cfr" x={x} y={y} width={w} height={h} rx="3" />
+                  <text class="clbl" x={x + 9} y={y + h / 2 + 4.2}>
+                    {t.par}
+                  </text>
+                  <text class="empty" x={x + w - 8} y={y + h / 2 + 4} text-anchor="end">
+                    empty
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* the source with its events */}
+            <text class="sub" x={g.src.label[0]} y={g.src.label[1]}>
+              source
+            </text>
+            <text class="ev" x={g.src.ev[0]} y={g.src.ev[1]} text-anchor="end" data-slot="ev" />
+            {events.map((k) => (
+              <g class={`cell e${k}`}>
+                <rect class="cbg" x={g.src.x0 + k * g.src.step} y={g.src.y} width={g.src.cw} height={CH} rx="3" />
+                <rect class="cfr2" x={g.src.x0 + k * g.src.step} y={g.src.y} width={g.src.cw} height={CH} rx="3" />
+                <text class="cnum" x={cx(g, g.src.x0, k)} y={g.src.y + 17.5} text-anchor="middle">
+                  {k}
+                </text>
+              </g>
+            ))}
+            <rect
+              class="cur"
+              x={g.src.x0 - 2.5}
+              y={g.src.y - 2.5}
+              width={g.src.cw + 5}
+              height={CH + 5}
+              rx="4"
+              style={`--to3: ${3 * g.src.step}px`}
+            />
+            <rect class="band b1" x={g.src.x0} y={g.src.band} width={2 * g.src.step + g.src.cw} height="3" />
+            <rect class="band b2" x={g.src.x0 + 3 * g.src.step} y={g.src.band} width={2 * g.src.step + g.src.cw} height="3" />
+            <text class="blbl b1t" x={cx(g, g.src.x0, 1)} y={g.src.blbl} text-anchor="middle">
+              run ID 1
+            </text>
+            <text class="blbl b2t" x={cx(g, g.src.x0, 4)} y={g.src.blbl} text-anchor="middle">
+              run ID 2
+            </text>
+
+            {/* the sink with the output tree */}
+            <g class="outrow">
+              <text class="sub" x={g.out.label[0]} y={g.out.label[1]}>
+                sink
+              </text>
+              <text class={g.out.wrEnd ? 'sub swap' : 'sub'} x={g.out.name[0]} y={g.out.name[1]} text-anchor="end">
+                tree cbmsim
+              </text>
+              {events.map((k) => (
+                <g class={`oc o${k}`}>
+                  <rect class="ofr" x={g.out.x0 + k * g.src.step} y={g.out.y} width={g.src.cw} height={CH} rx="3" />
+                  <rect class="ofill" x={g.out.x0 + k * g.src.step + 3} y={g.out.y + 3} width={g.src.cw - 6} height={CH - 6} rx="2" />
+                </g>
+              ))}
+            </g>
+            <text class="wr" x={g.out.wr[0]} y={g.out.wr[1]} text-anchor={g.out.wrEnd ? 'end' : 'start'}>
+              Write() → output file
+            </text>
+
+            {/* what InitTask() does with the return value of Init() */}
+            <g class="legend">
+              {g.legend.head && (
+                <text class="sub" x={g.legend.kx} y={g.legend.head}>
+                  Init() returns
+                </text>
+              )}
+              <text class="lk ok" x={g.legend.kx} y={g.legend.ys[0]}>
+                kSUCCESS
+              </text>
+              <text class="lv" x={g.legend.vx} y={g.legend.ys[0]}>
+                the task stays active
+              </text>
+              <text class="lk bad" x={g.legend.kx} y={g.legend.ys[1]}>
+                kERROR
+              </text>
+              <text class="lv" x={g.legend.vx} y={g.legend.ys[1]}>
+                inactive: no Exec()
+              </text>
+              <text class="lk bad" x={g.legend.kx} y={g.legend.ys[2]}>
+                kFATAL
+              </text>
+              <text class="lv" x={g.legend.vx} y={g.legend.ys[2]}>
+                LOG(fatal)
+              </text>
+            </g>
+          </svg>
+        ))
+      }
+    </svg>
+  </div>
+</Explainer>
+
+<style>
+  /* Two layouts in one stage: the wide one, and a narrow one when the stage is narrow. */
+  .tl-wrap {
+    container-type: inline-size;
+  }
+  .tl {
+    aspect-ratio: 680 / 296;
+  }
+  .lay-m {
+    display: none;
+  }
+  @container (max-width: 579px) {
+    .tl {
+      aspect-ratio: 340 / 446;
+      max-width: 440px;
+      margin-inline: auto;
+    }
+    .lay-d {
+      display: none;
+    }
+    .lay-m {
+      display: inline;
+    }
+  }
+
+  /* Parts */
+  .box {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .ttl {
+    fill: var(--fr-stage-ink);
+    font-size: 14.5px;
+    font-weight: 700;
+  }
+  .sub {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .pill rect {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    transition:
+      fill 0.4s,
+      stroke 0.4s;
+  }
+  .pill text {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+    font-weight: 600;
+    transition: fill 0.4s;
+  }
+  .edge {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    stroke-dasharray: 1;
+  }
+  .node {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .nname {
+    fill: var(--fr-stage-ink);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .hl {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 2;
+  }
+  .call {
+    fill: var(--fr-stage-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .hook {
+    fill: var(--fr-saffron);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .badge rect {
+    fill: var(--fr-saffron);
+  }
+  .badge text {
+    fill: var(--fr-on-saffron);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .ret rect {
+    fill: none;
+    stroke: var(--fr-mint);
+    stroke-width: 1.2;
+  }
+  .ret text,
+  .lk.ok {
+    fill: var(--fr-mint);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .lk-line {
+    fill: none;
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.4;
+    stroke-dasharray: 4 3;
+  }
+  .lk-head {
+    fill: var(--fr-sky-bright);
+  }
+  .dbhl {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 2;
+  }
+  .dbcall,
+  .ev {
+    fill: var(--fr-saffron);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .rid {
+    fill: var(--fr-sky-bright);
+    font-size: 12px;
+    font-weight: 700;
+    transition: fill 0.4s;
+  }
+  .cfr {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 3;
+    transition: stroke 0.3s;
+  }
+  .bar1,
+  .bar2 {
+    transform-box: fill-box;
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.7s cubic-bezier(0.2, 0, 0.1, 1);
+  }
+  /* Opaque tints, so that the values of run ID 2 cover the values of run ID 1. */
+  .bar1 {
+    fill: color-mix(in srgb, var(--fr-sky-bright) 26%, var(--fr-stage-2));
+  }
+  .bar2 {
+    fill: color-mix(in srgb, var(--fr-c-pre) 26%, var(--fr-stage-2));
+  }
+  .clbl {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+    font-weight: 600;
+    transition: fill 0.3s;
+  }
+  .empty {
+    fill: var(--fr-stage-dim);
+    font-size: 11.5px;
+  }
+  .cfr2 {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .cbg {
+    fill: var(--fr-stage-line);
+  }
+  .cnum {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+    font-weight: 600;
+    transition: fill 0.4s;
+  }
+  .cur {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 2;
+  }
+  .b1 {
+    fill: var(--fr-sky-bright);
+  }
+  .b2 {
+    fill: var(--fr-c-pre);
+  }
+  .blbl {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .b1t {
+    fill: var(--fr-sky-bright);
+  }
+  .b2t {
+    fill: var(--fr-c-pre);
+  }
+  .ofr {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 3;
+  }
+  .ofill {
+    fill: var(--fr-saffron);
+  }
+  .wr {
+    fill: var(--fr-mint);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .lk {
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .lk.bad {
+    fill: var(--fr-c-num);
+  }
+  .lv {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+  }
+
+  /* Choreography. For step n the stage has the classes r1 … rn and now<n>.
+     The rows of the tree light up one after the other: --d is the delay of a row. */
+  .r0 {
+    --d: 0s;
+  }
+  .r-a,
+  .c-a {
+    --d: 0.15s;
+  }
+  .r-a1,
+  .c-a1 {
+    --d: 0.75s;
+  }
+  .r-b,
+  .c-b {
+    --d: 1.35s;
+  }
+
+  /* Step 1: the macro calls Init(). The tree draws itself. */
+  .tl.r1 .p-init rect {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-saffron);
+  }
+  .tl.r1 .p-init text {
+    fill: var(--fr-on-saffron);
+  }
+  .tl.now1 .edge {
+    animation: tl-draw 0.8s 0.1s backwards;
+  }
+  .tl.now1 :is(.r-a, .r-a1, .r-b) :is(.node, .nname) {
+    animation: tl-a1 0.4s calc(var(--d) * 0.5 + 0.2s) backwards;
+  }
+
+  /* A pass over the tree: the call on the main task, then the hook on each task in tree order.
+     Each step has its own keyframes, so that the pass plays again in the next step. */
+  .pass,
+  .ret,
+  .link {
+    opacity: 0;
+  }
+  .tl:is(.now2, .now4, .now6, .now7, .now8, .now9) .pass,
+  .tl:is(.now4, .now8) .ret,
+  .tl.now2 .link {
+    opacity: 1;
+  }
+  .tl.now2 .pass {
+    animation: tl-a2 0.45s var(--d) backwards;
+  }
+  .tl.now2 .link {
+    animation: tl-a2 0.45s calc(var(--d) + 0.15s) backwards;
+  }
+  .tl.now4 .pass {
+    animation: tl-a4 0.45s var(--d) backwards;
+  }
+  .tl.now4 .ret {
+    animation: tl-a4 0.45s calc(var(--d) + 0.25s) backwards;
+  }
+  .tl.now6 .pass {
+    animation: tl-a6 0.45s var(--d) backwards;
+  }
+  .tl.now7 .pass {
+    animation: tl-a7 0.45s calc(var(--d) + 0.5s) backwards;
+  }
+  .tl.now8 .pass {
+    animation: tl-a8 0.45s calc(var(--d) + 1s) backwards;
+  }
+  .tl.now8 .ret {
+    animation: tl-a8 0.45s calc(var(--d) + 1.25s) backwards;
+  }
+  .tl.now9 .pass {
+    animation: tl-a9 0.45s calc(var(--d) + 0.8s) backwards;
+  }
+
+  /* Step 2: the tasks request their containers. Step 3: initContainers() fills them. */
+  .chip {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.r2 .chip {
+    opacity: 1;
+  }
+  .tl.now2 .chip {
+    animation: tl-a2 0.45s calc(var(--d) + 0.2s) backwards;
+  }
+  .empty {
+    opacity: 0;
+  }
+  .tl.now2 .empty {
+    opacity: 1;
+  }
+  .tl.r3 .cfr {
+    stroke-dasharray: none;
+    stroke: var(--fr-sky-bright);
+  }
+  .tl.r3 .bar1 {
+    transform: scaleX(1);
+  }
+  .tl.now3 :is(.bar1, .cfr) {
+    transition-delay: calc(var(--d) * 0.4 + 0.2s);
+  }
+  .tl.r3 .clbl {
+    fill: var(--fr-stage-ink);
+  }
+  .tl.now3 .clbl {
+    transition-delay: calc(var(--d) * 0.4 + 0.4s);
+  }
+  .tl.now2 .dbcall {
+    animation: tl-a2 0.4s 0.1s backwards;
+  }
+  .tl.now3 .dbcall {
+    animation: tl-a3 0.4s backwards;
+  }
+  .tl.now3 .rid {
+    animation: tl-a3 0.4s 0.3s backwards;
+  }
+  .dbhl {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.now3 .dbhl,
+  .tl.now8 .dbhl {
+    opacity: 1;
+  }
+  .tl.now8 .dbhl {
+    transition-delay: 0.6s;
+  }
+  .band,
+  .blbl {
+    opacity: 0;
+    transition: opacity 0.5s;
+  }
+  .tl.r3 :is(.band, .blbl) {
+    opacity: 1;
+  }
+  .tl.now3 :is(.band, .blbl) {
+    transition-delay: 0.3s;
+  }
+
+  /* Step 4: the return values of Init(). */
+  .legend {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.now4 .legend {
+    opacity: 1;
+    transition-delay: 1.9s;
+  }
+
+  /* Step 5: Run() and the first event. The sink row appears: Init() made the output tree. */
+  .tl.r5 .p-init rect {
+    fill: none;
+    stroke: var(--fr-stage-line);
+  }
+  .tl.r5 .p-init text {
+    fill: var(--fr-stage-dim);
+  }
+  .tl.r5 .p-run rect {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-saffron);
+  }
+  .tl.r5 .p-run text {
+    fill: var(--fr-on-saffron);
+  }
+  .cur,
+  .outrow {
+    opacity: 0;
+    transition:
+      opacity 0.4s,
+      transform 0.7s cubic-bezier(0.45, 0, 0.2, 1);
+  }
+  .tl.r5 :is(.cur, .outrow) {
+    opacity: 1;
+  }
+  .tl.now5 .cur {
+    transition-delay: 0.2s;
+  }
+  .tl.now5 .ev {
+    animation: tl-a5 0.4s 0.3s backwards;
+  }
+  .tl:is(.now5, .now6, .now7) .e0 .cnum {
+    fill: var(--fr-saffron);
+  }
+
+  /* Step 7: Fill() writes event 0 to the output tree. */
+  .ofill {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.r7 .o0 .ofill {
+    opacity: 1;
+  }
+  .tl.now7 .o0 .ofill {
+    transition-delay: 0.1s;
+  }
+
+  /* Step 8: events 1 and 2 are done; event 3 has run ID 2. */
+  .cbg {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.r8 :is(.e0, .e1, .e2) .cbg,
+  .tl.r9 :is(.e3, .e4, .e5) .cbg {
+    opacity: 1;
+  }
+  .tl.r8 :is(.e0, .e1, .e2) .cnum,
+  .tl.r9 :is(.e3, .e4, .e5) .cnum {
+    fill: var(--fr-stage-ink);
+  }
+  .tl.r8 :is(.o1, .o2) .ofill,
+  .tl.r9 :is(.o3, .o4, .o5) .ofill {
+    opacity: 1;
+  }
+  .tl.now8 :is(.e1 .cbg, .o1 .ofill),
+  .tl.now9 :is(.e3 .cbg, .o3 .ofill) {
+    transition-delay: 0.1s;
+  }
+  .tl.now8 :is(.e2 .cbg, .o2 .ofill),
+  .tl.now9 :is(.e4 .cbg, .o4 .ofill) {
+    transition-delay: 0.3s;
+  }
+  .tl.now9 :is(.e5 .cbg, .o5 .ofill) {
+    transition-delay: 0.5s;
+  }
+  /* --to3: the distance from event 0 to event 3 in the layout of the cursor. */
+  .tl.r8 .cur {
+    transform: translateX(var(--to3));
+  }
+  .tl.now8 .e3 .cnum {
+    fill: var(--fr-saffron);
+    transition-delay: 0.5s;
+  }
+  .tl.now8 .ev {
+    animation: tl-a8 0.4s 0.4s backwards;
+  }
+  .tl.r8 .rid {
+    fill: var(--fr-c-pre);
+  }
+  .tl.now8 :is(.rid, .dbcall) {
+    animation: tl-a8 0.4s 0.6s backwards;
+  }
+  .tl.r8 .bar2 {
+    transform: scaleX(1);
+  }
+  .tl.r8 .cfr {
+    stroke: var(--fr-c-pre);
+  }
+  .tl.now8 :is(.bar2, .cfr) {
+    transition-delay: calc(var(--d) * 0.25 + 0.65s);
+  }
+
+  /* Step 9: the loop ends; FinishTask(), then Write(). */
+  .tl.r9 .cur {
+    opacity: 0;
+    transition-delay: 0.5s;
+  }
+  .tl.now9 .ev {
+    animation: tl-a9 0.4s 0.5s backwards;
+  }
+  .wr {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tl.now9 .wr {
+    opacity: 1;
+    transition-delay: 2.7s;
+  }
+  .swap {
+    transition: opacity 0.3s;
+  }
+  .tl.now9 .swap {
+    opacity: 0;
+    transition-delay: 2.4s;
+  }
+
+  @keyframes tl-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+  }
+  @keyframes tl-a1 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a2 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a3 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a4 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a5 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a6 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a7 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a8 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes tl-a9 {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tl,
+    .tl * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+</style>

@@ -1,0 +1,300 @@
+---
+title: 'Tasks'
+description: 'A task does one processing step for each event. The run calls the hooks of all tasks in a fixed order: parameters, initialization, each event, and the end of the run.'
+sidebar:
+  order: 3
+code: [fairroot/base/steer/FairTask.h, fairroot/base/steer/FairTask.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/base/steer/FairRun.cxx, fairroot/base/sim/FairMCApplication.cxx]
+---
+
+import TaskLifecycle from '../../../components/diagrams/TaskLifecycle.astro';
+import Snippet from '../../../components/Snippet.astro';
+
+A task is a class that derives from `FairTask` and does one processing step, for example digis from
+MC points or hits from digis. You add tasks to a run. The run calls the hooks of each task at fixed
+points: once at the start, once for each event and once at the end. This order decides when the
+parameters, the input branches and the output tree are ready.
+
+<TaskLifecycle />
+
+## The tree of tasks
+
+`FairTask` derives from ROOT's [`TTask`](https://root.cern/doc/master/classTTask.html)
+([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L39)). A `TTask` has a name, a list of
+subtasks and an active flag. Each run makes one main task with the name `FairTaskList`, and
+[`AddTask()`](/api/FairRun/#AddTask-2) adds your task to the list of the main task
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L110-L114)). So the tasks of a run form a
+tree.
+
+The run calls each step on the main task, and the call goes down the tree. A task comes first, then
+its subtasks in the order of `Add()`, then the next task. So a task always comes before its
+subtasks, and a task with all its subtasks comes before the next task.
+
+The run owns the tasks. It deletes the main task at the end
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L93-L97)), and ROOT's `TTask` deletes its
+subtasks with it. Make your tasks with `new`, and do not delete them yourself. The overload
+`AddTask(std::unique_ptr<FairTask>)` shows this transfer of ownership
+([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L59-L60)).
+
+## The hooks
+
+Override these virtual functions in your task:
+
+| Hook | Access | Default | The run calls it |
+| --- | --- | --- | --- |
+| `SetParContainers()` | protected | Does nothing | Once, in `Init()` of the run, before the runtime database fills the parameter containers |
+| `Init()` | protected | Returns `kSUCCESS` | Once, in `Init()` of the run, after the runtime database filled the containers |
+| `ReInit()` | protected | Returns `kSUCCESS` | When the run ID changes during `Run()` |
+| `Exec(Option_t*)` | public | From `TTask` | Once for each event |
+| `FinishEvent()` | public | Calls `FinishEvent()` of the subtasks | Once for each event, after `Exec()` of all tasks |
+| `Finish()` | protected | Does nothing | Once, after the last event |
+
+The defaults are in [FairTask.h](/source/fairroot/base/steer/FairTask.h/#L113-L131). Use the hooks
+for these jobs:
+
+- `SetParContainers()`: get your parameter containers from the runtime database. The containers are
+  still empty. See [Parameters and the runtime database](/concepts/parameters/).
+- `Init()`: read the parameter values, get the input branches, register the output branches and
+  make histograms. The return value tells the run if the task can work.
+- `ReInit()`: read the parameter values again. The runtime database has filled the containers for
+  the new run ID.
+- `Exec()`: process one event.
+- `FinishEvent()`: clean up after the event.
+- `Finish()`: write summaries and histograms.
+
+### The functions that the run calls
+
+The run does not call the hooks directly. It calls public functions of `FairTask` on the main task.
+Each function calls the hook of the task and then continues with the subtasks:
+
+| Function | Hook | Source |
+| --- | --- | --- |
+| [`SetParTask()`](/api/FairTask/#SetParTask) | `SetParContainers()` | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L81-L88) |
+| [`InitTask()`](/api/FairTask/#InitTask) | `Init()`, then a check of the return value | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64) |
+| [`ReInitTask()`](/api/FairTask/#ReInitTask) | `ReInit()`, then a check of the return value | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L66-L79) |
+| [`ExecuteTask()`](/api/FairTask/#ExecuteTask) | `Exec()` | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L128-L208) |
+| [`FinishEvent()`](/api/FairTask/#FinishEvent) | none: this function is the hook | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L90-L96) |
+| [`FinishTask()`](/api/FairTask/#FinishTask) | `Finish()` | [FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L98-L105) |
+
+Each function returns at once if the task is not active. Do not call these functions from your
+task. The run calls them.
+
+`FinishEvent()` and `FinishTask()` are virtual. An override replaces the check of the active flag
+and the calls to the subtasks, as in `FairRingSorterTask`
+([FairRingSorterTask.cxx](/source/fairroot/base/steer/FairRingSorterTask.cxx/#L89-L122)). Put your
+code for the end of the run into `Finish()`, not into an override of `FinishTask()`. For an override
+of `FinishEvent()`, see [Inactive tasks](#inactive-tasks).
+
+## The order in a reconstruction run
+
+`FairRunAna` calls the functions in the order below. The other runs use the same steps, with the
+differences in [Other runs](#other-runs).
+
+### Init() of the run
+
+1. The I/O manager initializes the source and the sink
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L142-L143)).
+2. With an input file, the run gets the run ID from the input. The runtime database fills the
+   containers that exist, then the run calls `SetParTask()`
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L186-L201)). Without an input file,
+   the run makes a new run ID and calls `SetParTask()` first
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L202-L213)).
+3. The runtime database fills all containers for the run ID. This includes the containers that the
+   tasks requested in `SetParContainers()`
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L220-L222)).
+4. The run calls `InitTask()` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L237-L238)).
+5. The sink makes the output tree
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L249-L250)).
+
+So the parameter values are ready in `Init()`, but not in `SetParContainers()`. The output tree does
+not exist yet in `Init()`, so register the output branches there.
+
+### Run()
+
+For each entry of the input, the run does these steps
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L302-L337)):
+
+1. The source reads the entry. A return value other than 0 ends the loop.
+2. The run fills the event header and checks the run ID. For a new run ID, the runtime database
+   fills the containers again, and the run calls `ReInitTask()`.
+3. The run calls `ExecuteTask("")`: `Exec()` of all active tasks.
+4. The sink fills the output tree with the event.
+5. The run calls `FinishEvent()`.
+
+After the last entry, the run calls `FinishTask()` and then writes the output
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L339-L345)).
+
+Two settings change this order:
+
+- [`SetContainerStatic(kTRUE)`](/api/FairRunAna/#SetContainerStatic) keeps the parameters of the
+  first run ID. The run then calls no `ReInit()`
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L568-L584)).
+- [`MarkFill(kFALSE)`](/api/FairRun/#MarkFill) skips the fill of the current event. A task can call
+  `FairRun::Instance()->MarkFill(kFALSE)` in `Exec()` to remove an event from the output
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L617-L624)).
+
+### Other runs
+
+- **Simulation** (`FairRunSim`): the tasks process the MC data of each event after the transport.
+  The application calls `ExecuteTask("")` and `FinishEvent()` of the tasks before the fill
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L652-L665)). So in a
+  simulation, `FinishEvent()` comes before the output tree gets the event.
+- **Multithreaded Geant4**: the copies of the application for the worker threads have no task list
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L132-L135)). The tasks
+  do not run on the workers.
+- **Online** (`FairRunOnline`): the same order as in `FairRunAna`, together with the unpackers of the
+  source. See [Process live data with FairRunOnline](/online/run-online/).
+- **Single entries**: `RunSingleEntry()`, which the event display uses, and `RunMQ()` call
+  `FinishTask()` after each entry. They never call `FinishEvent()`
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L443-L469)).
+
+[Hooks and their call order](/reference/hooks/) lists all steps of all runs.
+
+## Return values of Init() and ReInit()
+
+`Init()` and `ReInit()` return an [`InitStatus`](/api/InitStatus/). `InitTask()` checks the value:
+
+<Snippet file="fairroot/base/steer/FairTask.cxx" start="void FairTask::InitTask()" title="FairTask.cxx" />
+
+| Value | What happens |
+| --- | --- |
+| `kSUCCESS` | The task stays active. |
+| `kERROR` | The task becomes inactive, and the run continues without it. `InitTask()` logs nothing, so log the reason yourself. |
+| `kFATAL` | `InitTask()` logs `Initialization of Task <name> failed fatally` with the severity fatal. The task stays active. |
+
+`ReInitTask()` checks the return value of `ReInit()` in the same way. Its message for `kFATAL` is
+`Reinitialization of Task <name> failed fatally`
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L66-L79)).
+
+A fatal line stops the program only if FairLogger has a fatal handler. FairRoot installs its handler
+at the first call of [`FairLogger::GetLogger()`](/api/FairLogger/#GetLogger)
+([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L28-L47)). The handler writes a stack
+trace to a file and throws `fair::FatalException`. Without the handler, the program goes on after
+the fatal line. The task stays active, and the run calls its `Exec()` for each event. See
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+### Inactive tasks
+
+A task becomes inactive after `kERROR`, or when you call `SetActive(kFALSE)` before `Init()` of the
+run. For an inactive task:
+
+- The functions of the run return at once. The run calls no more hooks of the task.
+- After `kERROR`, the subtasks still get `Init()`, because `InitTask()` continues with the subtasks
+  after the check. But they get no `Exec()` and no `Finish()`: the run skips an inactive task
+  together with its subtasks ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L170-L208)).
+- An override of `FinishEvent()` still runs. The check of the active flag is in the base version of
+  `FinishEvent()`, and the run calls the override instead
+  ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L240-L248)). Check `IsActive()` in your
+  override. Call `FairTask::FinishEvent()` from it, so that the subtasks get their `FinishEvent()`.
+
+## Subtasks
+
+`TTask::Add()` adds a subtask to a task. Use a plain `FairTask` to make a group of tasks, as FairRoot
+does for its main task ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L45)):
+
+```cpp
+FairRunAna run{};
+// ... source, sink and parameters
+auto reco = new FairTask("Reconstruction");
+reco->Add(new MyHitFinder());
+reco->Add(new MyTrackFinder());
+run.AddTask(reco);
+```
+
+The run calls `Exec()` of `MyHitFinder` before `Exec()` of `MyTrackFinder`. With
+`reco->SetActive(kFALSE)`, you switch off the group with all its subtasks.
+
+- [`FairRun::GetTask()`](/api/FairRun/#GetTask) finds a task by its name, but only directly under the
+  main task ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L145-L150)).
+- [`SetVerbose()`](/api/FairTask/#SetVerbose) sets the level for the task and for the subtasks that
+  it has at that time ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L107-L116)).
+
+## Verbosity, timing and other settings
+
+### Verbosity
+
+- The constructor `FairTask(name, iVerbose)` sets `fVerbose`, with the default 1. The default
+  constructor sets 0 ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L25-L38)).
+- `FairTask` does not read `fVerbose`. Your task can use it to choose how much to log. For the log
+  output, use FairLogger: see [Logging](/tools/logging/).
+- If ROOT's `gDebug` is greater than 1, `ExecuteTask()` logs the name of each task before its
+  `Exec()` ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L151-L153)).
+
+### Time of each task
+
+`ExecuteTask()` measures each `Exec()` with `FairMonitor`
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L154-L156)). The monitor is off by
+default. Switch it on in the macro, before `Init()`:
+
+```cpp
+FairMonitor::GetMonitor()->EnableMonitor(kTRUE);
+```
+
+`FairRootFileSink` then writes the results into the folder `MonitorResults` of the output file
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L632-L664)). See
+[Measure time and memory](/tools/monitor/).
+
+### Persistence flags of output branches
+
+[`SetOutputBranchPersistent(name, flag)`](/api/FairTask/#SetOutputBranchPersistent) stores a flag for
+a branch name in the task. [`IsOutputBranchPersistent(name)`](/api/FairTask/#IsOutputBranchPersistent)
+returns the flag, or `kTRUE` for a name without a flag
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L250-L263)). For each name, only the first
+call counts.
+
+FairRoot does not read these flags: `Register()` uses only its argument `toFile`. So give the flag to
+`Register()` yourself:
+
+```cpp
+ioman->Register("MyDigi", "MyDetector", fDigis, IsOutputBranchPersistent("MyDigi"));
+```
+
+### Stream processing
+
+[`SetStreamProcessing()`](/api/FairTask/#SetStreamProcessing) sets the protected member
+`fStreamProcessing`. `FairTask` does not use it. The FairMQ processor devices of the examples set it
+for their task
+([FairMQPixelTaskProcessor.h](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h/#L161)).
+The FairMQ wrapper of Tutorial 3 sets it for the reconstruction task
+([MQRecoTask.h](/source/examples/advanced/Tutorial3/MQ/processorTask/MQRecoTask.h/#L54)). With the
+flag, this task stores no links
+([FairTestDetectorRecoTask.cxx](/source/examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx/#L78-L82)).
+
+:::caution
+The constructor with a name does not set `fStreamProcessing`
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L33-L38)). The member has no defined value
+until you call `SetStreamProcessing()`.
+:::
+
+## Deprecated functions
+
+:::note[Deprecated]
+`SetInputPersistance()`, `CheckInputPersistance()` and the member `fInputPersistance` are deprecated
+since v18.8. The code says that v20 will remove them
+([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L81-L92)).
+`CheckInputPersistance()` stores the result of `FairRootManager::CheckBranch()`
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L40-L44)), and FairRoot does not read it.
+Remove the calls. See [Deprecated APIs](/reference/deprecations/).
+:::
+
+## Good practice
+
+- Get the input branches and register the output branches in `Init()`, not in `Exec()`. The sink
+  makes the output tree after `Init()`.
+- Get the parameter containers in `SetParContainers()`. Read their values in `Init()`, and again in
+  `ReInit()`.
+- Clear the output collections at the start of `Exec()`. Do not clear them in `FinishEvent()` if
+  the task can run in a simulation: there, `FinishEvent()` comes before the fill.
+- Return `kFATAL` if the run makes no sense without the task, for example when required input is
+  missing. Call `FairLogger::GetLogger()` at the start of the macro, so that `kFATAL` stops the
+  program. Return `kERROR` only if the run can continue without the output of the task.
+- Add the tasks in the order of the data flow. A task gets a memory branch only from a task before
+  it.
+- Do not delete the objects that `GetObject()` or `InitObjectAs()` return.
+
+## Related pages
+
+- [Your first task](/start/first-task/): write, build and run a task.
+- [Branches, sources and sinks](/concepts/io/): how tasks exchange data.
+- [Parameters and the runtime database](/concepts/parameters/): the parameter containers of a task.
+- [Runs](/concepts/runs/): the run classes that call the tasks.
+- [Hooks and their call order](/reference/hooks/): all hooks of all classes, step by step.

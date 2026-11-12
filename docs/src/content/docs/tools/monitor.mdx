@@ -1,0 +1,237 @@
+---
+title: 'Measure time and memory'
+description: 'FairMonitor measures the time and the memory change of each task and shows the data flow between tasks and branches. FairRunInfo and FairSystemInfo measure events and the process.'
+sidebar:
+  order: 2
+code: [fairroot/tools/FairMonitor.h, fairroot/tools/FairMonitor.cxx, fairroot/tools/FairSystemInfo.h, fairroot/tools/FairSystemInfo.cxx, fairroot/base/steer/FairTask.cxx, fairroot/base/steer/FairRootManager.cxx, fairroot/base/sink/FairRootFileSink.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot has tools that measure a run. [`FairMonitor`](/api/FairMonitor/) measures each `Exec()` of
+each task, and it records which task reads and writes which branch. `FairRunInfo` measures each
+event, and [`FairSystemInfo`](/api/FairSystemInfo/) gives the memory of the process. Use them to find
+the slow task or the task that uses the memory.
+
+## Which tool to use
+
+| Tool | What it measures | How to start it | Result |
+| --- | --- | --- | --- |
+| `FairMonitor` | The real time and the change of the resident memory of each `Exec()` of each task. The branches that each task reads and registers. | `FairMonitor::GetMonitor()->EnableMonitor(kTRUE)` | Histograms in the folder `MonitorResults` of the output file. A table in the log, and a drawing of the data flow. |
+| `FairRunInfo` | The time and the memory of each event | `run->SetGenerateRunInfo(kTRUE)` | The file `FairRunInfo_<name>.root` |
+| `FairSystemInfo` | The peak and the current resident memory of the process | Call its functions in your code. | The return values |
+| `TStopwatch` of ROOT | The real time and the CPU time of a part of the macro | Call it in the macro. | The return values |
+
+## Switch on FairMonitor
+
+The monitor is off by default
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L42-L62)). Switch it on in the macro,
+before `Init()` of the run:
+
+```cpp
+FairMonitor::GetMonitor()->EnableMonitor(kTRUE);
+```
+
+[`GetMonitor()`](/api/FairMonitor/#GetMonitor) makes the one monitor object at the first call. While
+the monitor is off, the functions that measure return at once, and `Print()` logs the warning
+`FairMonitor was disabled. Nothing to print!`. The monitor records the data flow while the tasks
+run `Init()`, so switch it on before `Init()`. For the times only, a call before `Run()` is
+enough.
+
+[`EnableMonitor()`](/api/FairMonitor/#EnableMonitor) has a second argument, the name of a separate
+file for the results:
+
+<Snippet file="fairroot/tools/FairMonitor.h" start='void EnableMonitor(Bool_t tempBool = kTRUE, TString fileName = "")' title="FairMonitor.h" />
+
+Each call sets both values. Thus a later call without a file name removes the file name.
+
+:::caution[Do not use gMonitor]
+`FairMonitor.h` declares the global pointer `gMonitor`, but no FairRoot file defines it
+([FairMonitor.h](/source/fairroot/tools/FairMonitor.h/#L119)). Code that uses it does not link. Use
+`FairMonitor::GetMonitor()`.
+:::
+
+## What FairMonitor measures
+
+`FairTask::ExecuteTask()` and `ExecuteTasks()` put each `Exec()` between a start and a stop of the
+monitor ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L154-L156)):
+
+<Snippet file="fairroot/base/steer/FairTask.cxx" start='FairMonitor::GetMonitor()->StartMonitoring(task, "EXEC");' end='FairMonitor::GetMonitor()->StopMonitoring(task, "EXEC");' title="FairTask.cxx" />
+
+For each call, the monitor records two values
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L79-L151)):
+
+| Value | Histogram name | Unit |
+| --- | --- | --- |
+| The real time of `Exec()`, from a `TStopwatch` | `hist_<address>_<task name>_EXEC_TIM` | s |
+| The change of the resident memory of the process during `Exec()`, from `FairSystemInfo::GetCurrentMemory()` | `hist_<address>_<task name>_EXEC_MEM` | Byte |
+
+- `<address>` is the address of the task object. Thus two tasks with the same name get separate
+  histograms.
+- Bin `n` of a histogram holds the value of call `n`. The histogram starts with 1000 bins and grows
+  when it needs more ([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L153-L177)).
+- The subtasks of a task execute after the stop. Thus the time of a task does not include the time of
+  its subtasks.
+- The monitor also measures the main task of the run. Its own `Exec()` does no work.
+
+The monitor also adds all `EXEC` times. `Print()` shows this sum as the total run time. It is the sum
+of the measured `Exec()` calls, not the time of the full run.
+
+### Measure a part of your task
+
+The timer functions are public. Give a part of your code its own name, for example in `Exec()` of
+your task:
+
+```cpp title="MyTask.cxx"
+FairMonitor::GetMonitor()->StartTimer(this, "FIT");
+// ... the fit ...
+FairMonitor::GetMonitor()->StopTimer(this, "FIT");
+```
+
+The monitor fills the histogram `hist_<address>_<task name>_FIT_TIM`. `StartMemoryMonitor()` and
+`StopMemoryMonitor()` do the same for the memory, with the end `_MEM`.
+[`RecordInfo(this, "NHITS", value)`](/api/FairMonitor/#RecordInfo) stores any value for each call. Only
+the `EXEC` times go into the total run time.
+
+## The data flow
+
+`FairTask::InitTask()` tells the monitor which task runs `Init()` now
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)). `FairRootManager` then reports
+each branch name to the monitor:
+
+- [`Register()`](/api/FairRootManager/#Register): the task makes this branch. The monitor keeps
+  persistent and memory-only branches apart
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L148-L152)).
+- [`GetObject()`](/api/FairRootManager/#GetObject): the task reads this branch. The monitor records it
+  only if the branch exists
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L486-L495)).
+
+`RegisterAny()` and `InitObjectAs()` do not report to the monitor. Thus these branches are not in the
+data flow. A registration outside of a task, for example of the event header, gives an `info` line
+that ends with `WITHOUT TASK` ([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L179-L198)).
+
+## Print the results
+
+Call `Print()` after `Run()`:
+
+```cpp
+run->Run();
+FairMonitor::GetMonitor()->Print();
+```
+
+`Print()` writes `info` lines: the total run time, one line for each task of the tree, and a line of
+dashes:
+
+<Snippet file="fairroot/tools/FairMonitor.cxx" start="void FairMonitor::Print(Option_t*) const" title="FairMonitor.cxx" />
+
+Each task line has these parts
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L216-L315)):
+
+| Part | Content |
+| --- | --- |
+| `… s/ev` | The mean time of one `Exec()` call: the sum of the times, divided by the number of calls |
+| `… %` | The part of the task in the total run time |
+| A number with the unit `B`, `k`, `M` or `G` | The sum of the memory changes of all calls. `- - -` if the sum is negative or not recorded. |
+| The task name in quotes | Indented by two spaces for each level of the task tree |
+
+ANSI color codes give the values a colored background. A bar at the start of the line shows the part
+of the time, with 30 characters for 100 %. The bar is green below 30 %, yellow below 90 %, and red
+above. The memory is green for bytes, yellow for `k`, and red for `M` and `G`. A log file gets these
+codes too.
+
+:::caution[Print() and Draw() need FairRunAna]
+`Print()` and `Draw()` look for the task `FairTaskList` in the list of browsable objects of ROOT.
+Only `FairRunAna` and its subclass `FairRunAnaProof` put it there
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L177)).
+In a simulation or with `FairRunOnline`, `Print()` shows only the total run time, and `Draw()` draws
+nothing.
+:::
+
+[`PrintTask("EXEC_TIM")`](/api/FairMonitor/#PrintTask) works for all runs. It writes one line for each
+histogram with the text in its name, in the form
+`<task name>_EXEC_TIM >>>>> <sum> s / <calls> ent = <mean> s / ent`
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L331-L357)). Give `"EXEC_MEM"` for the
+memory, in bytes, or the name of a task for both values.
+
+## Draw the results
+
+[`Draw()`](/api/FairMonitor/#Draw) draws the data flow on the canvas `MonitorCanvas`
+([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L359-L585)):
+
+- The input branches are at the top. Each task is below the branches that it reads, and its output
+  branches are below the task. Tasks that read no branch are in a column on the left, and their
+  output branches are at the top.
+- A task is a green box. A red bar in the box shows its part of the total run time.
+- A persistent branch is a magenta box. A memory-only branch is a gray box.
+- Arrows go from a branch to the tasks that read it, and from a task to the branches that it makes.
+- The names are cut after 16 characters.
+
+[`DrawHist("EXEC_TIM")`](/api/FairMonitor/#DrawHist) draws all histograms with the text in their
+name, in the current pad. It adds a legend if it draws more than one histogram.
+[`GetHistList()`](/api/FairMonitor/#GetHistList) gives the `TList` of all histograms.
+
+## The results in the output file
+
+At the end of the run, `FairRootFileSink::Write()` calls
+[`StoreHistograms()`](/api/FairMonitor/#StoreHistograms)
+([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L326)):
+
+<Snippet file="fairroot/tools/FairMonitor.cxx" start="void FairMonitor::StoreHistograms(TFile* sinkFile)" title="FairMonitor.cxx" />
+
+1. It calls `Draw()` in the batch mode of ROOT, so that no window opens. After
+   [`EnableDrawing(kTRUE)`](/api/FairMonitor/#EnableDrawing), it does not change the batch mode.
+2. It makes the folder `MonitorResults` in the output file. With a file name from `EnableMonitor()`,
+   it uses that file instead, and it overwrites an existing file.
+3. It sets the number of bins of each histogram to the number of calls, and writes the histograms.
+4. It writes the canvas `MonitorCanvas`, if `Draw()` made one.
+
+Only `FairRootFileSink` stores the results. With another sink, use `Print()`, `PrintTask()` or
+`GetHistList()` in the macro. The histogram names contain addresses, so they change from run to run.
+To find a histogram, look for the task name in the list of keys.
+
+## Time and memory of each event
+
+After [`SetGenerateRunInfo(kTRUE)`](/api/FairRun/#SetGenerateRunInfo), `FairRunSim` and `FairRunAna`
+measure the time, the resident memory and the virtual memory after each event. At the end, they write
+six histograms into a separate file `FairRunInfo_<name>.root`. The simulation, digitization and
+reconstruction macros of Tutorial 3 switch it on. With multithreaded Geant4, `FairRunSim` does not
+measure the events ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L687-L689)).
+[Time and memory of each event](/concepts/event-headers/#time-and-memory-of-each-event) describes the
+histograms and the limits.
+
+## The memory of the process
+
+`FairSystemInfo` has two functions
+([FairSystemInfo.cxx](/source/fairroot/tools/FairSystemInfo.cxx/#L31-L83)):
+
+| Function | Return value | Source of the value |
+| --- | --- | --- |
+| [`GetMaxMemory()`](/api/FairSystemInfo/#GetMaxMemory) | The peak resident memory of the process up to now, in MB (1024 × 1024 bytes), as `Float_t` | `ru_maxrss` of `getrusage()` |
+| [`GetCurrentMemory()`](/api/FairSystemInfo/#GetCurrentMemory) | The current resident memory of the process in bytes, as `size_t`. 0 if the system does not give the value. | Linux: `/proc/self/statm`. macOS: `task_info()`. |
+
+The file compiles only on Linux and macOS. On other systems, the build stops with
+`#error "Unknown OS."` ([FairSystemInfo.cxx](/source/fairroot/tools/FairSystemInfo.cxx/#L20-L29)).
+
+The macro of Tutorial 1 gives the peak memory and the CPU load to the test dashboard. It measures
+the time with a `TStopwatch`, which it starts before it makes the run:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="FairSystemInfo sysInfo;" end='cout << "Real time "' title="run_tutorial1.C" />
+
+[Measurements for the dashboard](/tools/testing/#measurements-for-the-dashboard) explains the
+`<DartMeasurement>` lines.
+
+### FairMemory.h
+
+`FairMemory.h` does not measure memory. It defines `fairroot::detail::maybe_owning_ptr`, a
+`std::unique_ptr` that deletes its object only if it owns it
+([FairMemory.h](/source/fairroot/tools/FairMemory.h/)). `FairRootManager` keeps the source and the sink
+in such pointers. The namespace `detail` marks it as an internal helper: do not use it in your code.
+
+## Related pages
+
+- [Logging](/tools/logging/): the log lines of `Print()` and `PrintTask()`, and how to select them.
+- [Tasks](/concepts/tasks/): `ExecuteTask()`, the tree of tasks and `Init()`.
+- [Event headers and run IDs](/concepts/event-headers/): the histograms of `FairRunInfo`.
+- [Output: sinks and persistence](/reconstruction/output/): the folders of the output file.
+- [Tests](/tools/testing/): the measurements of the macros for the test dashboard.
+- [Log the MC steps](/tools/step-logger/): count the steps of the transport engine in each volume.

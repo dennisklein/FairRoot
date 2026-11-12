@@ -1,0 +1,87 @@
+---
+// Right column: the page contents, then the source files and guides of the page.
+import Default from '@astrojs/starlight/components/PageSidebar.astro';
+
+const { entry, toc } = Astro.locals.starlightRoute;
+const data = entry.data as typeof entry.data & {
+  code?: string[];
+  guides?: { label: string; link: string }[];
+};
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const code = data.code ?? [];
+const guides = data.guides ?? [];
+const withBase = (link: string) => (link.startsWith('/') && !link.startsWith(base + '/') ? base + link : link);
+---
+
+<Default />
+{
+  toc && (code.length > 0 || guides.length > 0) && (
+    <div class="right-sidebar-panel fr-extra sl-hidden lg:sl-block">
+      <div class="sl-container">
+        {guides.length > 0 && (
+          <nav aria-labelledby="fr-guides">
+            <h2 id="fr-guides">Guides</h2>
+            <ul>
+              {guides.map((g) => (
+                <li>
+                  <a href={withBase(g.link)}>{g.label}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )}
+        {code.length > 0 && (
+          <nav aria-labelledby="fr-code">
+            <h2 id="fr-code">Code</h2>
+            <ul>
+              {code.map((file) => (
+                <li>
+                  <a class="file" href={`${base}/source/${file}/`}>
+                    {file}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        )}
+      </div>
+    </div>
+  )
+}
+
+<style>
+  .fr-extra {
+    padding: 0 var(--sl-sidebar-pad-x) 1rem;
+  }
+  .fr-extra nav {
+    border-top: 1px solid var(--fr-rule);
+    padding-top: 0.9rem;
+    margin-bottom: 1rem;
+  }
+  .fr-extra h2 {
+    margin-bottom: 0.5rem;
+  }
+  .fr-extra ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .fr-extra li + li {
+    margin-top: 0.3rem;
+  }
+  .fr-extra a {
+    display: block;
+    font-size: var(--sl-text-xs);
+    text-decoration: none;
+    color: var(--fr-ink-2);
+    overflow-wrap: anywhere;
+  }
+  .fr-extra a:hover {
+    color: var(--fr-ink);
+  }
+  .fr-extra a.file {
+    font-family: var(--fr-font-mono);
+    font-size: 0.75rem;
+    color: var(--fr-link);
+  }
+</style>

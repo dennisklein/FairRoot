@@ -1,0 +1,455 @@
+---
+title: 'Libraries and headers'
+description: 'The FairRoot libraries: CMake targets, files, directories, main classes, public dependencies and build conditions. Where the headers are installed and how to include and link them.'
+sidebar:
+  order: 7
+code: [fairroot/fairmq/FairMQ.h, fairroot/fairmq/FairRunFairMQDevice.h, fairroot/basemq/devices/FairMQLmdSampler.h, fairroot/datamatch/FairMCMatch.h, fairroot/mcsteplogger/MCStepInterceptor.cxx, fairroot/tools/FairMemory.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+FairRoot builds up to 16 shared libraries and two header-only libraries. Each library is a CMake
+target in the namespace `FairRoot::`, and the build installs all public headers into one
+directory. This page lists the libraries and shows how to include the headers and link the
+targets.
+
+## Overview
+
+The directory `fairroot/` has one subdirectory for each library
+([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L12-L54)):
+
+| Target | Directory | Library file | Built when |
+| --- | --- | --- | --- |
+| [`FairRoot::Tools`](#fairroottools) | [fairroot/tools](/repo/fairroot/tools/) | `libFairTools` | always |
+| [`FairRoot::Alignment`](#fairrootalignment) | [fairroot/alignment](/repo/fairroot/alignment/) | `libAlignment` | always |
+| [`FairRoot::GeoBase`](#fairrootgeobase) | [fairroot/geobase](/repo/fairroot/geobase/) | `libGeoBase` | always |
+| [`FairRoot::ParBase`](#fairrootparbase) | [fairroot/parbase](/repo/fairroot/parbase/) | `libParBase` | always |
+| [`FairRoot::Base`](#fairrootbase) | [fairroot/base](/repo/fairroot/base/) | `libBase` | always |
+| [`FairRoot::Generators`](#fairrootgenerators) | [fairroot/generators](/repo/fairroot/generators/) | `libGen` | always |
+| [`FairRoot::TrackBase`](#fairroottrackbase) | [fairroot/trackbase](/repo/fairroot/trackbase/) | `libTrkBase` | always |
+| [`FairRoot::DataMatch`](#fairrootdatamatch) | [fairroot/datamatch](/repo/fairroot/datamatch/) | `libFairDataMatch` | always |
+| [`FairRoot::MCStepLogger`](#fairrootmcsteplogger) | [fairroot/mcsteplogger](/repo/fairroot/mcsteplogger/) | `libFairMCStepLogger` | always |
+| [`FairRoot::Geane`](#fairrootgeane) | [fairroot/geane](/repo/fairroot/geane/) | `libGeane` | Geant3 is found |
+| [`FairRoot::FastSim`](#fairrootfastsim) | [fairroot/fastsim](/repo/fairroot/fastsim/) | `libFairFastSim` | Geant4 and Geant4 VMC are found |
+| [`FairRoot::MCConfigurator`](#fairrootmcconfigurator) | [fairroot/mcconfigurator](/repo/fairroot/mcconfigurator/) | `libMCConfigurator` | Geant3, Geant4 VMC and yaml-cpp are found, and `FairRoot::FastSim` exists |
+| [`FairRoot::EventDisplay`](#fairrooteventdisplay) | [fairroot/eventdisplay](/repo/fairroot/eventdisplay/) | `libEventDisplay` | ROOT has the component `opengl` |
+| [`FairRoot::MbsAPI`](#fairrootmbsapi) | [fairroot/mbsapi](/repo/fairroot/mbsapi/) | `libMbsAPI` | `BUILD_MBS` is on |
+| [`FairRoot::Online`](#fairrootonline) | [fairroot/online](/repo/fairroot/online/) | `libOnline` | `BUILD_ONLINE` is on |
+| [`FairRoot::FairMQ`](#fairrootfairmq) | [fairroot/fairmq](/repo/fairroot/fairmq/) | none, header-only | `BUILD_BASEMQ` is on |
+| [`FairRoot::BaseMQ`](#fairrootbasemq) | [fairroot/basemq](/repo/fairroot/basemq/) | none, header-only | `BUILD_BASEMQ` is on |
+| [`FairRoot::ParMQ`](#fairrootparmq) | [fairroot/parmq](/repo/fairroot/parmq/) | `libParMQ` | `BUILD_BASEMQ` is on |
+
+Some file names are different from the target names, for example `libGen` for
+`FairRoot::Generators`. CMake sets this name with the property `OUTPUT_NAME`, for example in
+[fairroot/generators/CMakeLists.txt](/repo/fairroot/generators/CMakeLists.txt#L27-L28). The file
+also has the platform suffix, for example `.so` on Linux. The build sets the target property
+`VERSION` to the FairRoot version, so on Linux `libGen.so` is a link to `libGen.so.19.0.0`
+([CMakeLists.txt](/repo/CMakeLists.txt#L250-L252)).
+
+## Build options
+
+These options of the top-level [CMakeLists.txt](/repo/CMakeLists.txt#L120-L131) select
+libraries and parts of libraries:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `BUILD_ONLINE` | `ON` | Builds `FairRoot::Online`. |
+| `BUILD_MBS` | `OFF` | Builds `FairRoot::MbsAPI` and the MBS sources in `FairRoot::Online`. It also sets `BUILD_ONLINE` to `ON`. |
+| `BUILD_BASEMQ` | `ON` | Builds `FairRoot::FairMQ`, `FairRoot::BaseMQ` and `FairRoot::ParMQ`. CMake then requires FairMQ 1.4.0 or newer and Boost 1.67 or newer ([CMakeLists.txt](/repo/CMakeLists.txt#L202-L241)). |
+| `BUILD_PROOF_SUPPORT` | `OFF` | Adds `FairRunAnaProof` and `FairAnaSelector` to `FairRoot::Base`. With ROOT 6.32 or newer, CMake stops with an error. |
+| `BUILD_EVENT_BUILDER` | `OFF` | Adds `FairEventBuilder` and `FairEventBuilderManager` to `FairRoot::Base`. |
+
+The other optional libraries depend on packages that CMake finds or does not find. All options are
+on the page [CMake reference](/reference/cmake/).
+
+## The libraries
+
+For each library, "Public dependencies" lists the `PUBLIC` or `INTERFACE` entries of
+`target_link_libraries()`. A target that links the library gets these dependencies too.
+Libraries with a ROOT dictionary also get `ROOT::RIO` as a public dependency, see
+[ROOT dictionaries](#root-dictionaries).
+
+### FairRoot::Tools
+
+The logger interface, the monitor and the system information.
+
+- Main classes: [`FairLogger`](/api/FairLogger/), [`FairMonitor`](/api/FairMonitor/),
+  [`FairSystemInfo`](/api/FairSystemInfo/).
+- Other headers: [`FairMemory.h`](/source/fairroot/tools/FairMemory.h/) with internal helpers in
+  the namespace `fairroot::detail`, and the generated `FairVersion.h`.
+- Public dependencies: `FairLogger::FairLogger`, `ROOT::Core`.
+
+`FairVersion.h` comes from this template
+([fairroot/tools/CMakeLists.txt](/repo/fairroot/tools/CMakeLists.txt#L11-L13)):
+
+<Snippet file="fairroot/tools/FairVersion.h.in" start="#ifndef FAIRROOT_VERSION" end="#endif" lang="cpp" />
+
+### FairRoot::Alignment
+
+- Main class: [`FairAlignmentHandler`](/api/FairAlignmentHandler/).
+- Public dependencies: `ROOT::Geom`.
+
+### FairRoot::GeoBase
+
+The geometry input from ASCII `.geo` files and the media file.
+
+- Main classes: [`FairGeoLoader`](/api/FairGeoLoader/),
+  [`FairGeoInterface`](/api/FairGeoInterface/), [`FairGeoSet`](/api/FairGeoSet/),
+  [`FairGeoMedia`](/api/FairGeoMedia/), [`FairGeoRootBuilder`](/api/FairGeoRootBuilder/), and the
+  shapes, for example [`FairGeoBrik`](/api/FairGeoBrik/) and [`FairGeoTube`](/api/FairGeoTube/).
+- Public dependencies: `ROOT::Core`, `ROOT::MathCore`.
+
+### FairRoot::ParBase
+
+The runtime database, the parameter containers and their input and output.
+
+- Main classes: [`FairRuntimeDb`](/api/FairRuntimeDb/), [`FairParSet`](/api/FairParSet/),
+  [`FairParGenericSet`](/api/FairParGenericSet/), [`FairParamList`](/api/FairParamList/),
+  [`FairContFact`](/api/FairContFact/), [`FairParRootFileIo`](/api/FairParRootFileIo/),
+  [`FairParAsciiFileIo`](/api/FairParAsciiFileIo/), [`FairRtdbRun`](/api/FairRtdbRun/).
+- Public dependencies: `ROOT::Core`, `ROOT::RIO`.
+
+### FairRoot::Base
+
+The core of FairRoot. Its sources are in six subdirectories:
+
+| Subdirectory | Main classes |
+| --- | --- |
+| [steer](/repo/fairroot/base/steer/) | [`FairRun`](/api/FairRun/), [`FairRunSim`](/api/FairRunSim/), [`FairRunAna`](/api/FairRunAna/), [`FairTask`](/api/FairTask/), [`FairRootManager`](/api/FairRootManager/), [`FairLinkManager`](/api/FairLinkManager/), [`FairTrajFilter`](/api/FairTrajFilter/), [`FairWriteoutBuffer`](/api/FairWriteoutBuffer/), [`FairRingSorterTask`](/api/FairRingSorterTask/), [`FairTSBufferFunctional`](/api/FairTSBufferFunctional/), [`FairRadLenManager`](/api/FairRadLenManager/), [`FairRadMapManager`](/api/FairRadMapManager/), [`FairRadGridManager`](/api/FairRadGridManager/) |
+| [sim](/repo/fairroot/base/sim/) | [`FairMCApplication`](/api/FairMCApplication/), [`FairModule`](/api/FairModule/), [`FairDetector`](/api/FairDetector/), [`FairGenerator`](/api/FairGenerator/), [`FairPrimaryGenerator`](/api/FairPrimaryGenerator/), [`FairGenericStack`](/api/FairGenericStack/), [`FairGenericVMCConfig`](/api/FairGenericVMCConfig/), [`FairBaseParSet`](/api/FairBaseParSet/), [`FairGeoParSet`](/api/FairGeoParSet/), [`FairRunIdGenerator`](/api/FairRunIdGenerator/), [`FairVolume`](/api/FairVolume/), [`FairIon`](/api/FairIon/), [`FairParticle`](/api/FairParticle/) |
+| [event](/repo/fairroot/base/event/) | [`FairEventHeader`](/api/FairEventHeader/), [`FairMCEventHeader`](/api/FairMCEventHeader/), [`FairFileHeader`](/api/FairFileHeader/), [`FairMCPoint`](/api/FairMCPoint/), [`FairHit`](/api/FairHit/), [`FairTimeStamp`](/api/FairTimeStamp/), [`FairLink`](/api/FairLink/), [`FairMultiLinkedData`](/api/FairMultiLinkedData/), [`FairTrackParam`](/api/FairTrackParam/), [`FairRunInfo`](/api/FairRunInfo/) |
+| [field](/repo/fairroot/base/field/) | [`FairField`](/api/FairField/), [`FairFieldFactory`](/api/FairFieldFactory/) |
+| [source](/repo/fairroot/base/source/) | [`FairSource`](/api/FairSource/), [`FairFileSource`](/api/FairFileSource/), [`FairMixedSource`](/api/FairMixedSource/) |
+| [sink](/repo/fairroot/base/sink/) | [`FairSink`](/api/FairSink/), [`FairRootFileSink`](/api/FairRootFileSink/) |
+
+- Public dependencies: `FairRoot::Alignment`, `FairRoot::Tools`, `FairRoot::ParBase`,
+  `FairRoot::GeoBase`, `ROOT::Core`, `ROOT::Geom`, `ROOT::GeomPainter`, `ROOT::Hist`,
+  `ROOT::MathCore`, `ROOT::Matrix`, `ROOT::Physics`, `ROOT::RIO`, `ROOT::Tree`, and VMC
+  ([fairroot/base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L103-L124)).
+- VMC is `ROOT::VMC` if ROOT has the component `vmc`. Else CMake looks for the separate VMC package
+  and uses `VMCLibrary` ([CMakeLists.txt](/repo/CMakeLists.txt#L166-L171)).
+- With `BUILD_PROOF_SUPPORT`, the library also has [`FairRunAnaProof`](/api/FairRunAnaProof/)
+  and [`FairAnaSelector`](/api/FairAnaSelector/). With `BUILD_EVENT_BUILDER`, it also has
+  [`FairEventBuilder`](/api/FairEventBuilder/) and
+  [`FairEventBuilderManager`](/api/FairEventBuilderManager/)
+  ([fairroot/base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L74-L86)).
+
+### FairRoot::Generators
+
+Event generators for the primary generator.
+
+- Main classes: [`FairBoxGenerator`](/api/FairBoxGenerator/),
+  [`FairParticleGenerator`](/api/FairParticleGenerator/),
+  [`FairIonGenerator`](/api/FairIonGenerator/), [`FairAsciiGenerator`](/api/FairAsciiGenerator/),
+  [`FairUrqmdGenerator`](/api/FairUrqmdGenerator/),
+  [`FairShieldGenerator`](/api/FairShieldGenerator/),
+  [`FairEvtGenGenerator`](/api/FairEvtGenGenerator/), [`FairYPtGenerator`](/api/FairYPtGenerator/),
+  [`FairBaseMCGenerator`](/api/FairBaseMCGenerator/).
+- Public dependencies: `FairRoot::Base`, `ROOT::Core`, `ROOT::Hist`.
+
+### FairRoot::TrackBase
+
+Track parameters and track propagation.
+
+- Main classes: [`FairTrackPar`](/api/FairTrackPar/), [`FairTrackParH`](/api/FairTrackParH/),
+  [`FairTrackParP`](/api/FairTrackParP/), [`FairPropagator`](/api/FairPropagator/),
+  [`FairRKPropagator`](/api/FairRKPropagator/), [`FairGeaneUtil`](/api/FairGeaneUtil/).
+- Public dependencies: `ROOT::Core`, `ROOT::Physics`.
+- `FairRoot::Base` is a private dependency
+  ([fairroot/trackbase/CMakeLists.txt](/repo/fairroot/trackbase/CMakeLists.txt#L33-L45)). If
+  your code also uses classes of `Base`, link `FairRoot::Base` too.
+
+### FairRoot::Geane
+
+Track propagation with the Geane part of Geant3.
+
+- Main classes: [`FairGeane`](/api/FairGeane/), [`FairGeanePro`](/api/FairGeanePro/).
+- Public dependencies: `FairRoot::Base`, `FairRoot::TrackBase`, `geant321`, `ROOT::Core`,
+  `ROOT::Physics`.
+
+### FairRoot::FastSim
+
+Fast simulation in Geant4.
+
+- Main classes: [`FairFastSimDetector`](/api/FairFastSimDetector/),
+  [`FairFastSimModel`](/api/FairFastSimModel/),
+  [`FairFastSimRunConfiguration`](/api/FairFastSimRunConfiguration/),
+  [`FairFastSimulation`](/api/FairFastSimulation/).
+- Public dependencies: `FairRoot::Base`, `ROOT::Core`, `Geant4::G4processes` (`G4processes` with
+  Geant4 older than 10.6), `geant4vmc`
+  ([fairroot/fastsim/CMakeLists.txt](/repo/fairroot/fastsim/CMakeLists.txt#L30-L53)).
+
+### FairRoot::MCConfigurator
+
+The configuration of the transport engines from YAML files.
+
+- Main class: [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/).
+- Public dependencies: `FairRoot::Base`, `yaml-cpp::yaml-cpp`.
+- It links `FairRoot::FastSim`, `geant321` and `geant4vmc` as private dependencies
+  ([fairroot/mcconfigurator/CMakeLists.txt](/repo/fairroot/mcconfigurator/CMakeLists.txt#L25-L39)).
+  This is why the build needs Geant3, Geant4 VMC and `FastSim` for this library.
+
+### FairRoot::EventDisplay
+
+The event display with ROOT Eve.
+
+- Main classes: [`FairEventManager`](/api/FairEventManager/),
+  [`FairMCPointDraw`](/api/FairMCPointDraw/), [`FairHitDraw`](/api/FairHitDraw/),
+  [`FairBoxSetDraw`](/api/FairBoxSetDraw/), [`FairPointSetDraw`](/api/FairPointSetDraw/),
+  [`FairGeoTracksDraw`](/api/FairGeoTracksDraw/), [`FairXMLEveConf`](/api/FairXMLEveConf/).
+- Public dependencies: `FairRoot::Base`, `FairLogger::FairLogger`, `ROOT::Core`, `ROOT::Eve`,
+  `ROOT::Ged`, `ROOT::GeomPainter`, `ROOT::XMLIO`.
+- The sources are also in the subdirectories `datasource`, `gui`, `tracks` and `xml`.
+
+### FairRoot::DataMatch
+
+The matching of reconstructed data to MC data. This library is deprecated.
+
+- Main classes: [`FairMCMatch`](/api/FairMCMatch/),
+  [`FairMCMatchCreatorTask`](/api/FairMCMatchCreatorTask/),
+  [`FairMCMatchLoaderTask`](/api/FairMCMatchLoaderTask/),
+  [`FairMCMatchSelectorTask`](/api/FairMCMatchSelectorTask/),
+  [`FairMCDataCrawler`](/api/FairMCDataCrawler/).
+- Public dependencies: `FairRoot::Base`, `ROOT::Core`.
+
+Each header of the library gives a compiler warning:
+
+<Snippet file="fairroot/datamatch/FairMCMatch.h" start="#ifndef FAIR_SILENCE_DATAMATCH_DEPRECATION" end="#endif" />
+
+To stop the warning, define `FAIR_SILENCE_DATAMATCH_DEPRECATION` before you include the header.
+The library defines it for its own build
+([fairroot/datamatch/CMakeLists.txt](/repo/fairroot/datamatch/CMakeLists.txt#L42-L44)).
+
+### FairRoot::MCStepLogger
+
+A logger for the steps of the transport engine. You do not link it. You load it into a simulation
+with `LD_PRELOAD`. It has its own versions of `Stepping()`, `FinishEvent()` and `FinishRun()` of
+`FairMCApplication`. They log the data and then call the original functions in `libBase`
+([MCStepInterceptor.cxx](/source/fairroot/mcsteplogger/MCStepInterceptor.cxx/#L52-L79)).
+
+- The library has no header files and no ROOT dictionary.
+- It has no public dependencies. It links `FairRoot::Base`, ROOT, VMC and the system library for
+  dynamic loading as private dependencies.
+
+See [Log the MC steps](/tools/step-logger/).
+
+### FairRoot::MbsAPI
+
+A C library that reads MBS and LMD data. It is off by default (`BUILD_MBS`), and the
+[CHANGELOG](/repo/CHANGELOG.md#L91-L93) marks it as deprecated.
+
+- Sources: `f_evt.c`, `fLmd.c`, `f_stccomm.c`, `f_ut_utime.c`.
+- Headers: the headers of these sources and the MBS structure headers, for example `s_evhe.h`,
+  `s_bufhe.h`, `s_filhe.h` and `sMbs.h`
+  ([fairroot/mbsapi/CMakeLists.txt](/repo/fairroot/mbsapi/CMakeLists.txt#L11-L35)).
+- Public dependencies: none. The library has no ROOT dictionary.
+
+### FairRoot::Online
+
+The online run and the online sources.
+
+- Main classes: [`FairRunOnline`](/api/FairRunOnline/), [`FairOnlineSource`](/api/FairOnlineSource/),
+  [`FairUnpack`](/api/FairUnpack/).
+- With `BUILD_MBS`: [`FairLmdSource`](/api/FairLmdSource/), [`FairMbsSource`](/api/FairMbsSource/),
+  [`FairMbsStreamSource`](/api/FairMbsStreamSource/), [`FairRemoteSource`](/api/FairRemoteSource/),
+  [`MRevBuffer`](/api/MRevBuffer/)
+  ([fairroot/online/CMakeLists.txt](/repo/fairroot/online/CMakeLists.txt#L11-L29)).
+- Public dependencies: `FairRoot::Base`, `ROOT::Core`.
+
+See [Process live data with FairRunOnline](/online/run-online/).
+
+### FairRoot::FairMQ
+
+A header-only wrapper of [FairMQ](https://fairrootgroup.github.io/FairMQ/). Its interface
+dependency is `FairMQ::FairMQ`.
+
+- `FairMQ.h` includes the main FairMQ headers. For FairMQ versions before 1.4.41, it also defines
+  the new names in the namespace `fair::mq`, for example `fair::mq::Device`. It has the function
+  `fairroot::GetFairMQDeviceChannels()`.
+- `FairRunFairMQDevice.h` is for the main file of a device program. You implement
+  `fairGetDevice()`, and the header defines the function `getDevice()` that FairMQ calls.
+
+<Snippet file="fairroot/fairmq/FairRunFairMQDevice.h" start="// FairRoot API during transition period" end="std::unique_ptr<fair::mq::Device> fairGetDevice" />
+
+`FairRunFairMQDevice.h` defines functions that are not `inline`. Include it in only one source
+file of a program.
+
+### FairRoot::BaseMQ
+
+Header-only devices and serializers for FairMQ.
+
+- Headers: [`FairMQLmdSampler`](/api/FairMQLmdSampler/), [`FairMQUnpacker`](/api/FairMQUnpacker/),
+  [`BoostSerializer`](/api/BoostSerializer/), [`RootSerializer`](/api/RootSerializer/),
+  `FairBoostSerializationSupport.h`, `FairHitBoostSerializationSupport.h`,
+  `FairMCPointBoostSerializationSupport.h`, `FairTimeStampBoostSerializationSupport.h`.
+- Interface dependencies: `FairRoot::Base`, `FairRoot::FairMQ`, `FairRoot::ParBase`,
+  `FairRoot::Tools`, `FairRoot::MbsAPI` with `BUILD_MBS`, `Boost::serialization`,
+  `Boost::filesystem`, `ROOT::Net`, `ROOT::Core`, `ROOT::RIO`, `ROOT::Tree`
+  ([fairroot/basemq/CMakeLists.txt](/repo/fairroot/basemq/CMakeLists.txt#L34-L51)).
+
+:::caution
+The build installs `FairMQLmdSampler.h` with all other `BaseMQ` headers. This header includes
+`f_evt.h`, `s_bufhe_swap.h` and `s_filhe_swap.h` of `FairRoot::MbsAPI`
+([FairMQLmdSampler.h](/source/fairroot/basemq/devices/FairMQLmdSampler.h/#L18-L22)). The build
+installs these headers only with `BUILD_MBS=ON`. Without MBS, code that includes the installed
+`FairMQLmdSampler.h` does not compile.
+:::
+
+See [Serialize FairRoot data for messages](/online/serialization/).
+
+### FairRoot::ParMQ
+
+The parameter server device for FairMQ.
+
+- Main class: [`ParameterMQServer`](/api/ParameterMQServer/).
+- Program: `parmq-server`, installed into `bin`
+  ([fairroot/parmq/CMakeLists.txt](/repo/fairroot/parmq/CMakeLists.txt#L43-L49)).
+- Public dependencies: `FairRoot::FairMQ`. The library links `FairRoot::Base`,
+  `FairRoot::BaseMQ` and `FairRoot::ParBase` as private dependencies.
+
+See [Parameters over FairMQ](/online/parameters/).
+
+## ROOT dictionaries
+
+These libraries have a ROOT dictionary: `Tools`, `Alignment`, `GeoBase`, `ParBase`, `Base`,
+`Generators`, `TrackBase`, `Geane`, `FastSim`, `MCConfigurator`, `EventDisplay`, `Online` and
+`DataMatch`. The CMake function `fairroot_target_root_dictionary()` makes the dictionary with
+`rootcling`
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L135-L153)).
+
+For each of these libraries, the build installs two more files into the library directory:
+
+- `lib<name>.rootmap`, the rootmap file. ROOT uses it to load the library when a macro uses one
+  of its classes.
+- `G__<name>_rdict.pcm`, the PCM file that ROOT reads together with the dictionary.
+
+`<name>` is the output name of the library. For `FairRoot::Generators`, the files are
+`libGen.rootmap` and `G__Gen_rdict.pcm`. The function also adds `ROOT::RIO` as a public
+dependency, if it is not a public dependency of the library already
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L159-L181)).
+
+## Installed files
+
+The install step puts the libraries, the headers and the CMake package into these directories
+under `CMAKE_INSTALL_PREFIX`. CMake takes the names `include` and `lib` from `GNUInstallDirs`, so on
+some systems the library directory is `lib64`.
+
+<FileTree>
+- bin/
+  - parmq-server with `BUILD_BASEMQ`
+  - FairRootConfig.sh
+  - FairRootConfig.csh
+  - fairroot-config
+- include/ all public headers, without subdirectories
+  - FairRunSim.h
+  - FairVersion.h
+  - …
+- lib/
+  - libBase.so
+  - libBase.rootmap
+  - G__Base_rdict.pcm
+  - …
+  - cmake/
+    - FairRoot-19.0.0/
+      - FairRootConfig.cmake
+      - FairRootConfigVersion.cmake
+      - FairRootTargets.cmake
+- libexec/
+  - check_system.sh
+  - check_system.csh
+- share/
+  - fairbase/
+    - cmake/
+      - modules/
+      - scripts/
+    - examples/ with `BUILD_EXAMPLES`
+</FileTree>
+
+The version in the name of the package directory is the version of the FairRoot build
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L20-L45)). The build installs
+the CMake modules and scripts of FairRoot to `share/fairbase/cmake`
+([cmake/CMakeLists.txt](/repo/cmake/CMakeLists.txt#L9-L14)). The main CMake file installs the
+scripts in `bin` and `libexec` ([CMakeLists.txt](/repo/CMakeLists.txt#L318-L337)). The page
+[Environment variables](/reference/environment/) explains the scripts in `bin`.
+
+## Include the headers
+
+Each library installs its headers with `install(FILES ... DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})`.
+This command drops the subdirectories: `fairroot/base/steer/FairRunSim.h` becomes
+`include/FairRunSim.h`. Thus include a FairRoot header with its file name only:
+
+```cpp
+#include "FairRunSim.h"
+#include "FairRootManager.h"
+#include "FairVersion.h"
+```
+
+The targets give the right include directory to your code:
+
+- In the build tree of FairRoot, each target has its source directories as
+  `BUILD_INTERFACE` include directories, for example `fairroot/base/steer` and
+  `fairroot/base/sim` for `FairRoot::Base`.
+- After the installation, each target has `include` as its `INSTALL_INTERFACE` include directory.
+
+The `LOG()` macro is in the header `<fairlogger/Logger.h>` of the FairLogger package.
+`FairLogger.h` includes it.
+
+The build installs a header only if the CMake list of the library names the header or its source
+file. Thus some headers in the source tree are not installed:
+
+| Header | Why it is not installed |
+| --- | --- |
+| `FairAnaSelector.h`, `FairRunAnaProof.h` | Only with `BUILD_PROOF_SUPPORT` |
+| `FairEventBuilder.h`, `FairEventBuilderManager.h` | Only with `BUILD_EVENT_BUILDER` |
+| `FairLmdSource.h`, `FairMbsSource.h`, `FairMbsStreamSource.h`, `FairRemoteSource.h`, `MRevBuffer.h` | Only with `BUILD_MBS` |
+| `FairDoubleHit.h`, `FairWriteoutBufferAbsBasis.h` | No CMake list has them |
+| `ptrevcomm.h`, `ptrevmbsdef.h` | Internal headers of the MBS sources in `Online` |
+
+The API reference also lists the classes of the headers in this table.
+
+## Link the libraries in CMake
+
+The installation has a CMake package. Each target in it has the namespace `FairRoot::`
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L22-L27)). Add the
+installation prefix of FairRoot to `CMAKE_PREFIX_PATH`, so that CMake finds the package. The
+package does not find the packages that FairRoot depends on, so find them too. Then link the
+targets that your code uses:
+
+```cmake
+find_package(FairRoot 19.0 REQUIRED)
+find_package(ROOT REQUIRED)
+find_package(FairLogger REQUIRED)
+
+add_library(MyDetector SHARED MyDetector.cxx)
+target_link_libraries(MyDetector PUBLIC FairRoot::Base FairRoot::GeoBase FairRoot::ParBase)
+```
+
+The project template links the same three targets for its detector
+([NewDetector/CMakeLists.txt](/repo/templates/project_root_containers/NewDetector/CMakeLists.txt#L41-L48)).
+It finds FairRoot in another way: through the environment variable `FAIRROOTPATH` and
+`FindFairRoot.cmake`, and it finds the dependencies with `find_package2()` of FairCMakeModules
+([templates/project_root_containers/CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L19-L39)).
+[Use FairRoot in a CMake project](/start/cmake/) explains both ways and shows a complete project.
+[The CMake package](/reference/cmake/#the-cmake-package) lists the variables that the package sets.
+
+Keep these points in mind:
+
+- The targets need the imported targets of their dependencies, for example `ROOT::Core`,
+  `FairLogger::FairLogger` and `ROOT::VMC`. If FairRoot uses the separate VMC package, the VMC
+  target is `VMCLibrary`, and you must find `VMC` too.
+- Each exported target has the interface compile feature `cxx_std_<N>`, with the C++ standard of
+  the FairRoot build. Thus your target compiles with at least this standard
+  ([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L11-L28)).
+- The libraries of the examples, for example `ExMCStack` with `FairStack`, are installed with
+  `BUILD_EXAMPLES`, but they are not in the CMake package
+  ([examples/common/mcstack/CMakeLists.txt](/repo/examples/common/mcstack/CMakeLists.txt#L52-L53)).
+  The names `FairRoot::ExMCStack` and `FairRoot::ExPassive` exist only in the build tree of
+  FairRoot.
+
+## Related pages
+
+- [Architecture](/concepts/architecture/): how the libraries depend on each other and work together.
+- [CMake reference](/reference/cmake/): all CMake options and functions.
+- [Use FairRoot in a CMake project](/start/cmake/): a project that links FairRoot.
+- [Install FairRoot](/start/install/): build and install FairRoot.

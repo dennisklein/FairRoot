@@ -1,0 +1,247 @@
+---
+title: 'Radiation length and dose maps'
+description: 'Three managers of the simulation record the material that each track crosses, the dose per volume, and dose and fluence maps on a grid. Switch them on in the macro and read the output.'
+sidebar:
+  order: 11
+code: [fairroot/base/steer/FairRunSim.h, fairroot/base/steer/FairRadLenManager.cxx, fairroot/base/steer/FairRadMapManager.cxx, fairroot/base/steer/FairRadGridManager.cxx, fairroot/base/event/FairRadLenPoint.h, fairroot/base/event/FairRadMapPoint.h, fairroot/base/event/FairMesh.h, fairroot/base/event/FairMesh.cxx, fairroot/base/sim/FairMCApplication.cxx, examples/simulation/rutherford/macros/run_rad.C, examples/simulation/Tutorial1/macros/run_tutorial1_mesh.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A simulation run can record information at each step of the transport, in addition to the MC
+points of your detectors. Three managers do this. The radiation length manager records the material
+that each track crosses in each volume, for studies of the material budget. The radiation map
+manager computes the dose per volume, and the grid manager fills dose and fluence maps on a grid.
+
+The managers need no detector code. You switch them on in the simulation macro.
+
+## The three tools
+
+| Switch on with | Manager | Output | Content |
+| --- | --- | --- | --- |
+| [`SetRadLenRegister(kTRUE)`](/api/FairRunSim/#SetRadLenRegister) | [`FairRadLenManager`](/api/FairRadLenManager/) | Branch `RadLen` with [`FairRadLenPoint`](/api/FairRadLenPoint/) objects | One point for each track and volume: entry, exit, material, energy loss |
+| [`SetRadMapRegister(kTRUE)`](/api/FairRunSim/#SetRadMapRegister) | [`FairRadMapManager`](/api/FairRadMapManager/) | Branch `RadMap` with [`FairRadMapPoint`](/api/FairRadMapPoint/) objects | One point for each track and volume: material, mass of the volume, energy loss, dose |
+| [`SetRadGridRegister(kTRUE)`](/api/FairRunSim/#SetRadGridRegister) and [`AddMesh()`](/api/FairRunSim/#AddMesh) | [`FairRadGridManager`](/api/FairRadGridManager/) | Histograms in the directory `Dosimetry` of a separate ROOT file | For each [`FairMesh`](/api/FairMesh/): maps of the dose (TID), the fluence and the SEU fluence in x and y |
+
+## How the managers run
+
+<Steps>
+
+1. Set the switches before `Init()`. `FairRunSim::Init()` gives them to `FairMCApplication`
+   ([code](/source/fairroot/base/steer/FairRunSim.cxx/#L221-L229)), which creates the managers
+   ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L1238-L1262)).
+
+2. `FairMCApplication::InitGeometry()` calls `Init()` of each manager
+   ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L863-L871)). The radiation length and
+   radiation map managers register their branches. These branches go to the output file.
+
+3. `FairMCApplication::Stepping()` gives each step of each track to the managers. The first two get
+   the module ID of the current volume as well.
+
+4. `FairMCApplication::FinishEvent()` clears the point collections after the event is written
+   ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L678-L683)).
+
+5. `FairMCApplication::FinishRun()` writes the grid histograms
+   ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L330-L361)).
+
+</Steps>
+
+This part of the stepping calls the managers:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="if (fRadLenMan || fRadMapMan) {" end="^}" title="FairMCApplication.cxx" />
+
+The managers run in sequential mode only. In multithreaded mode the workers have no managers, see
+[Multithreaded Geant4](/simulation/geant4-mt/).
+
+## Radiation length
+
+The Rutherford example switches on the radiation length manager:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rad.C" start="Start the radiation length manager" end="run.SetRadLenRegister(kTRUE);" title="run_rad.C" />
+
+The manager works per track and volume ([code](/source/fairroot/base/steer/FairRadLenManager.cxx/#L77-L117)):
+
+- When the track enters a volume, it keeps the position, momentum, time, track length and material.
+- At each step, it adds the energy deposit of the step.
+- When the track leaves the volume, stops or disappears, it adds a `FairRadLenPoint`.
+
+A `FairRadLenPoint` derives from [`FairMCPoint`](/api/FairMCPoint/) and holds:
+
+| Getter | Content |
+| --- | --- |
+| `GetTrackID()` | Index of the track in the stack |
+| `GetDetectorID()` | Module ID of the volume: the position of its module in the `AddModule()` calls, from 0 |
+| `GetPosition()`, `GetX()`, `GetY()`, `GetZ()` | Entry point [cm] |
+| `GetPositionOut()`, `GetXOut()`, `GetYOut()`, `GetZOut()` | Exit point [cm] |
+| `GetPx()` … `GetPz()`, `GetPxOut()` … `GetPzOut()` | Momentum at entry and at exit [GeV] |
+| `GetTime()` | Time of flight at entry [ns] |
+| `GetLength()` | Track length at entry [cm], not the length in the volume |
+| `GetEnergyLoss()` | Sum of the energy deposits in the volume [GeV] |
+| [`GetA()`](/api/FairRadLenPoint/#GetA), [`GetZm()`](/api/FairRadLenPoint/#GetZm), [`GetDensity()`](/api/FairRadLenPoint/#GetDensity), [`GetRadLength()`](/api/FairRadLenPoint/#GetRadLength) | Material at entry, from `TVirtualMC::CurrentMaterial()`: A, Z, density and radiation length |
+
+The module ID comes from `FairRunSim::AddModule()`, which counts the modules from 0
+([code](/source/fairroot/base/steer/FairRunSim.cxx/#L127-L133)). In `run_rad.C`, the cave has the
+ID 0, the target 1 and the Rutherford detector 2.
+
+### Sum the material budget
+
+The thickness of a volume in units of the radiation length is the path in the volume divided by
+`GetRadLength()`. This sketch sums it for the track with the stack index 0, the first primary, in
+each event. It uses the straight line from entry to exit as the path:
+
+```cpp title="material_budget.C"
+TFile file("data/test1_TGeant4.mc.root");
+auto tree = static_cast<TTree*>(file.Get("cbmsim"));
+TClonesArray* points = nullptr;
+tree->SetBranchAddress("RadLen", &points);
+for (Long64_t i = 0; i < tree->GetEntries(); ++i) {
+    tree->GetEntry(i);
+    double xOverX0 = 0.;
+    for (Int_t j = 0; j < points->GetEntriesFast(); ++j) {
+        auto point = static_cast<FairRadLenPoint*>(points->At(j));
+        if (point->GetTrackID() == 0) {
+            xOverX0 += (point->GetPositionOut() - point->GetPosition()).Mag() / point->GetRadLength();
+        }
+    }
+    std::cout << "Event " << i << ": x/X0 = " << xOverX0 << '\n';
+}
+```
+
+`data/test1_TGeant4.mc.root` is the output file of `run_rad.C` with Geant4, and `cbmsim` is the
+default tree name. For a curved track, the straight line is shorter than the path.
+
+## Radiation map
+
+No example macro uses the radiation map manager. Switch it on before `Init()`:
+
+```cpp
+run.SetRadMapRegister(kTRUE);
+```
+
+In `Init()`, the manager computes the mass of each volume of the geometry with
+`TGeoVolume::WeightA()` and keeps it in a map
+([code](/source/fairroot/base/steer/FairRadMapManager.cxx/#L83-L118)). ROOT gives this mass in kg.
+It includes the daughter volumes, and it gives no mass to materials with a density below
+0.01 g/cm³.
+
+Then the manager works per track and volume, like the radiation length manager. At each step it
+adds the energy deposit and the step length, and it computes the dose:
+
+<Snippet file="fairroot/base/steer/FairRadMapManager.cxx" lines="163-176" title="FairRadMapManager.cxx" />
+
+The factor `1.602e-10` converts GeV to J. With the mass in kg, the dose is in J/kg (Gy). The
+manager sets the dose to `-0.00001` in these cases:
+
+- The PDG code is 10000 or more (fragments).
+- The track made no step length in the volume, or the volume has no mass.
+- The dose is more than 0.02.
+
+A `FairRadMapPoint` holds:
+
+| Getter | Content |
+| --- | --- |
+| `GetTrackID()` | Index of the track in the stack |
+| `GetDetectorID()` | Volume ID from `TVirtualMC::CurrentVolID()`. It identifies the volume, not the copy. |
+| `GetPosition()`, `GetPositionOut()`, `GetPxOut()` … `GetPzOut()` and the getters of `FairMCPoint` | Entry, exit, momentum, time, energy loss |
+| [`GetPdg()`](/api/FairRadMapPoint/#GetPdg) | PDG code of the track |
+| [`GetMass()`](/api/FairRadMapPoint/#GetMass) | Mass of the volume [kg] |
+| [`GetDose()`](/api/FairRadMapPoint/#GetDose) | Dose of this track in this volume, or `-0.00001` |
+| [`GetDoseSL()`](/api/FairRadMapPoint/#GetDoseSL) | Always 0. The manager does not compute it. |
+| [`GetA()`](/api/FairRadMapPoint/#GetA), [`GetZm()`](/api/FairRadMapPoint/#GetZm), [`GetDensity()`](/api/FairRadMapPoint/#GetDensity) | Material at entry |
+
+The sum of the step lengths has no getter. Read it as the leaf `RadMap.fStep`. To get the dose of
+each volume, sum the positive doses for each volume ID. A `TTree::Draw()` call does this, with the
+dose as the weight. Give the histogram one bin for each volume ID, here for the IDs 0 to 999:
+
+```cpp
+cbmsim->Draw("RadMap.fDetectorID>>dose(1000,0,1000)", "RadMap.fDose * (RadMap.fDose > 0)");
+```
+
+To find the volume of an ID, call `gGeoManager->GetVolume(id)`. The manager uses the same call to
+find the mass of the current volume.
+
+:::note
+The radiation map manager writes to `std::cout`, not to the logger. `Init()` prints one line for each
+volume, and `Reset()` prints one line after each event.
+:::
+
+## Dose and fluence maps on a grid
+
+A grid is a box with bins, a [`FairMesh`](/api/FairMesh/). Tutorial 1 defines two grids:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1_mesh.C" start="run.SetRadGridRegister(kTRUE);" end='SetOutputFileName("radGridResults.root");' title="run_tutorial1_mesh.C" />
+
+Follow these rules:
+
+- Give each grid a name. The histograms get the names `<name>TID`, `<name>FLU` and `<name>SEU`.
+- Call `SetX()`, `SetY()` and `SetZ()` before `AddMesh()`. `AddMesh()` calls `calculate()`, which
+  books the histograms and computes the bin volume
+  ([code](/source/fairroot/base/event/FairMesh.cxx/#L63-L89)).
+- Set the output file after `Init()`. The grid manager exists only after `Init()`. The default
+  file name is `radGridManager.root`
+  ([code](/source/fairroot/base/steer/FairRadGridManager.cxx/#L30-L54)).
+
+### What the grid manager fills
+
+At each step, the manager tests the position after the step against the box of each grid. If the
+position is in the box, it fills the bin at this x and y
+([code](/source/fairroot/base/steer/FairRadGridManager.cxx/#L74-L122)):
+
+| Histogram | Weight of each fill | Condition |
+| --- | --- | --- |
+| `<name>TID` | Energy deposit of the step [GeV] divided by the bin volume [cm³] | None |
+| `<name>FLU` | Step length [cm] divided by the bin volume [cm³] | The step is shorter than 5 bin diagonals |
+| `<name>SEU` | Step length divided by the bin volume, as for the fluence | As for the fluence, and the momentum of the particle in the stack is more than 0.02 GeV |
+
+The histograms are `TH2D` in x and y. The z range limits the box and goes into the bin volume. Use
+one bin in z, as the example does.
+
+For the SEU map, the manager takes the momentum from `GetCurrentTrack()` of the stack. In
+`FairStack`, this is the momentum of the particle when it was made.
+
+At the end of the run, `FinishRun()` scales all histograms with 1 divided by the number of primaries
+that `FairPrimaryGenerator` made (`GetTotPrimary()`). It writes them to the directory `Dosimetry`
+of the output file of the grid manager. The values are thus per primary particle: GeV/cm³ for the
+dose map, and cm/cm³ for the fluence maps.
+
+:::caution[The event tree of a grid run]
+With the grid manager, `FinishRun()` does not call `FairRootManager::Write()`
+([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L368-L370)). The sink closes its file
+without a final write of the tree. Check the output file of a grid run before you use its tree.
+:::
+
+## Limits
+
+- **Track IDs stay stack indices.** At the end of an event, the stack changes the track IDs only in
+  the MC points of the active detectors ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L645-L648)).
+  The track IDs in `RadLen` and `RadMap` stay indices of the stack. They agree with the indices of
+  the `MCTrack` branch only if the stack stores all particles, see
+  [Select the particles to store](/simulation/stack/#select-the-particles-to-store).
+- **Large output.** The radiation length and radiation map managers make one point for each track
+  in each volume, also in the cave.
+- **No check of the volume map.** The stepping looks up the module ID of the current volume and
+  does not check the result ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L576-L585)).
+  A volume that no module made has no module ID.
+
+## Test the examples
+
+The CMake tests run both example macros with Geant4:
+
+| Test | Command in the build tree | Passes when the output contains |
+| --- | --- | --- |
+| `ex_sim_run_rad_TGeant4` | `run_rad.sh 100 "TGeant4"` | `Macro finished successfully` |
+| `ex_sim_tutorial1_mesh_TGeant4` | `run_tutorial1_mesh.sh 10 "TGeant4"` | `Macro finished successfully` |
+
+Run them with `ctest -R ex_sim_run_rad` and `ctest -R ex_sim_tutorial1_mesh`. If CMake finds
+Geant3 and `ENABLE_GEANT3_TESTING` is on, it adds the same tests for `TGeant3`
+([CMake](/repo/examples/CMakeLists.txt)). The tests check only the final message of the macro.
+
+## Related pages
+
+- [Write a simulation macro](/simulation/run-macro/): where the switches go in the macro.
+- [Geometry and materials](/simulation/geometry/): the media that the managers read.
+- [The particle stack and MC tracks](/simulation/stack/): the track indices of the stack.
+- [Branches, sources and sinks](/concepts/io/): the output tree and its branches.
+- [Rutherford experiment](/examples/rutherford/): the example with `run_rad.C`.
+- [Tutorial 1: a simple detector](/examples/tutorial1/): the example with `run_tutorial1_mesh.C`.

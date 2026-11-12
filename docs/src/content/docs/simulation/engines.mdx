@@ -1,0 +1,350 @@
+---
+title: 'Transport engines and their configuration'
+description: 'Select Geant3 or Geant4 with the run name. A macro, a YAML file or your own function makes the transport engine and the stack, and sets the physics list and the cuts. Other macros add decays.'
+sidebar:
+  order: 3
+code:
+  [
+    fairroot/base/steer/FairRunSim.cxx,
+    fairroot/base/sim/FairGenericVMCConfig.h,
+    fairroot/base/sim/FairGenericVMCConfig.cxx,
+    fairroot/mcconfigurator/FairYamlVMCConfig.h,
+    fairroot/mcconfigurator/FairYamlVMCConfig.cxx,
+    fairroot/base/sim/FairMCApplication.cxx,
+    examples/common/gconfig/FairVMCConfig.cxx,
+    examples/common/gconfig/g4Config.C,
+    examples/common/gconfig/SetCuts.C,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot does not transport the particles itself. A transport engine does this work through the
+[Virtual Monte Carlo](https://vmc-project.github.io/) (VMC): Geant3 or Geant4. The name of the run
+selects the transport engine. In `FairRunSim::Init()`, a configuration makes the transport engine
+and the stack, and sets the physics list, the processes and the cuts.
+
+## Select the transport engine
+
+Give the name of the transport engine to the run with `SetName()`, before `Init()`. Tutorial 1 gets
+the name from an argument of the macro:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="run->SetName(mcEngine.c_str());" end="run->SetIsMT(isMT);" title="run_tutorial1.C" />
+
+| Name | Object that the configuration makes | Remarks |
+| --- | --- | --- |
+| `TGeant4` | `TGeant4` | All simulation tests of the examples use it. Geant4 can also use several threads, see [Multithreaded Geant4](/simulation/geant4-mt/). |
+| `TGeant3` | `TGeant3TGeo` | CMake adds the Geant3 tests only if it finds Geant3 and `ENABLE_GEANT3_TESTING` is `ON` ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L12-L17)). The default is `OFF` ([CMakeLists.txt](/repo/CMakeLists.txt#L121)). |
+| `TFluka` | `TFluka` | Only the macro configuration knows this name. CMake does not look for Fluka, and no test uses it. |
+
+`SetName()` is the function of the ROOT class `TNamed`. The run gives its name to the configuration
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L320)). Without `SetName()`, the
+name is empty. Then the macro configuration makes no transport engine, but it still calls
+`SetCuts()`. The example `SetCuts.C` uses the transport engine without a check, so the run fails
+([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L159-L169)). The
+YAML configuration logs a fatal error at once. A fatal error stops the program only if FairLogger
+has a fatal handler, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+For Geant3, the configuration makes `TGeant3TGeo` when the geometry model starts with `TGeo`. `TGeo`
+is the default model. [`SetGeoModel()`](/api/FairRunSim/#SetGeoModel) changes the model only if the
+name is already `TGeant3`, so call it after `SetName()`. FairRoot does not support the other model,
+`G3Native`: the geometry loader prints a message and calls `exit(0)`
+([FairGeoLoader.cxx](/source/fairroot/geobase/FairGeoLoader.cxx/#L32-L47)).
+
+After the initialization, the log shows the name of the transport engine object, for example
+`Monte Carlo Engine Initialisation with: TGeant4`.
+
+## When the configuration runs
+
+At the end of [`FairRunSim::Init()`](/api/FairRunSim/#Init), the run calls `SetMCConfig()`. After it,
+`Init()` only writes the file header:
+
+<Snippet file="fairroot/base/steer/FairRunSim.cxx" start="void FairRunSim::SetMCConfig()" title="FairRunSim.cxx" />
+
+`SetMCConfig()` does three steps:
+
+1. **Setup.** It calls your function of [`SetSimSetup()`](/api/FairRunSim/#SetSimSetup). Else it
+   calls `Setup()` of the configuration object. If you gave no object, the run makes a
+   `FairGenericVMCConfig`. The setup must make the transport engine and the stack.
+2. **Initialization.** [`FairMCApplication::InitMC()`](/api/FairMCApplication/#InitMC) gets the
+   transport engine and its stack. It gives the magnetic field to the transport engine, and calls
+   `Init()` and `BuildPhysics()` of the transport engine. The transport engine calls the callbacks of
+   the MC application, for example to build the geometry. Geant3 calls them in `Init()`. Geant4 calls
+   some of them already in the setup step, see [Decays](#decays).
+3. **Post-init.** It calls your function of
+   [`SetSimSetupPostInit()`](/api/FairRunSim/#SetSimSetupPostInit). Else it calls `SetupPostInit()`
+   of the configuration object. Settings in this step see the initialized transport engine.
+
+`InitMC()` logs the fatal error `No MC engine defined` if the setup made no transport engine. It
+logs the fatal error `No Stack defined.` if the transport engine has no stack that derives from
+`FairGenericStack` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L246-L262)).
+For all steps of `Init()`, see [What Init() does](/simulation/overview/#what-init-does).
+
+## Three ways to configure
+
+| Way | Select it with | What makes the transport engine |
+| --- | --- | --- |
+| Macros | Nothing (the default), or [`SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig) with a `FairGenericVMCConfig` | The macro `g4Config.C` or `g3Config.C` |
+| YAML file | `SetSimulationConfig()` with a class derived from [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/), for example `FairVMCConfig` | `FairYamlVMCConfig`, from the keys of `g4Config.yaml` or `g3Config.yaml` |
+| Function | `SetSimSetup()` and `SetSimSetupPostInit()` | Your code |
+
+All example macros use the macro configuration. `FairGenericVMCConfig::Setup()` calls this way
+deprecated in two warnings ([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L28-L29)):
+
+```txt
+FairGenericVMCConfig::Setup() Using gConfig.C macro DEPRACATED.
+Check FairRoot/examples/common/gconfig/ for current YAML implementation.
+```
+
+The YAML way needs the library `MCConfigurator`. CMake builds it only with Geant3, Geant4 VMC,
+yaml-cpp and the FastSim library ([CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L43-L46)).
+
+## The macro configuration
+
+[`FairGenericVMCConfig::Setup()`](/api/FairGenericVMCConfig/#Setup) loads up to three ROOT macros.
+After it loads a macro, it calls one function of the macro:
+
+| Step | Geant4 | Geant3 | Function | Other name with |
+| --- | --- | --- | --- | --- |
+| 1. Library macro | `g4libs.C` | `g3libs.C` | `g4libs()`, `g3libs()` | None |
+| 2. Configuration macro | `g4Config.C` | `g3Config.C` | `Config()` | [`SetUserConfig()`](/api/FairRunSim/#SetUserConfig) |
+| 3. Cuts macro | `SetCuts.C` | `SetCuts.C` | `SetCuts()` | [`SetUserCuts()`](/api/FairRunSim/#SetUserCuts) |
+
+<Snippet file="fairroot/base/sim/FairGenericVMCConfig.cxx" start="Now load the Config and Cuts" end='gROOT->ProcessLine("SetCuts()");' title="FairGenericVMCConfig.cxx" />
+
+FairRoot looks for a file name in `CONFIG_DIR` first, and then in `$VMCWORKDIR/gconfig/`. For
+`g4libs.C`, the second place is the directory in `GEANT4VMC_MACRO_DIR`. A name with `/` is a path,
+and FairRoot uses it as it is. The cuts macro is an exception: FairRoot always
+looks in `CONFIG_DIR` first. The library macro is optional. For all rules, see
+[CONFIG_DIR: engine configuration and macros](/reference/environment/#config_dir-engine-configuration-and-macros).
+
+The example macros set `CONFIG_DIR` to `$VMCWORKDIR/common/gconfig`, because the examples keep the
+configuration in [`examples/common/gconfig/`](/repo/examples/common/gconfig/). Only Tutorial 4 has
+its own folder `simulation/Tutorial4/gconfig/`. Set `CONFIG_DIR` before `Init()`.
+
+### The configuration macro for Geant4
+
+`g4Config.C` makes the run configuration of Geant4 VMC, the transport engine and the stack:
+
+<Snippet file="examples/common/gconfig/g4Config.C" start="Bool_t mtMode = FairRunSim::Instance()->IsMT();" end="geant4->ProcessGeantMacro(configm1.Data());" title="examples/common/gconfig/g4Config.C" />
+
+- The run configuration gets five arguments: the geometry input, the physics list, the special
+  processes, special stacking and multithreading.
+- `geomRoot` means: geometry defined with ROOT, navigation with ROOT (comment in the macro).
+- FairRoot gives the physics list to Geant4 VMC unchanged. The examples use `QGSP_BERT_EMV`, the
+  project templates use `QGSP_FTFP_BERT`. Geant4 VMC defines the valid names. The comment in the
+  template macro lists them
+  ([g4Config.C](/source/templates/project_root_containers/gconfig/g4Config.C/#L21-L29)).
+- [`FairFastSimRunConfiguration`](/api/FairFastSimRunConfiguration/) derives from
+  `TG4RunConfiguration` and adds the fast simulation of FairRoot, see
+  [Fast simulation](/simulation/fast-simulation/).
+- The stack is a `FairStack` that keeps all secondaries, see
+  [The particle stack and MC tracks](/simulation/stack/).
+- `ProcessGeantMacro()` runs the Geant4 commands in `g4config.in`, see
+  [Geant4 commands](#geant4-commands).
+
+:::caution[Copy the macro with care]
+`g4Config.C` reads `$VMCWORKDIR/common/gconfig/g4config.in`, not a file in `CONFIG_DIR`. In
+another project, change this path. The copy in Tutorial 4 reads `$CONFIG_DIR/g4config.in`
+([g4Config.C](/source/examples/simulation/Tutorial4/gconfig/g4Config.C/#L58-L59)).
+:::
+
+`g3Config.C` makes `TGeant3TGeo` or `TGeant3` and a `FairStack`. Then it sets the Geant3 options, for
+example `SetTRIG()` and `SetAUTO()` ([g3Config.C](/source/examples/common/gconfig/g3Config.C/#L12-L44)).
+The YAML file `g3Config.yaml` has the same values.
+
+### The post-init macro
+
+[`UsePostInitConfig()`](/api/FairGenericVMCConfig/#UsePostInitConfig) switches on the post-init
+step. Then `SetupPostInit()` loads `g4ConfigPostInit.C` and calls `ConfigPostInit()`. It does this
+only for Geant4. Without `UsePostInitConfig()`, it logs `FairGenericVMCConfig::SetupPostInit() OFF.`
+
+The example macro runs the Geant4 commands of `g4configPostInit.in`. The test
+`ex_sim_tutorial1_PostInitConfig` runs Tutorial 1 with this step
+([CMakeLists.txt](/repo/examples/simulation/Tutorial1/macros/CMakeLists.txt#L65-L70)). It passes when
+the log contains the line `Loading Geant4 PostInit Config.` of the macro.
+
+## The YAML configuration
+
+[`FairYamlVMCConfig`](/api/FairYamlVMCConfig/) reads a YAML file with yaml-cpp. The class is
+abstract: derive from it and implement [`SetupStack()`](/api/FairYamlVMCConfig/#SetupStack), which
+makes the stack and gives it to the transport engine. `FairVMCConfig` in the library `ExGConfig` of
+the examples does this:
+
+<Snippet file="examples/common/gconfig/FairVMCConfig.cxx" start="void FairVMCConfig::SetupStack()" title="examples/common/gconfig/FairVMCConfig.cxx" />
+
+Give the object to the run before `Init()`. No example macro uses the YAML configuration yet:
+
+```cpp title="Sketch: YAML configuration in a macro"
+auto config = std::make_unique<FairVMCConfig>();
+config->UsePostInitConfig();   // optional: reads g4ConfigPostInit.yaml in the post-init step
+run->SetSimulationConfig(std::move(config));
+```
+
+[`Setup()`](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L41-L60) does these steps:
+
+1. It accepts only `TGeant3` and `TGeant4`. For another name, it logs the fatal error
+   `FairYamlVMCConfig::Setup() Engine "<name>" unknown!`.
+2. It loads `g4Config.yaml` or `g3Config.yaml`, or the file of `SetUserConfig()`. It looks for the
+   file as for the macros.
+3. It makes the transport engine from the keys of the file.
+4. It calls `SetupStack()`, and then sets the processes and the cuts.
+5. It writes the name of the transport engine and the YAML text with `WriteObject()` of the sink.
+   The object is a `TObjString` with the key `SimulationSetup`.
+
+The Geant4 part of the example file:
+
+<Snippet file="examples/common/gconfig/g4Config.yaml" start="Geant4_UserGeometry" end="/tracking/verbose 0" title="examples/common/gconfig/g4Config.yaml" />
+
+| Keys | Effect |
+| --- | --- |
+| `Geant4_UserGeometry`, `Geant4_PhysicsList`, `Geant4_SpecialProcess` | The first three arguments of the run configuration. They are required. |
+| `Geant4_SpecialStacking`, `Geant4_Multithreaded` | The last two arguments. Without the key: `false`, and the value of [`IsMT()`](/api/FairRunSim/#IsMT). |
+| `UseFastSim` | `true` makes a `FairFastSimRunConfiguration`, as `g4Config.C` does. The default `false` makes a `TG4RunConfiguration`. |
+| `Geant4_MaxNStep`, `Geant4_Commands` | `SetMaxNStep()`, and Geant4 commands before the initialization |
+| `G3_TRIG`, `G3_SWIT`, `G3_DEBU`, `G3_RAYL`, `G3_STRA`, `G3_AUTO`, `G3_ABAN`, `G3_OPTI`, `G3_ERAN`, `G3_CKOV` | The `TGeant3` function with the same name, for example `SetTRIG()` |
+| `MonteCarlo_Process`, `MonteCarlo_Cut` | A map of names and values for `SetProcess()` and `SetCut()` |
+| `FairStack_StoreSecondaries`, `FairStack_MinPoints` | Read by `FairVMCConfig::SetupStack()` |
+
+The code reads only these keys. A key with a spelling error has no effect, and FairRoot logs nothing.
+For the types, the defaults and the error messages, see
+[Configuration files](/reference/config-files/).
+
+### The post-init file
+
+With `UsePostInitConfig()`, `SetupPostInit()` loads `g4ConfigPostInit.yaml`. It runs each command of
+the list `Geant4_PostInit_Commands`. For a transport engine other than Geant4, it logs a fatal
+error.
+
+<Snippet file="examples/common/gconfig/g4ConfigPostInit.yaml" start="Geant4_PostInit_Commands" end="/tracking/verbose 1" title="examples/common/gconfig/g4ConfigPostInit.yaml" />
+
+:::caution[Call UsePostInitConfig() on the derived class]
+The two classes give different default file names to `UsePostInitConfig()`: `g4ConfigPostInit.C`
+and `g4ConfigPostInit.yaml`. C++ takes a default argument from the static type of the pointer.
+Through a `FairGenericVMCConfig` pointer, for example from `GetSimulationConfig()`, the YAML
+configuration gets `g4ConfigPostInit.C`. Call the function on the `FairVMCConfig` object, or give the
+file name.
+:::
+
+## Your own setup function
+
+[`SetSimSetup()`](/api/FairRunSim/#SetSimSetup) takes a `std::function<void()>`. The run calls it
+instead of `Setup()` and loads no configuration file. Your function must make the transport engine
+and the stack. Read `IsMT()` yourself if you support multithreading.
+
+```cpp title="Sketch: set up Geant4 in code"
+run->SetSimSetup([]() {
+    auto runConfiguration = new TG4RunConfiguration(
+        "geomRoot", "QGSP_BERT_EMV", "stepLimiter+specialCuts+specialControls", false, FairRunSim::Instance()->IsMT());
+    auto geant4 = new TGeant4("TGeant4", "The Geant4 Monte Carlo", runConfiguration);
+    auto stack = new FairStack(1000);
+    stack->SetMinPoints(0);
+    geant4->SetStack(stack);
+    geant4->SetProcess("DCAY", 1);
+    geant4->SetCut("CUTGAM", 1.e-3);
+});
+```
+
+Give the post-init step with [`SetSimSetupPostInit()`](/api/FairRunSim/#SetSimSetupPostInit). Without
+it, and without a configuration object, the run does no post-init step.
+
+## Processes and cuts
+
+The VMC has global switches for the physics processes and global energy cuts. `SetCuts.C` sets them
+with `SetProcess()` and `SetCut()` of `TVirtualMC`
+([SetCuts.C](/source/examples/common/gconfig/SetCuts.C/#L28-L58)). The YAML files have the same names
+and values below `MonteCarlo_Process` and `MonteCarlo_Cut`.
+
+| Process | Meaning | Value |
+| --- | --- | --- |
+| `PAIR`, `COMP`, `PHOT` | Pair production, Compton scattering, photoelectric effect | 1 |
+| `PFIS` | Photofission | 0 |
+| `DRAY`, `ANNI`, `BREM` | Delta rays, annihilation, bremsstrahlung | 1 |
+| `HADR`, `MUNU`, `DCAY` | Hadronic processes, muon nuclear interaction, decay | 1 |
+| `LOSS`, `MULS` | Energy loss, multiple scattering | 1 |
+
+| Cut | Meaning | Value |
+| --- | --- | --- |
+| `CUTGAM`, `CUTELE`, `CUTNEU`, `CUTHAD`, `CUTMUO` | Gammas, electrons, neutral hadrons, charged hadrons, muons | 1.0E-3 GeV |
+| `BCUTE`, `BCUTM` | Bremsstrahlung of electrons, of muons and hadrons | 1.0E-3 GeV |
+| `DCUTE`, `DCUTM`, `PPCUTM` | Delta rays by electrons, by muons, direct pair production by muons | 1.0E-3 GeV |
+| `TOFMAX` | Time of flight | 1.E10 s |
+
+The comment at the top of `SetCuts.C` gives other values for a comparison with GEANE, or for a
+simulation without secondaries. The run configuration of `g4Config.C` switches on the special
+processes `specialCuts` and `specialControls`. The comment in the macro says that they implement the
+VMC cuts and the VMC process controls for Geant4.
+
+## Geant4 commands
+
+Geant4 accepts text commands, for example `/tracking/verbose 1`. A configuration can give them at
+two times:
+
+| Time | Macro configuration | YAML configuration |
+| --- | --- | --- |
+| In the setup, before `Init()` of the transport engine | `g4config.in`, run by `g4Config.C` | The list `Geant4_Commands` |
+| In the post-init step | `g4configPostInit.in`, run by `g4ConfigPostInit.C` | The list `Geant4_PostInit_Commands` |
+
+The example file `g4config.in` sets two commands. Lines that start with `#` are comments:
+
+<Snippet file="examples/common/gconfig/g4config.in" start="#/cuts/setLowEdge 100 eV" end="/tracking/verbose 0" title="examples/common/gconfig/g4config.in" />
+
+## Decays
+
+Two settings of the run add decay macros:
+
+| Setting | Default macro | Function | What the example macro does |
+| --- | --- | --- | --- |
+| [`SetPythiaDecayer()`](/api/FairRunSim/#SetPythiaDecayer-2) | `DecayConfig.C` | `DecayConfig()` | It makes Pythia the external decayer for some particles. |
+| [`SetUserDecay()`](/api/FairRunSim/#SetUserDecay) | `UserDecay.C` | `UserDecayConfig()` | It sets a decay mode of `He5` to a neutron and an alpha. |
+
+Give `true`, or the name of your macro as a `TString`. A string literal such as `"MyDecay.C"`
+selects the `Bool_t` overload, and FairRoot then loads the default macro. FairRoot looks for the
+file as for the other macros. At its end, `AddParticles()` of the MC application calls
+[`AddDecayModes()`](/api/FairMCApplication/#AddDecayModes), which loads the macros. It calls the
+function only if ROOT loaded the macro
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1086-L1164)).
+
+Geant3 calls `AddParticles()` in its `Init()`, after the setup step. Geant4 calls it earlier: the
+constructor of `TGeant4` builds the physics list, and this calls `AddParticles()`. Thus with
+Geant4, the decay macros run in the setup step, for example in `Config()` of `g4Config.C` before
+`SetCuts()` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1031-L1037)).
+
+The macros `run_tutorial1_pythia6.C` and `run_tutorial1_pythia8.C` give the full path of
+`DecayConfig.C` (Pythia 6) and of `DecayConfigPythia8.C`
+([run_tutorial1_pythia8.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1_pythia8.C/#L25)).
+The Pythia 8 macro also defines `DecayConfig()`, because FairRoot calls this function:
+
+<Snippet file="examples/common/gconfig/DecayConfigPythia8.C" start="void DecayConfigPythia8()" end="void DecayConfig()" title="examples/common/gconfig/DecayConfigPythia8.C" />
+
+:::caution
+`UserDecay.C` in `examples/common/gconfig/` calls `TVirtual::GetMC()`
+([UserDecay.C](/source/examples/common/gconfig/UserDecay.C/#L40)). The class `TVirtual` does not
+exist, so the macro does not compile. Use `TVirtualMC::GetMC()` in your copy.
+:::
+
+## Problems that can occur
+
+| Message or symptom | Cause |
+| --- | --- |
+| `No MC engine defined` | The setup made no transport engine. Check the name of the run, and the log lines of the macro search. |
+| `No Stack defined.` | The setup gave no stack to the transport engine, or the stack does not derive from `FairGenericStack`. |
+| `FairYamlVMCConfig::Setup() Engine "TFluka" unknown!` | The YAML configuration knows only `TGeant3` and `TGeant4`. |
+| `User geometry not provided`, `Physics list not provided`, `Special processy not provided` | A required Geant4 key is missing in the YAML file. |
+| `FairSetupGeant3: expecting 2 integers to setup G3_SWIT` | `G3_SWIT` needs two values, `G3_DEBU` needs three. |
+| `FairYamlVMCConfig::SetupPostInit() only valid for TGeant4.` | `UsePostInitConfig()` with Geant3 and the YAML configuration |
+| With the YAML configuration, `SetIsMT(true)` has no effect | `g4Config.yaml` has `Geant4_Multithreaded: false`, see [Multithreaded Geant4](/simulation/geant4-mt/). |
+| FairRoot uses the files in `$VMCWORKDIR/gconfig/` | `CONFIG_DIR` is not set, or not before `Init()`. With a file from `CONFIG_DIR`, the log has a line like `---User path for Configuration (g4Config.C) is used: <directory>`. |
+
+`FairYamlVMCConfig` does not check that the YAML file exists. yaml-cpp throws an exception if it
+cannot open the file.
+
+## Related pages
+
+- [Configuration files](/reference/config-files/): all configuration files, the YAML keys and the
+  order of loading.
+- [Environment variables](/reference/environment/): `CONFIG_DIR`, `VMCWORKDIR` and the search rules.
+- [Write a simulation macro](/simulation/run-macro/): the complete macro around the configuration.
+- [Multithreaded Geant4](/simulation/geant4-mt/): `SetIsMT()` and the clones on the worker threads.
+- [The particle stack and MC tracks](/simulation/stack/): `FairStack` and its options.
+- [Common parts of the examples](/examples/common/): the folder `gconfig/` and `FairVMCConfig`.

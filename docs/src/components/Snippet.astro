@@ -1,0 +1,85 @@
+---
+// Shows code from a file of the repository, so that samples are code that CI compiles.
+//
+//   <Snippet file="templates/NewTask/NewTask.cxx" />                 whole file, without the license header
+//   <Snippet file="templates/NewTask/NewTask.cxx" region="exec" />   lines between the markers  //! [exec]
+//   <Snippet file="templates/NewTask/NewTask.cxx" lines="20-34" />   a line range (1-based, inclusive)
+//   <Snippet file="templates/NewTask/NewTask.cxx" start="InitStatus NewTask::Init()" />
+//       from the first line that contains the text to the line that closes its braces
+//   <Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// -----   Create PrimaryGenerator" end="run->SetGenerator" />
+//       from the start line to the next line that matches end (text, or /regex/ like "^}")
+//   mark="3-4" or mark="2, 5-7" highlights lines of the snippet (counted from 1); mark="text" highlights the text.
+//
+// The build fails if the file, the region, the lines or the start text do not exist.
+import { Code } from '@astrojs/starlight/components';
+import path from 'node:path';
+import { paths, build } from 'virtual:fairroot/data';
+import { extractSnippet } from '../../scripts/snippet.mjs';
+import { SOURCE_DIRS, SOURCE_EXT } from '../../scripts/api.mjs';
+
+interface Props {
+  file: string;
+  region?: string;
+  lines?: string;
+  start?: string;
+  end?: string;
+  lang?: string;
+  title?: string;
+  mark?: string | string[];
+  link?: boolean;
+}
+const { file, region, lines, start, end, lang, title, mark, link = true } = Astro.props;
+// "3-4" or "2, 5-7" marks lines of the snippet (counted from 1); other text marks that text.
+const toMarker = (m: string) => (/^\s*\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*\s*$/.test(m) ? { range: m.trim() } : m);
+const marks = mark === undefined ? undefined : Array.isArray(mark) ? mark.map(toMarker) : toMarker(mark);
+const { code, first, last: lastLine } = extractSnippet(paths.repoRoot, { file, region, lines, start, end });
+
+const ext = path.extname(file).slice(1);
+const language =
+  lang ??
+  (
+    {
+      cxx: 'cpp', cpp: 'cpp', cc: 'cpp', h: 'cpp', hpp: 'cpp', C: 'cpp', c: 'cpp', sh: 'sh', json: 'json', cmake: 'cmake', txt: 'cmake',
+      py: 'python', yaml: 'yaml', yml: 'yaml', xml: 'xml', proto: 'proto', fbs: 'text', geo: 'text', par: 'text',
+    } as Record<string, string>
+  )[ext] ??
+  (path.basename(file) === 'CMakeLists.txt' ? 'cmake' : 'text');
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const inBrowser = SOURCE_DIRS.includes(file.split('/')[0]) && SOURCE_EXT.test(file);
+const sourceLink = inBrowser
+  ? `${base}/source/${file}/#L${first}-L${lastLine}`
+  : `${build.repo}/blob/${build.commit}/${file}#L${first}-L${lastLine}`;
+---
+
+<div class="fr-snippet">
+  <Code code={code} lang={language} title={title ?? file} mark={marks} />
+  {
+    link && (
+      <a class="fr-snippet-src" href={sourceLink}>
+        {file}:{first}–{lastLine}
+      </a>
+    )
+  }
+</div>
+
+<style>
+  .fr-snippet {
+    margin-block: 1rem;
+  }
+  .fr-snippet :global(.expressive-code) {
+    margin-block: 0 !important;
+  }
+  .fr-snippet-src {
+    display: block;
+    text-align: end;
+    margin-top: 0.3rem;
+    font: 500 0.72rem var(--fr-font-mono);
+    color: var(--fr-ink-3);
+    text-decoration: none;
+    /* Long paths break on phones instead of making the page scroll sideways. */
+    overflow-wrap: anywhere;
+  }
+  .fr-snippet-src:hover {
+    color: var(--fr-link);
+  }
+</style>

@@ -1,0 +1,320 @@
+---
+title: 'Event display'
+description: 'Show the geometry, the MC tracks, the trajectories, the MC points and the hits of an event in ROOT Eve. A macro makes FairEventManager and adds one draw task for each branch.'
+sidebar:
+  order: 7
+code: [fairroot/eventdisplay/FairEventManager.h, fairroot/eventdisplay/FairEventManager.cxx, fairroot/eventdisplay/FairEventManagerEditor.cxx, fairroot/eventdisplay/FairPointSetDraw.cxx, fairroot/eventdisplay/FairBoxSetDraw.cxx, fairroot/eventdisplay/tracks/FairGeoTracksDraw.cxx, fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx, examples/common/eventdisplay/FairMCTracksDraw.cxx, examples/common/eventdisplay/FairEveMCTracks.cxx, fairroot/eventdisplay/xml/FairXMLEveConf.cxx, fairroot/eventdisplay/FairGetEventTime.cxx, fairroot/base/steer/FairTrajFilter.h, fairroot/base/steer/FairTrajFilter.cxx, examples/simulation/rutherford/macros/eventDisplay.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The event display shows the detector geometry and the data of one event in Eve, the 3D event
+display of [ROOT](https://root.cern/). A macro makes a reconstruction run, a `FairEventManager` and
+one draw task for each branch that it shows. When you select an event, the run executes the draw
+tasks on that entry of the input file.
+
+## How it works
+
+[`FairEventManager`](/api/FairEventManager/) is a `TEveEventManager` of ROOT. Its constructor takes
+the current `FairRunAna`, so make the run first
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L49-L71)).
+[`AddTask()`](/api/FairEventManager/#AddTask) adds a draw task to the task list of the run.
+[`Instance()`](/api/FairEventManager/#Instance) gives the last event manager that you made.
+
+[`Init()`](/api/FairEventManager/#Init) starts Eve and initializes the run:
+
+<Snippet file="fairroot/eventdisplay/FairEventManager.cxx" start="void FairEventManager::Init(" end="fEvent = gEve->AddEvent(this);" />
+
+- `Init()` calls `FairRunAna::Init()`. Do not call `Init()` of the run in the macro: a second call
+  stops the macro with `Error Init is already called before!`
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L135)).
+- Without a geometry in `gGeoManager`, `Init()` returns before it adds the geometry and the event to Eve.
+- The three arguments go to the ROOT class `TEveGeoTopNode`. They are the visualization option (1),
+  the number of geometry levels to show (3) and the maximum number of nodes to show (10000).
+- The half-lengths of the top volume give the world size. The track tasks do not draw points
+  outside of it ([FairEveTrack.cxx](/source/fairroot/eventdisplay/tracks/FairEveTrack.cxx/#L44-L61)).
+- Then `Init()` makes the tabs `RPhi View`, `RhoZ View` and `Multi View`
+  ([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L93-L162)). The
+  `RPhi` and `RhoZ` views show the 3D scenes with an orthographic camera, by default on the x-y
+  plane and on the z-y plane. They are not Eve projections: no element goes into the projection
+  managers ([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L247-L278)).
+
+`Init()` shows no event. [`GotoEvent()`](/api/FairEventManager/#GotoEvent) shows one:
+
+<Snippet file="fairroot/eventdisplay/FairEventManager.cxx" start="void FairEventManager::GotoEvent(" />
+
+[`RunSingleEntry()`](/api/FairRunAna/#RunSingleEntry) reads the entry, executes all tasks, calls
+their `Finish()`, and fills and writes the sink ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L458-L470)). Thus
+each event that you show also goes into the output file. `NextEvent()` and `PrevEvent()` add 1 to or
+subtract 1 from the current entry. They do not check the number of entries
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L185-L199)).
+
+## Draw tasks
+
+Each draw task is a `FairTask`. In `Init()`, it gets its branch from `FairRootManager`. In `Exec()`,
+it removes its old drawing and draws the current event.
+
+| Task | Library | Branch | Draws |
+| --- | --- | --- | --- |
+| `FairMCTracksDraw` | `ExEventDisplay` (examples) | `MCTrack` with `FairMCTrack` objects | A line for each MC track, extrapolated from its start point |
+| [`FairGeoTracksDraw`](/api/FairGeoTracksDraw/) | `EventDisplay` | `GeoTracks` with `TGeoTrack` objects | The trajectories that the simulation stored |
+| [`FairMCPointDraw`](/api/FairMCPointDraw/) | `EventDisplay` | The task name, with `FairMCPoint` objects | A marker for each MC point |
+| [`FairHitPointSetDraw`](/api/FairHitPointSetDraw/) | `EventDisplay` | The task name, with `FairHit` objects | A marker for each hit |
+| [`FairHitDraw`](/api/FairHitDraw/) | `EventDisplay` | The task name, with `FairHit` objects | A box for each hit |
+
+[`FairPointSetDraw`](/api/FairPointSetDraw/) and [`FairBoxSetDraw`](/api/FairBoxSetDraw/) are the
+base classes of the marker tasks and the box tasks. The [propagator example](/examples/propagator/)
+adds `FairRecoTracksDraw` for reconstructed tracks. CMake builds `EventDisplay` only if ROOT has
+OpenGL support ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L37-L40)).
+
+### Points and hits
+
+The marker tasks and the box tasks use the task name as the branch name:
+
+<Snippet file="fairroot/eventdisplay/FairPointSetDraw.cxx" start="InitStatus FairPointSetDraw::Init()" />
+
+If the branch is missing, the task logs an error and switches itself off. A task whose `Init()`
+returns `kERROR` stays inactive, and the other tasks keep working
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)).
+
+- A marker task draws a `TEvePointSet` with the color and the marker style from its constructor
+  ([FairPointSetDraw.cxx](/source/fairroot/eventdisplay/FairPointSetDraw.cxx/#L74-L114)).
+- A box task draws a box with the edge length 0.3 in x, y and z for each hit. Change the size with
+  [`SetBoxDimensions()`](/api/FairBoxSetDraw/#SetBoxDimensions).
+
+For your own data class, derive from `FairPointSetDraw` or `FairBoxSetDraw` and give the position in
+`GetVector()`. `FairMCPointDraw` does this for `FairMCPoint`:
+
+<Snippet file="fairroot/eventdisplay/FairMCPointDraw.cxx" start="TVector3 FairMCPointDraw::GetVector(" />
+
+### MC tracks and trajectories
+
+Two tasks draw tracks. They show different things:
+
+| | `FairMCTracksDraw` | `FairGeoTracksDraw` |
+| --- | --- | --- |
+| Input | The start point and the momentum of each MC track | The points of each stored trajectory |
+| Path | A Runge-Kutta extrapolation in the magnetic field of the run, without material | The positions from the transport steps, so the line shows the scattering |
+| Simulation setting | None | `SetStoreTraj(kTRUE)` |
+| Track groups | One for each PDG code, named by the code | One for each particle name |
+
+`FairMCTracksDraw` makes a `FairEveMCTracks` object. Its `Init()` needs the branch `MCTrack` with
+`FairMCTrack` objects. It takes the field from [`FairRunAna::GetField()`](/api/FairRunAna/#GetField)
+([FairEveMCTracks.cxx](/source/examples/common/eventdisplay/FairEveMCTracks.cxx/#L146-L172)). For
+each MC track, it propagates the start point with `FairRKPropagator` to the planes z = 0, 10, 20 …
+990 cm ([FairEveMCTracks.cxx](/source/examples/common/eventdisplay/FairEveMCTracks.cxx/#L114-L131)).
+Without a field, the lines are straight.
+
+`FairGeoTracksDraw` makes a [`FairEveGeoTracks`](/api/FairEveGeoTracks/) object. It draws the points
+of each `TGeoTrack` that are inside the time limits of the event manager
+([FairEveGeoTracks.cxx](/source/fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx/#L91-L154)). A point
+at exactly the lower limit is not drawn. Most primary generators give a primary the time 0. With the
+default limits, the line of such a primary thus starts at its second point.
+Both tasks take the color of a track from [`FairEventManager::Color()`](/api/FairEventManager/#Color).
+
+Select `FairMCTracks` or `FairGeoTracks` in the list tree of Eve to get the editor of the tracks.
+The tab `Kin` has cuts on pt, eta and energy, with an `Update` button. The tab `Status` shows or
+hides primaries and secondaries, selects one PDG code and has the button `Toggle Tracks`. The editor
+of `FairGeoTracks` also has `Toggle Groups`.
+
+## Store trajectories in the simulation
+
+`FairGeoTracksDraw` needs trajectories from the simulation. Call
+[`FairRunSim::SetStoreTraj()`](/api/FairRunSim/#SetStoreTraj) before `Init()` of the run. Then the
+MC application makes a [`FairTrajFilter`](/api/FairTrajFilter/), and the filter registers the
+persistent branch `GeoTracks` in the folder `MCGeoTrack`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L857-L862),
+[FairTrajFilter.cxx](/source/fairroot/base/steer/FairTrajFilter.cxx/#L78-L81)).
+
+[`FairTrajFilter::Instance()`](/api/FairTrajFilter/#Instance) gives `nullptr` until `Init()` of the
+run makes the filter. Thus set the cuts after `Init()`, as `run_rutherford.C` does:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start="run.SetStoreTraj(kTRUE);" end="trajFilter->SetStoreSecondaries(kTRUE);" />
+
+At the start of each track, the filter applies the cuts to the particle. For an accepted particle,
+the MC application starts a `TGeoTrack` at the current position
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L414-L427)). Then each
+step that is longer than the step size cut adds a point
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L570-L574)).
+
+| Setter | Default | Stores a particle if |
+| --- | --- | --- |
+| [`SetVertexCut()`](/api/FairTrajFilter/#SetVertexCut) | -2000 to 2000 cm in x, y and z | Its start point is in the box |
+| [`SetMomentumCutP()`](/api/FairTrajFilter/#SetMomentumCutP) | p 0 to 1e10, theta 0 to π, phi 0 to 2π | p, theta and phi are in the ranges |
+| [`SetMomentumCutD()`](/api/FairTrajFilter/#SetMomentumCutD) | -1e10 to 1e10 for px, py and pz | px, py and pz are in the ranges |
+| [`SetPtRapidityCut()`](/api/FairTrajFilter/#SetPtRapidityCut) | pt 0 to 1e10, rapidity -1e10 to 1e10 | pt and the rapidity are in the ranges |
+| [`SetEnergyCut()`](/api/FairTrajFilter/#SetEnergyCut) | 0 to 1e10 | Its total energy is in the range |
+| [`SetStorePrimaries()`](/api/FairTrajFilter/#SetStorePrimaries) | `kTRUE` | It is a primary, without a mother |
+| [`SetStoreSecondaries()`](/api/FairTrajFilter/#SetStoreSecondaries) | `kTRUE` | It is a secondary |
+| [`SetStepSizeCut()`](/api/FairTrajFilter/#SetStepSizeCut) | 0.1 cm | Not a cut on particles: shorter steps add no point |
+
+The defaults are in the constructor
+([FairTrajFilter.cxx](/source/fairroot/base/steer/FairTrajFilter.cxx/#L34-L74)).
+
+- The three momentum cuts exclude each other. The cut that you set last applies
+  ([FairTrajFilter.cxx](/source/fairroot/base/steer/FairTrajFilter.cxx/#L97-L113)).
+- A setter with an invalid range prints a message such as
+  `-E- FairTrajFilter::SetEnergyCut() : invalid region, ignoring.` and keeps the old values.
+- `SetVertexCut()` rejects a value if its absolute value is larger than twice the half-length of
+  the top volume ([FairTrajFilter.cxx](/source/fairroot/base/steer/FairTrajFilter.cxx/#L141-L151)).
+
+Trajectories make the output file larger. For multithreaded Geant4, read
+[Multithreaded Geant4](/simulation/geant4-mt/) first.
+
+## Run the display after a simulation
+
+<Steps>
+
+1. Run a simulation that writes the MC file and the parameter file. For the Rutherford example,
+   start the script that CMake makes in the build folder. Give `false` for `isMT`, as the test does:
+
+   ```sh
+   cd <build>/examples/simulation/rutherford/macros
+   ./run_rutherford.sh 10 '"TGeant4"' false
+   ```
+
+2. Set the environment. Start ROOT in the same folder, without batch mode:
+
+   ```sh
+   source <build>/config.sh
+   root -l "$VMCWORKDIR/simulation/rutherford/macros/eventDisplay.C"
+   ```
+
+3. In the Eve window, select `FairEventManager` in the list tree.
+
+4. Type an entry number in `Current Event` and press Enter, or click `Update`.
+
+</Steps>
+
+The macro of the Rutherford example:
+
+<Snippet file="examples/simulation/rutherford/macros/eventDisplay.C" start="void eventDisplay(" />
+
+- The source reads the MC file. Without [`SetGeomFile()`](/api/FairRunAna/#SetGeomFile), the run
+  gets the geometry from the parameter container `FairGeoParSet` in the parameter file
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L144-L150)).
+- The sink writes `data/test_TGeant4.root`.
+- `FairMCPointDraw` draws the branch `FairRutherfordPoint` with blue squares.
+- The macro calls `fMan->Init()` and not `fRun->Init()`.
+
+## Use the editor
+
+The editor of `FairEventManager` has two tabs
+([FairEventManagerEditor.cxx](/source/fairroot/eventdisplay/FairEventManagerEditor.cxx/#L59-L159)):
+
+| Tab | Element | Use |
+| --- | --- | --- |
+| `Info` | `Input file`, `Run Id`, `No of events`, `No. of Nodes` | Shows the input file, the run ID, the number of entries and of geometry nodes. |
+| `Info` | `Current Event`, `Update` | Shows the entry. It accepts 0 up to the number of entries, which is one more than the last entry. |
+| `Info` | `Event Time` | Shows the time of the event in ns. |
+| `Graphics` | `Global transparency` | Checked: all volumes down to the visibility level get the transparency in the number field (default 80). Not checked: the values from the XML file, or 0. |
+| `Graphics` | `Light background` | Switches the color set of the viewers. The state of the check box has no effect. |
+| `Graphics` | `Screenshot` | `Make` saves a PNG or JPG file of the view `3D`, `RPhi`, `RhoZ` or `All`. |
+| `Graphics` | `Animation` | Saves a screenshot for each step of a series. |
+
+`All` writes three files with `_3d`, `_XY` and `_Z` before the extension
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L401-L444)). The animation
+type `Event by Event` saves `event_animations/event_<i>.png` for each entry from `Min` to `Max` - 1
+([FairEventManagerEditor.cxx](/source/fairroot/eventdisplay/FairEventManagerEditor.cxx/#L190-L205)).
+
+You can do the same from the ROOT prompt:
+
+```cpp
+FairEventManager::Instance()->GotoEvent(5);
+FairEventManager::Instance()->NextEvent();
+FairEventManager::Instance()->MakeScreenshot(FairEveAnimationControl::eScreenshotType::kAll, "evt.png");
+```
+
+[`SetRPhiPlane()`](/api/FairEventManager/#SetRPhiPlane) and
+[`SetRhoZPlane()`](/api/FairEventManager/#SetRhoZPlane) set the camera type of the `RPhi` and
+`RhoZ` views. Call them before `Init()`. The plane parameters have no effect, because the code for
+the clip plane is a comment ([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L247-L264)).
+
+## Colors and transparency from an XML file
+
+Give an XML file to [`SetXMLConfig()`](/api/FairEventManager/#SetXMLConfig) before `Init()`.
+`Init()` reads it after it makes the Eve node of the geometry
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L298-L320)). The part
+`Detectors` sets the color and the transparency of the volumes. The part `MCTracksColors` sets the
+color of the MC tracks for each PDG code.
+[Event display XML file](/reference/config-files/#event-display-xml-file) describes the format, with
+the file of the propagator example.
+
+Without an entry in `MCTracksColors`, an MC track gets the color of a default table. A PDG code that
+is not in the table gets color 0 ([FairXMLPdgColor.cxx](/source/fairroot/eventdisplay/xml/FairXMLPdgColor.cxx/#L48-L54)).
+
+## Time-based display
+
+Each event can have a time (see [Time-based simulation and reconstruction](/reconstruction/time-based/)).
+[`GetEvtTime()`](/api/FairEventManager/#GetEvtTime) gives the time of the current event from
+`FairRootManager`. After [`SetUseTimeOfEvent(kFALSE)`](/api/FairEventManager/#SetUseTimeOfEvent), it
+gives the value of [`SetEvtTime()`](/api/FairEventManager/#SetEvtTime)
+([FairEventManager.cxx](/source/fairroot/eventdisplay/FairEventManager.cxx/#L447-L453)).
+
+The marker tasks and the box tasks compare the time of each object with the time limits of the event
+manager. They hide an object with a time above 0 outside the limits
+([FairPointSetDraw.cxx](/source/fairroot/eventdisplay/FairPointSetDraw.cxx/#L89-L106)). `GotoEvent()`
+sets the limits to 0 and `DBL_MAX`, so all objects show.
+
+The animation type `Timeslice` steps the time from `Min` to `Max` by `Step`. For each step, it sets
+the event time and the limits, executes all tasks and saves `timeslice_animations/event_<n>.png`
+([FairEventManagerEditor.cxx](/source/fairroot/eventdisplay/FairEventManagerEditor.cxx/#L206-L259)).
+The upper limit is the time. The lower limit is `Min`, or the time minus `Tail` if `Tail` is 0 or more.
+
+To show data across event borders, give the draw task a data source in its constructor:
+
+| Source | Gives |
+| --- | --- |
+| [`FairTCASource`](/api/FairTCASource/) | The `TClonesArray` of the current entry. The default. |
+| [`FairTimebasedSource`](/api/FairTimebasedSource/) | The data in a time window, from [`FairRootManager::GetData()`](/api/FairRootManager/#GetData) |
+| [`FairTimebasedMCSource`](/api/FairTimebasedMCSource/) | The `FairMCPoint` objects of the last event that starts before the time. With `Run Continuous`, objects of earlier events stay until their time is more than the hold time (default 10 ns) before the current time. |
+| [`FairTimebasedMCHitSource`](/api/FairTimebasedMCHitSource/) | The same for `FairHit` objects |
+
+With `Run Continuous`, the time-based MC sources keep their data from one `Timeslice` step to the
+next. Without it, they clear their data at each step. `Clear Buffer at Start` clears them before the
+first step ([FairEventManagerEditor.cxx](/source/fairroot/eventdisplay/FairEventManagerEditor.cxx/#L225-L237)).
+
+The time-based MC sources use [`FairGetEventTime`](/api/FairGetEventTime/). At `Init()`, it reads
+all entries of a file source once and keeps their event times
+([FairGetEventTime.cxx](/source/fairroot/eventdisplay/FairGetEventTime.cxx/#L24-L41)).
+[`GetEvent(t)`](/api/FairGetEventTime/#GetEvent) gives the last event that starts before t + 0.01 ns.
+
+`FairGeoTracksDraw` uses the same method if you call
+[`FairRunAna::RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) before `Init()`
+([FairEveGeoTracks.cxx](/source/fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx/#L156-L174)).
+Its `Init()` calls `FairGetEventTime::Init()` in all cases. Thus with a file source, it reads all
+entries once and logs the time of each entry
+([FairEveGeoTracks.cxx](/source/fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx/#L48-L63)).
+
+:::caution
+No example and no test uses these sources. The constructor of `FairTimebasedSource` uses
+`windowMinus` as the window after the time and `windowPlus` as the window before it
+([FairTimebasedSource.h](/source/fairroot/eventdisplay/datasource/FairTimebasedSource.h/#L21-L24)).
+:::
+
+## Problems that can occur
+
+| Message or symptom | Cause |
+| --- | --- |
+| `FairPointSetDraw::Init() branch <name> not found!` | No branch has the name of the task. |
+| `MCTrack branch not found ! FairMCTrackDraw will be deactivated.` | The input has no MC tracks. |
+| `MCTrack branch found but does not contain FairMCTrack objects! ...` | The stack writes another class. The stack of the template `project_root_containers` writes `MyProjMCTrack`. |
+| `Geo tracks not found ! FairGeoTracksDraw will be deactivated.` | The simulation did not call `SetStoreTraj(kTRUE)`. Or the input is a worker file of multithreaded Geant4: these files have no branch `GeoTracks`, see [Limits of MT mode](/simulation/geant4-mt/#limits-of-mt-mode). |
+| `Lack of magnetic field map!` | The run has no field, so the MC tracks are straight lines. For a detector with a field, call `SetField()` of the run before `fMan->Init()`. |
+| `Error Init is already called before!` | The macro calls `Init()` of the run. |
+| No geometry and no event | No `TGeoManager`: the parameter file or `SetGeomFile()` is missing. |
+| A crash in `Init()` with an XML file | The file is missing, or an element has no attribute that the code reads. `FairXMLFile` does not check the parse result ([FairXMLNode.cxx](/source/fairroot/eventdisplay/FairXMLNode.cxx/#L134-L148)). |
+| ROOT does not know `FairMCTracksDraw` | CMake builds `ExEventDisplay` only if Geant3 is found and `EventDisplay` exists ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L14-L25)). |
+| The display macro of Tutorial 1 finds no input file | It reads `tutorial1_TGeant3_pions.mc_p2.000_t0_n10.root`. `run_tutorial1.C` writes other names, for example with `p2.000000` ([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L44-L61)). Change the names in the display macro. |
+
+## Related pages
+
+- [Your first simulation](/start/first-simulation/): make the MC file and the parameter file.
+- [Write a simulation macro](/simulation/run-macro/): the simulation run and its settings.
+- [Write a reconstruction macro](/reconstruction/run-macro/): `FairRunAna`, sources and sinks.
+- [The particle stack and MC tracks](/simulation/stack/): the branch `MCTrack`.
+- [Magnetic fields](/simulation/fields/): the field for the extrapolation of MC tracks.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): event times.
+- [Rutherford experiment](/examples/rutherford/): an example with trajectories and a display macro.
+- [Propagator](/examples/propagator/): an XML configuration and reconstructed tracks.

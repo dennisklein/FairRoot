@@ -1,0 +1,197 @@
+---
+title: 'Input sources, friends and event mixing'
+description: 'How a source gives events to the run: FairFileSource with chained files, friend files and event times, FairMixedSource for signal and background, and your own source.'
+sidebar:
+  order: 3
+code:
+  - fairroot/base/source/FairSource.h
+  - fairroot/base/source/FairFileSourceBase.cxx
+  - fairroot/base/source/FairFileSource.h
+  - fairroot/base/source/FairFileSource.cxx
+  - fairroot/base/source/FairMixedSource.h
+  - fairroot/base/source/FairMixedSource.cxx
+  - examples/simulation/Tutorial2/macros/create_digis_mixed.C
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A source gives the events to the run. `FairFileSource` reads the output files of an earlier run, and `FairMixedSource` mixes signal and background events from several files. Both connect the branches of the files to the objects that your tasks get from `FairRootManager`.
+
+[Branches, sources and sinks](/concepts/io/) explains the `FairSource` interface and how tasks read branches. This page shows how to configure the file sources, and what a source of your own must do.
+
+## Set the source
+
+Create a `FairFileSource` with the input file, and give it to the run with [`SetSource()`](/api/FairRun/#SetSource). The run owns the source and deletes it ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L256-L260)).
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start="FairRunAna* fRun = new FairRunAna();" end="fRun->SetSink(" title="create_digis.C" />
+
+`FairFileSource` has three constructors:
+
+| Constructor | File |
+| --- | --- |
+| [`FairFileSource(TString name, ...)`](/api/FairFileSource/#FairFileSource-3) | Opens the file with `TFile::Open()`. The source owns the file. |
+| [`FairFileSource(const TString* name, ...)`](/api/FairFileSource/#FairFileSource-2) | The same, with a pointer to the name. |
+| [`FairFileSource(TFile* f, ...)`](/api/FairFileSource/#FairFileSource) | Uses your open file. The source does not own it. |
+
+The optional second argument is the title of the main input, `InputRootFile` by default. The third argument, `identifier`, has no effect ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L48-L49)). If the file does not open, the source logs `Error opening the Input file` with the severity `fatal` ([FairFileSourceBase.cxx](/source/fairroot/base/source/FairFileSourceBase.cxx/#L20-L26)).
+
+A `fatal` line stops the program only if the macro called `FairLogger::GetLogger()` before. Without this call, the run goes on. This is true for all `fatal` lines on this page, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+## What `Init()` does
+
+`FairRunAna::Init()` initializes the source first, before the sink and the tasks ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L141-L143)). [`FairFileSource::Init()`](/api/FairFileSource/#Init) then does these steps ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L149-L279)):
+
+1. It creates a `TChain` for the tree `GetTreeName()` and adds the file.
+2. It reads the folder that describes the tree: `GetFolderName()`, else `cbmroot`, else `cbmout`.
+3. It reads the `BranchList` of the file and adds the names to the branch list of the manager. Without a `BranchList`, it logs the `fatal` line `No Branch list in input file`.
+4. It adds the files from `AddFile()` to the chain.
+5. It connects the branches `EventHeader.` and `MCEventHeader.` if the file has them.
+6. It builds the chains of the friend files from `AddFriend()`.
+7. It reads the `TimeBasedBranchList`, or logs the warning `No time based branch list in input file`.
+
+After `Init()`, the run calls [`SpecifyRunId()`](/api/FairFileSource/#SpecifyRunId), which reads entry 0. The run takes the run ID from the event header of that entry and initializes the parameter containers for it ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L186-L201)). [`FillEventHeader()`](/api/FairFileSource/#FillEventHeader) takes the run ID from `MCEventHeader.` if the file has it, else from `EventHeader.` ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L700-L712)).
+
+## Chain more files
+
+[`AddFile(name)`](/api/FairFileSource/#AddFile) adds a file with more events of the same kind. The source adds the files to the chain in `Init()`, after the first file. Each event of the run is one entry of the chain.
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi_reco_local.C" start="FairFileSource* fFileSource = new FairFileSource(inFile);" end="fRun->SetSink(" title="run_digi_reco_local.C" />
+
+In `Init()`, the source compares the `BranchList` of each added file with the list of the first file. The two lists must hold the same names. Otherwise the source logs the `fatal` line `Branch structure of the input file ... are different.` and stops its `Init()` ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L221-L250)). Call [`SetCheckFileLayout(kFALSE)`](/api/FairFileSource/#SetCheckFileLayout) to skip this check.
+
+## Add friend files
+
+A friend file has the same events as the main input, but other branches. A typical case: the simulation output is the main input, and the output of the reconstruction is a friend. [`AddFriend(name)`](/api/FairFileSource/#AddFriend) adds such a file. Tasks then read its branches with `GetObject()` like any other input branch.
+
+<Snippet file="examples/advanced/propagator/macros/eventDisplay.C" start="FairFileSource *fFileSource = new FairFileSource(inFile);" end="fRun->SetSource(fFileSource);" title="eventDisplay.C" />
+
+In `Init()`, the source sorts the friend files by their `BranchList` ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L312-L389)):
+
+- It removes duplicate file names.
+- A file whose list is equal to the list of an existing friend chain goes into that chain.
+- Each other file starts a new chain, `FriendTree_1`, `FriendTree_2` and so on.
+- Each friend chain becomes a ROOT friend of the main chain.
+
+At the end, the source logs `The input consists out of the following trees and files:` and lists each chain with its files.
+
+:::caution[Order of the friend files]
+Add all files of one friend type before the files of the next type. The search for a matching chain does not stop at the first match ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L360-L365)). A file can thus go into the last chain instead of the matching one. A friend file with the same `BranchList` as the main input also goes into the last friend chain. If no friend chain exists yet, the source crashes ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L373-L374)). Add such a file with `AddFile()`.
+:::
+
+The source does not check that a friend file has the same events in the same order as the main input. The call of that check is commented out ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L377-L379)). ROOT reads the friends by entry number, so make sure that the files match.
+
+## Number of events
+
+[`FairRunAna::Run()`](/api/FairRunAna/#Run) asks the source how many events it can read. [`FairFileSource::CheckMaxEventNo()`](/api/FairFileSource/#CheckMaxEventNo) returns the number of entries of the chain when the run asks with 0, and the requested end otherwise ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L572-L582)). Thus `Run()` and `Run(n)` stop at the end of the chain, but for `Run(a, b)` the run does not limit `b` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L269-L296)). The event loop stops at the first entry that does not exist: [`ReadEvent()`](/api/FairFileSource/#ReadEvent) then returns 1, and the run logs a warning ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L313-L319)). [Run the events](/reconstruction/run-macro/#run-the-events) lists the entries that each form of `Run()` processes.
+
+## Event time
+
+Each event gets a time in ns. Time-based tasks get it from `FairRootManager::GetEventTime()`. [`FairFileSource::GetEventTime()`](/api/FairFileSource/#GetEventTime) takes the time of the input branch `EventHeader.`, if it is not negative. Else it takes the time of `MCEventHeader.`, or 0 without this branch. After [`SetEventMeanTime()`](/api/FairFileSource/#SetEventMeanTime) or [`SetEventTimeInterval()`](/api/FairFileSource/#SetEventTimeInterval), it adds a random interval to the time of the previous event instead ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L640-L665)). [Give each event a time](/reconstruction/time-based/#give-each-event-a-time) explains the setters and their distributions.
+
+:::caution[Input files with an event header]
+`FairRunAna` writes `EventHeader.` to its output, with the event time ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L194)). When you read such a file, its time wins over the setters. Call [`SetEvtHeaderNew(kTRUE)`](/api/FairFileSource/#SetEvtHeaderNew) to make new event times.
+:::
+
+## Mix signal and background
+
+`FairMixedSource` reads one background chain and one or more signal chains. Each event of the run is one entry of one chain; the source does not overlay entries. The event header tells the tasks where the entry comes from ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L356-L380)):
+
+- [`GetInputFileId()`](/api/FairEventHeader/#GetInputFileId) is 0 for background, and the signal ID for signal.
+- [`GetMCEntryNumber()`](/api/FairEventHeader/#GetMCEntryNumber) is the entry in that chain.
+
+To set up the mixing:
+
+<Steps>
+
+1. Create the source with the background file and the signal ID 0: `new FairMixedSource(name, 0)`.
+
+2. Add each signal file with [`AddSignalFile(name, id)`](/api/FairMixedSource/#AddSignalFile). Use the IDs 1, 2 and so on. Files with the same ID form one chain.
+
+3. Call [`UseRunIdFromBG()`](/api/FairMixedSource/#UseRunIdFromBG) or [`UseRunIdfromSG(id)`](/api/FairMixedSource/#UseRunIdfromSG). Call exactly one of them. Otherwise `SpecifyRunId()` logs a `fatal` line, and the run ID stays 0 ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L319-L323)).
+
+4. Use the parameter file of the input that gives the run ID.
+
+5. For mixing by time, call `SetEventMeanTime()` or `SetEventTimeInterval()` first.
+
+6. Set the signal rate of each signal ID with `BGWindowWidthTime()` or `BGWindowWidthNo()`. Use one of the two modes for all IDs.
+
+7. Give the source to the run with `SetSource()`.
+
+</Steps>
+
+Tutorial 2 mixes 130 background events with two signal types:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis_mixed.C" start="auto fRun = std::make_unique" end="fMixedSource->BGWindowWidthTime(60, 2);" title="create_digis_mixed.C" />
+
+The two rate methods give each signal ID a fraction ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L570-L604)):
+
+| Method | Fraction for the signal ID | Condition |
+| --- | --- | --- |
+| [`BGWindowWidthNo(n, id)`](/api/FairMixedSource/#BGWindowWidthNo) | 1 / (n + 1) | `n` is not 0. |
+| [`BGWindowWidthTime(t, id)`](/api/FairMixedSource/#BGWindowWidthTime) | mean event time / `t` | Set the event time first. |
+
+For each event, [`ReadEvent()`](/api/FairMixedSource/#ReadEvent) draws a random number u between 0 and 1. It goes through the signal IDs in increasing order and takes the first ID whose fraction is u or more. If no ID matches, it reads background. Each chain is read in order, from entry 0 ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L347-L388)).
+
+:::caution[The fractions are not added up]
+A signal ID gets an event only when u is above the fractions of all lower IDs. In Tutorial 2, the fractions are 0.1 and 0.167, so signal 2 comes in about 6.7 % of the events, not 16.7 %. A signal ID without a fraction never gets an event, and without any fraction the source reads no entry.
+:::
+
+The source limits the number of events of the run ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L606-L635)). For a signal chain with S entries and the fraction r, the limit is S / r events. If the background chain is too short for that, the limit is B + B × r, with B background entries. The run takes the smallest limit: 100 events for the files of Tutorial 2.
+
+Know these limits of `FairMixedSource`:
+
+- `ReadEvent()` does not check the entry numbers and always returns 0. If a chain has no more entries, the objects keep the data of the last entry read.
+- From the second event on, `ReadEvent()` draws the time interval twice ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L349), [FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L383-L384)). The mean distance between events is thus two times the value that you set.
+- Before `Init()`, [`AddBackgroundFile()`](/api/FairMixedSource/#AddBackgroundFile) logs a `fatal` line and does not add the file, because the background chain does not exist yet ([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L450-L466)).
+- The source does not compare the branches of the signal files with the background file. Use files from the same simulation setup.
+
+The tests of Tutorial 2 make the input files and then run the macro. In the build directory, run:
+
+```sh
+cd examples/simulation/Tutorial2/macros
+./run_background.sh
+./run_signal.sh 1 10
+./run_signal.sh 2 20
+./create_digis_mixed.sh
+```
+
+The scripts come from [CMakeLists.txt](/repo/examples/simulation/Tutorial2/macros/CMakeLists.txt). `run_signal.sh 1 10` makes 10 events of signal 1, and `run_signal.sh 2 20` makes 20 events of signal 2.
+
+## Online sources
+
+Online sources read MBS data and return `kONLINE` from `GetSourceType()`. You add unpackers ([`FairUnpack`](/api/FairUnpack/)) with [`AddUnpacker()`](/api/FairOnlineSource/#AddUnpacker). The source gives each MBS subevent to each unpacker with the same type, subtype, processor ID, subcrate and control ([FairMbsSource.cxx](/source/fairroot/online/source/FairMbsSource.cxx/#L20-L59)). An unpacker with a negative subcrate gets all subcrates. [`FairLmdSource`](/api/FairLmdSource/) reads list-mode data files, and [`FairRemoteSource`](/api/FairRemoteSource/) and [`FairMbsStreamSource`](/api/FairMbsStreamSource/) read events from an MBS server. `FairRunOnline` stops at the return value 1 and skips an event at the return value 2 ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L283-L293)). See [Process live data with FairRunOnline](/online/run-online/).
+
+## Write your own source
+
+Derive from [`FairSource`](/api/FairSource/) to read another format. Implement these methods:
+
+| Method | What it must do |
+| --- | --- |
+| `Init()` | Open the input and register the branches that the source fills. Return `kTRUE`: with `kFALSE`, `FairRunAna` never calls `ReadEvent()`. |
+| `ReadEvent(i)` | Fill the branches with event `i`. Return 0 for an event and 1 at the end of the input. |
+| `SpecifyRunId()` | Read the first event, so that `FillEventHeader()` can give the run ID. |
+| `FillEventHeader(feh)` | Set the run ID and the other fields of the event header. The base class sets the run ID from [`SetRunId()`](/api/FairSource/#SetRunId). The manager also passes its own plain `FairEventHeader`, so do not cast `feh` to a derived class. |
+| `CheckMaxEventNo()` | Return the number of events, or -1 to read until `ReadEvent()` fails. |
+| `Close()`, `Reset()` | Close the input; reset the state before each event. |
+| `GetSourceType()` | Return `kFILE` or `kONLINE`. |
+| `SetParUnpackers()`, `InitUnpackers()`, `ReInitUnpackers()` | Leave them empty and return `kTRUE`, unless you use unpackers. |
+
+The MQ pixel example reads digis from a binary file. Its `Init()` registers two memory-only branches and opens the file:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelDigiBinSource.cxx" start="Bool_t PixelDigiBinSource::Init()" title="PixelDigiBinSource.cxx" />
+
+Tasks then get the branches with `GetObject()`, because the manager finds them in memory.
+
+:::caution
+Register only memory-only branches in `Init()` of a source. `FairRunAna` initializes the source before the sink ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L142-L143)). A persistent `Register()` then crashes in `FairRootFileSink::RegisterImpl()`, which needs the folder that `InitSink()` creates.
+:::
+
+## Related pages
+
+- [Branches, sources and sinks](/concepts/io/): the source interface and how tasks read branches.
+- [Write a reconstruction macro](/reconstruction/run-macro/): where the source goes in a macro.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): tasks that use the event time.
+- [Process live data with FairRunOnline](/online/run-online/): the run for online sources.
+- [Read MBS and LMD data](/online/mbs/): the MBS sources and unpackers.
+- [Event headers and run IDs](/concepts/event-headers/): the fields that the source fills.

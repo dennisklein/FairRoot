@@ -1,0 +1,389 @@
+---
+title: 'Your first simulation'
+description: 'Run the simulation macro of Tutorial 1, see what each block of the macro does, look at the output files with ROOT, and change the transport engine and the primary generator.'
+sidebar:
+  order: 3
+code:
+  [
+    examples/simulation/Tutorial1/macros/run_tutorial1.C,
+    fairroot/base/steer/FairRunSim.h,
+    fairroot/base/steer/FairRunSim.cxx,
+    fairroot/generators/FairBoxGenerator.h,
+    fairroot/generators/FairBoxGenerator.cxx,
+    examples/simulation/Tutorial1/src/FairTutorialDet1.cxx,
+    examples/common/gconfig/g4Config.C,
+  ]
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+A simulation sends particles from a primary generator through the geometry of your detectors. A
+transport engine, Geant4 or Geant3, calculates the steps of each particle. Each detector stores MC
+points for the steps in its sensitive volumes. This page runs the simulation macro of Tutorial 1,
+explains each block of the macro, and shows how to read the output.
+
+## Before you start
+
+- Build and install FairRoot with the examples, see [Install FairRoot](/start/install/). The CMake
+  option `BUILD_EXAMPLES` is `ON` by default.
+- CMake adds Tutorial 1 only if the targets `FairRoot::FastSim` and `Boost::program_options` exist
+  ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L27-L29)). FairRoot builds FastSim only
+  with Geant4 and Geant4 VMC ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L26-L28)).
+- The tests of the examples use Geant4. Geant3 is optional.
+
+## Run the simulation
+
+The test `ex_sim_tutorial1_TGeant4` runs the macro with Geant4 and 10 events:
+
+<Snippet file="examples/simulation/Tutorial1/macros/CMakeLists.txt" start="add_test(NAME ex_sim_tutorial1_${mcEngine}" end="/^  \)$/" />
+
+<Steps>
+
+1. Run the test in the build folder. The option `-V` shows the output of the macro:
+
+   ```sh
+   cd build
+   ctest -R '^ex_sim_tutorial1_TGeant4$' -V
+   ```
+
+2. To give other arguments, start the script of the test yourself, from the build folder:
+
+   ```sh
+   examples/simulation/Tutorial1/macros/run_tutorial1.sh 10 '"TGeant4"'
+   ```
+
+3. Find the output files in the folder of the script, `examples/simulation/Tutorial1/macros/` in the
+   build folder.
+
+</Steps>
+
+The script sets the environment and goes to its own folder. Then it starts `root -q -b` with the
+macro of the source tree ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in#L30-L44)). It joins
+its arguments with commas, so the call is `run_tutorial1.C(10,"TGeant4")`. Give a string argument
+with its double quotes.
+
+The macro has four arguments:
+
+| Argument | Default | What it sets |
+| --- | --- | --- |
+| `nEvents` | `10` | The number of events |
+| `mcEngine` | `"TGeant3"` | The transport engine: `TGeant3` or `TGeant4` |
+| `isMT` | `true` | The multithreaded mode. Only Geant4 uses it. |
+| `loadPostInitConfig` | `false` | Load `g4ConfigPostInit.C` after the initialization of Geant4 |
+
+:::caution
+The default transport engine of the macro is `TGeant3`. If your FairRoot has no Geant3, always give
+`"TGeant4"`.
+:::
+
+### Run the macro in another folder
+
+Source the environment script of the build folder. Then start ROOT with the macro of the source tree:
+
+```sh
+source <build>/config.sh
+root -b -q '<source>/examples/simulation/Tutorial1/macros/run_tutorial1.C(10, "TGeant4")'
+```
+
+`config.sh` sets `VMCWORKDIR` to `<source>/examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L66)).
+The macro writes its files into the current folder.
+
+## What the macro does
+
+[`run_tutorial1.C`](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/) has the blocks of
+each simulation macro. This section shows them in their order. For the other options of each step,
+see [Write a simulation macro](/simulation/run-macro/).
+
+### The environment
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string dir = getenv("VMCWORKDIR");' end='gSystem->Setenv("CONFIG_DIR"' title="run_tutorial1.C" />
+
+The macro gets the folder of the examples from `VMCWORKDIR`. It sets `GEOMPATH` to the folder of the
+geometry files, and `CONFIG_DIR` to the folder of the engine configuration. Both folders are in
+[`examples/common/`](/repo/examples/common/). See [Environment variables](/reference/environment/).
+
+### The file names
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string outPrefix = "./tutorial1_";' end='auto geoFile = outPrefix + "_geofile_full.root";' title="run_tutorial1.C" />
+
+The names contain the transport engine, `MT` if `isMT` is `true`, and `_postinit` if
+`loadPostInitConfig` is `true`. Then follow the particle, the momentum, the polar angle and the
+number of events. `std::to_string()` writes six decimals. With `"TGeant4"` and
+the other defaults, the data file is `tutorial1_TGeant4MT_pions.mc_p2.000000_t0.000000_n10.root`.
+
+### The run and the sink
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// -----   Create simulation run" end="FairRuntimeDb* rtdb = run->GetRuntimeDb();" title="run_tutorial1.C" />
+
+- [`FairRunSim`](/api/FairRunSim/) is the run of a simulation. The constructor stops with a fatal
+  error if another run exists already
+  ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L58)).
+- `SetName()` selects the transport engine, see
+  [Transport engines and their configuration](/simulation/engines/).
+- [`FairGenericVMCConfig`](/api/FairGenericVMCConfig/) makes the transport engine in `Init()`, with
+  the macro `g3Config.C` or `g4Config.C`.
+  [`UsePostInitConfig()`](/api/FairGenericVMCConfig/#UsePostInitConfig) adds the macro
+  `g4ConfigPostInit.C`.
+- [`SetIsMT()`](/api/FairRunSim/#SetIsMT) switches on the worker threads of Geant4. The Geant3
+  configuration does not read the flag.
+- The sink [`FairRootFileSink`](/api/FairRootFileSink/#FairRootFileSink-3) opens the output file at
+  once, with the option `recreate`
+  ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L60-L69)). It replaces an
+  old file with the same name.
+- The run owns the sink, the modules and the primary generator. It deletes them in its destructor
+  ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L84-L120),
+  [FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L84-L108)).
+
+### The materials
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// -----   Create media" end='run->SetMaterials("media.geo");' title="run_tutorial1.C" />
+
+[`SetMaterials()`](/api/FairRunSim/#SetMaterials) makes the path `$GEOMPATH/media.geo` and logs it.
+It does not read the file. `Init()` reads the media
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L164-L168)). Each volume in a geometry
+file names one of these media.
+
+### The modules
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='FairModule* cave = new FairCave("CAVE");' end="run->AddModule(tutdet);" title="run_tutorial1.C" />
+
+The cave is the outer volume of the geometry: a box of vacuum, 40 m on each side. The detector
+`FairTutorialDet1` reads two silicon planes from `double_sector.geo`. Each plane is 80 cm × 80 cm and
+0.4 mm thick. The planes are at z = 30 cm and z = 30.2 cm. The ASCII geometry files give the lengths in
+mm, and FairRoot converts them to cm
+([FairGeoTransform.h](/source/fairroot/geobase/FairGeoTransform.h/#L47-L52)).
+
+The argument `kTRUE` makes the detector active. A detector registers the sensitive volumes of its
+ASCII file only if it is active ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)).
+For each step in them, the MC application calls `ProcessHits()` of the detector. The MC application
+builds the modules in the order of `AddModule()`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774)).
+The planes name `cave` as their mother volume, so add the cave first. The page
+[Tutorial 1](/examples/tutorial1/) explains the detector class.
+
+### The primary generator
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="FairPrimaryGenerator* primGen = new FairPrimaryGenerator();" end="run->SetGenerator(primGen);" title="run_tutorial1.C" />
+
+[`FairPrimaryGenerator`](/api/FairPrimaryGenerator/) calls each of its generators once in each
+event. Here it has one [`FairBoxGenerator`](/api/FairBoxGenerator/#FairBoxGenerator-2). It makes one
+positive pion (PDG code 211) in each event. The momentum is from 2 GeV to 2.01 GeV, and the polar
+angle is from 0 to 0.01 degrees. The particle starts at the origin, so it flies along the z axis
+through both planes.
+
+`SetDebug()` has no effect: the function is empty
+([FairBoxGenerator.h](/source/fairroot/generators/FairBoxGenerator.h/#L117-L121)).
+
+### The random seed and Init()
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="UInt_t randomSeed = 123456;" end="run->Init();" title="run_tutorial1.C" />
+
+The box generator gets its random numbers from `gRandom`, the random generator of ROOT. The macro
+replaces `gRandom` with a `TRandom3` that has a fixed seed. `Init()` stores the seed in the parameter
+container `FairBaseParSet` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L244-L249)).
+
+[`Init()`](/api/FairRunSim/#Init) reads the media and makes the transport engine with the
+configuration macros. Then the transport engine builds the geometry, and the MC application
+registers the branches of the output. [How a simulation runs](/simulation/overview/) describes all
+steps.
+
+:::caution
+`random` is a local object of the macro. When the macro returns, the destructor of `random` sets
+`gRandom` to a null pointer. A later use of `gRandom` in the same ROOT session fails, for example
+`Init()` of a second run ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L246)). In
+your own macros, call `gRandom->SetSeed()` instead, as the other examples do. See
+[Set the random seed](/simulation/run-macro/#set-the-random-seed).
+:::
+
+### The parameter output
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="Bool_t kParameterMerged = kTRUE;" end="rtdb->print();" title="run_tutorial1.C" />
+
+After `Init()`, the parameter containers hold the values of this run.
+[`FairParRootFileIo`](/api/FairParRootFileIo/#FairParRootFileIo-2) with `kTRUE` merges: if the file
+exists, `open()` opens it with `UPDATE`, else with `RECREATE`
+([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L122-L134)).
+[`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes the containers, and
+[`print()`](/api/FairRuntimeDb/#print) lists them in the log.
+
+### Run() and the geometry file
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="run->Run(nEvents);" end="run->CreateGeometryFile(geoFile.c_str());" title="run_tutorial1.C" />
+
+[`Run()`](/api/FairRunSim/#Run) transports the events and closes the sink
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L322-L329)).
+[`CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) writes the ROOT geometry `gGeoManager` to
+a separate file.
+
+### The checks
+
+After the run, the macro prints the names of the files and the line `Macro finished successfully.`
+Then it reads the output again with a `TChain`. It checks the number of events, MC tracks, MC points,
+branches and leaves ([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L170-L209)).
+If all checks pass, it prints `Simulation successful.` and returns 0. The test
+`ex_sim_tutorial1_TGeant4` passes when the output contains `Macro finished successfully`, so a failed
+check does not make the test fail. Only the test `ex_sim_tutorial1_Geant4MT` looks for
+`Simulation successful.`, see
+[A pass expression ignores the exit code](/tools/testing/#a-pass-expression-ignores-the-exit-code).
+
+## What the log shows
+
+The log of a run is long. The table lists some of its messages and the code that writes them. It is
+not the complete log, and it shows only the message text.
+
+| Message | Written by | Meaning |
+| --- | --- | --- |
+| `Media file used: <path>` | [FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L360) | `SetMaterials()` made the path of the media file. |
+| `==============  FairRunSim: Initialising simulation run ==============` | [FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L162) | `Init()` starts. |
+| `FairGenericVMCConfig::Setup() Using gConfig.C macro DEPRACATED.` | [FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L28) | A warning: the macro configuration is deprecated. The spelling error is in the code. |
+| `Geant4 has been created.` | [g4Config.C](/source/examples/common/gconfig/g4Config.C/#L45) | With `TGeant4` only |
+| `Add GeoNodes for <description> to container FairTutorialDet1GeoPar` | [FairModule.h](/source/fairroot/base/sim/FairModule.h/#L220) | The detector built its volumes from the ASCII file. |
+| `Simulation RunID: <run ID>` | [FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L855) | The run ID. Without `SetRunId()`, the run makes it from the time ([FairRunIdGenerator.cxx](/source/fairroot/base/sim/FairRunIdGenerator.cxx/#L377-L395)). |
+| `Initializing FairTutorialDet1` | [FairTutorialDet1.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1.cxx/#L44) | `Initialize()` of the detector |
+| `Monte Carlo Engine Initialisation with: TGeant4` | [FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L286) | The initialization of the transport engine is complete. |
+| `FairGenericVMCConfig::SetupPostInit() OFF.` | [FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L175) | No post-init configuration |
+| `Loading Geant4 PostInit Config.` | [g4ConfigPostInit.C](/source/examples/common/gconfig/g4ConfigPostInit.C/#L11) | With `loadPostInitConfig = true` only |
+| `Output file is <file>`, `Macro finished successfully.` | [run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L163-L166) | The run is complete. |
+| `MT mode, reading two files: t1 and t2` | [run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L172) | Geant4 used worker threads. |
+| `Output chain has <n> events, <n> tracks, <n> points in <n> branches, <n> leaves.` | [run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L185-L186) | The result of the checks |
+
+For the log levels and how to change them, see [Logging](/tools/logging/).
+
+## The output files
+
+| File | Name with `"TGeant4"` and the other defaults | Content |
+| --- | --- | --- |
+| Data file | `tutorial1_TGeant4MT_pions.mc_p2.000000_t0.000000_n10.root` | The tree `cbmsim` |
+| Files of the worker threads | The name of the data file with `_t1`, `_t2` before `.root` | In multithreaded mode: the events of each worker thread |
+| Parameter file | `tutorial1_TGeant4MT_pions.params_p2.000000_t0.000000_n10.root` | The parameter containers of the run |
+| Geometry file | `tutorial1_TGeant4MT__geofile_full.root` | The ROOT geometry: a `TGeoManager` with the name `FAIRGeom` ([FairGeoLoader.cxx](/source/fairroot/geobase/FairGeoLoader.cxx/#L35)) |
+
+With `"TGeant4"` and `isMT = true`, Geant4 transports the events in worker threads. Each worker writes
+its own file, and FairRoot does not merge them. See [Multithreaded Geant4](/simulation/geant4-mt/).
+
+The tree `cbmsim` has one entry for each event and three branches:
+
+| Branch | Class | Content |
+| --- | --- | --- |
+| `MCEventHeader.` | `FairMCEventHeader` | The run ID, the event ID, the primary vertex and the number of primaries |
+| `MCTrack` | `TClonesArray` of `FairMCTrack` | The MC tracks: PDG code, index of the mother track (-1 for a primary), momentum and vertex at the start. The engine configuration keeps all secondaries ([g4Config.C](/source/examples/common/gconfig/g4Config.C/#L47-L51)). |
+| `TutorialDetPoint` | `TClonesArray` of `FairTutorialDet1Point` | The MC points of the detector |
+
+An MC point holds the index of its MC track, the volume ID, and the position and momentum where the
+track enters the plane. It also holds the time, the track length and the energy loss in the plane.
+For the branches of other runs, see [How a simulation runs](/simulation/overview/).
+
+## Look at the output
+
+Open the data file in ROOT. In multithreaded mode, open the file of a worker thread:
+
+```sh
+root -l tutorial1_TGeant4MT_pions.mc_p2.000000_t0.000000_n10_t1.root
+```
+
+Then type these commands at the ROOT prompt:
+
+```cpp
+cbmsim->Print();
+cbmsim->Draw("TutorialDetPoint.fZ");
+cbmsim->Draw("MCTrack.fPz", "MCTrack.fMotherId == -1");
+new TBrowser;
+```
+
+- `Print()` lists the branches and their leaves.
+- The first `Draw()` shows the z position of the MC points. The points are where the tracks enter the
+  two planes, near z = 30 cm.
+- The second `Draw()` shows the momentum along z of the primary MC tracks, near 2 GeV.
+- `TBrowser` shows the file in a window. Double-click a leaf to draw it.
+
+To read the output in your own code, write a task, see [Your first task](/start/first-task/).
+
+## Change the transport engine
+
+The second argument of the macro selects the transport engine. Run these commands in the folder
+`examples/simulation/Tutorial1/macros/` of the build folder:
+
+| Command | Result |
+| --- | --- |
+| `./run_tutorial1.sh 10 '"TGeant4"'` | Geant4 with worker threads. Each worker writes a file. |
+| `./run_tutorial1.sh 10 '"TGeant4"' false` | Geant4 in one thread. One data file without `MT` in the name. |
+| `./run_tutorial1.sh 10 '"TGeant3"'` | Geant3, if your FairRoot has it. Geant3 ignores `isMT` and writes one data file, but the name contains `MT`. |
+
+`g4Config.C` makes `TGeant4` with the physics list `QGSP_BERT_EMV`, and `g3Config.C` makes
+`TGeant3TGeo`. The test `ex_sim_tutorial1_TGeant3` exists only with Geant3 and the CMake option
+`ENABLE_GEANT3_TESTING=ON`. For all settings of the engines, see
+[Transport engines and their configuration](/simulation/engines/).
+
+## Change the primary generator
+
+Copy the macro, and change the variables at its top:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string partName[] = {"pions", "eplus", "proton"};' end="auto nofPart = 1;" title="run_tutorial1.C" />
+
+- `chosenPart` selects the particle from the two arrays. The PDG code 11 is the electron, although
+  the name in the first array is `eplus`.
+- `momentum` is in GeV, and `theta` is the polar angle in degrees.
+- `nofPart` is the multiplicity: the number of particles in each event.
+
+For other distributions, change the setters of the box generator:
+
+| Setter | Sets the range of | Unit |
+| --- | --- | --- |
+| [`SetPRange(pmin, pmax)`](/api/FairBoxGenerator/#SetPRange) | The momentum | GeV |
+| [`SetPtRange(ptmin, ptmax)`](/api/FairBoxGenerator/#SetPtRange) | The transverse momentum | GeV |
+| [`SetEkinRange(kmin, kmax)`](/api/FairBoxGenerator/#SetEkinRange) | The kinetic energy. `Init()` converts it to a momentum range. | GeV |
+| [`SetThetaRange(thetamin, thetamax)`](/api/FairBoxGenerator/#SetThetaRange) | The polar angle | degree |
+| [`SetCosTheta()`](/api/FairBoxGenerator/#SetCosTheta) | Makes the polar angle uniform in cos θ, not in θ | |
+| [`SetEtaRange(etamin, etamax)`](/api/FairBoxGenerator/#SetEtaRange) | The pseudorapidity | |
+| [`SetYRange(ymin, ymax)`](/api/FairBoxGenerator/#SetYRange) | The rapidity | |
+| [`SetPhiRange(phimin, phimax)`](/api/FairBoxGenerator/#SetPhiRange) | The azimuth angle. The constructor sets 0 to 360. | degree |
+| [`SetXYZ(x, y, z)`](/api/FairBoxGenerator/#SetXYZ) | The vertex, one point | cm |
+| [`SetBoxXYZ(x1, y1, x2, y2, z)`](/api/FairBoxGenerator/#SetBoxXYZ) | The vertex, uniform in a rectangle | cm |
+
+`Init()` of the box generator logs a fatal line for ranges that do not go together
+([FairBoxGenerator.cxx](/source/fairroot/generators/FairBoxGenerator.cxx/#L131-L169)). This line
+stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does). `run_tutorial1.C` does not call
+`FairLogger::GetLogger()`, so the run goes on. These ranges do not go together:
+
+- The momentum together with the transverse momentum, the kinetic energy or the rapidity.
+- Two or more of the polar angle, the pseudorapidity and the rapidity.
+
+For example, five protons in each event, in a cone of 10 degrees. Set `nofPart = 5` at the top of
+the macro, and change the box generator:
+
+```cpp title="run_tutorial1.C, changed"
+FairBoxGenerator* boxGen = new FairBoxGenerator(2212, nofPart);   // PDG code, particles in each event
+boxGen->SetPRange(1., 3.);                                    // GeV
+boxGen->SetThetaRange(0., 10.);                               // degree
+boxGen->SetCosTheta();
+primGen->AddGenerator(boxGen);
+```
+
+The planes cover the polar angles up to approximately 53 degrees. The checks at the end of the macro
+expect at least `nEvents * nofPart` MC tracks and MC points
+([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L191-L198)). If many
+particles miss the planes, the macro prints `Not enough points` and returns 1.
+
+To see each primary in the log, set the screen level of the logger to `debug` before `Run()`:
+
+```cpp
+gLogger->SetLogScreenLevel("debug");
+```
+
+The box generator then logs one line for each particle
+([FairBoxGenerator.cxx](/source/fairroot/generators/FairBoxGenerator.cxx/#L218)). The detector also
+logs one line for each step in a plane
+([FairTutorialDet1.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1.cxx/#L57)). For the
+other generators, see [Primary generators](/simulation/generators/).
+
+## Related pages
+
+- [Write a simulation macro](/simulation/run-macro/): all steps and options of a simulation macro.
+- [Tutorial 1](/examples/tutorial1/): the detector class, the MC point and the other macros of the
+  example.
+- [Your first task](/start/first-task/): read the MC points and make digis.
+- [Transport engines and their configuration](/simulation/engines/): the configuration macros and
+  YAML files.
+- [Environment variables](/reference/environment/): `VMCWORKDIR`, `GEOMPATH` and `CONFIG_DIR`.

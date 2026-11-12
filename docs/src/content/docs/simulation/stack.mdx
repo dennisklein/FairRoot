@@ -1,0 +1,367 @@
+---
+title: 'The particle stack and MC tracks'
+description: 'How the stack keeps the particles of an event, how the transport engines take them, and how FairStack selects the particles to store, writes MC tracks and corrects the MC points.'
+sidebar:
+  order: 7
+code: [fairroot/base/sim/FairGenericStack.h, fairroot/base/sim/FairGenericStack.cxx, examples/common/mcstack/FairStack.h, examples/common/mcstack/FairStack.cxx, examples/common/mcstack/FairMCTrack.h, examples/common/mcstack/FairMCTrack.cxx, examples/common/mcstack/FairDetectorList.h, templates/project_root_containers/MyProjData/MyProjStack.cxx, templates/project_stl_containers/MyProjData/MyProjStack.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The stack keeps the particles of one event while the transport engine transports them. FairRoot
+defines only the interface [`FairGenericStack`](/api/FairGenericStack/), and each experiment has its
+own class that implements it, for example `FairStack` of the examples. At the end of each event, this
+class stores the selected particles as MC tracks and corrects the track numbers in the MC points.
+
+## The interface
+
+`FairGenericStack` derives from `TVirtualMCStack` of the [VMC](https://vmc-project.github.io/). The
+transport engine uses the functions of `TVirtualMCStack` to add and take particles. `FairGenericStack`
+adds the functions that the MC application calls before the first event, at the end of each primary
+and at the end of each event:
+
+<Snippet file="fairroot/base/sim/FairGenericStack.h" start="Fill the MCTrack output array, applying filter criteria" end="virtual void Register() {}" title="FairGenericStack.h" />
+
+In `FairGenericStack`, `FillTrackArray()`, `UpdateTrackIndex()`, `FinishPrimary()` and `Register()`
+do nothing. The stack class of your experiment overrides them. It must also implement these pure
+virtual functions:
+
+- `PushTrack()` with 18 arguments, from `TVirtualMCStack`, and with 19 arguments, from
+  `FairGenericStack`.
+- `PopNextTrack()` and `PopPrimaryForTracking()`.
+- `GetNtrack()`, `GetNprimary()`, `GetCurrentTrack()` and `GetCurrentParentTrackNumber()`.
+
+`FairGenericStack` implements `SetCurrentTrack()` and `GetCurrentTrackNumber()` with the member
+`fCurrentTrack`. `FairStack` overrides `GetCurrentTrackNumber()`: for a helper track of fast
+simulation, it gives the number of the original particle
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L240-L243)).
+
+This table shows who calls the functions of the stack:
+
+| Function | Caller | When |
+| --- | --- | --- |
+| `PushTrack()` | The primary generator, and the transport engine for secondaries | In `GeneratePrimaries()` and during the transport |
+| `PopNextTrack()` | Geant3 | Before each track |
+| `PopPrimaryForTracking()` | Geant4 VMC | After `GeneratePrimaries()`, once for each primary |
+| `GetCurrentTrackNumber()` | Your detectors, in `ProcessHits()` | During the transport |
+| [`Register()`](/api/FairGenericStack/#Register) | `InitGeometry()` of the MC application | Once, before the first event |
+| [`SetDetArrayList()`](/api/FairGenericStack/#SetDetArrayList) | [`RunMC()`](/api/FairMCApplication/#RunMC) of the MC application | Once, before the first event |
+| [`FinishPrimary()`](/api/FairGenericStack/#FinishPrimary) | `FinishPrimary()` of the MC application | After each primary |
+| `FillTrackArray()`, `UpdateTrackIndex()`, `Reset()` | `FinishEvent()` of the MC application | At the end of each event |
+| [`CloneStack()`](/api/FairGenericStack/#CloneStack) | The MC application of a worker thread | Once for each worker thread |
+
+The functions `FastSimMoveParticleTo()`, `FastSimStopParticle()` and `FastSimPushSecondary()` are
+for [fast simulation](/simulation/fast-simulation/). The split simulation example moves primaries
+between devices with `GetListOfParticles()` and `SetParticleArray()`, see
+[Split a simulation over devices](/online/sim-split/).
+
+## Where the stack comes from
+
+`FairRunSim` does not make the stack. The engine configuration makes it in
+[`Init()`](/api/FairRunSim/#Init), together with the transport engine. Then it gives the stack to the
+transport engine with `SetStack()`. The configuration macros of the examples make a `FairStack`:
+
+<Snippet file="examples/common/gconfig/g4Config.C" start="/// create the Specific stack" end="geant4->SetStack(stack);" title="g4Config.C" />
+
+`g3Config.C` does the same for Geant3. With a YAML configuration,
+[`FairYamlVMCConfig::Setup()`](/api/FairYamlVMCConfig/#Setup) calls the pure virtual function
+[`SetupStack()`](/api/FairYamlVMCConfig/#SetupStack). The example class `FairVMCConfig` makes a
+`FairStack` there, with the keys `FairStack_StoreSecondaries` and `FairStack_MinPoints` of the YAML
+file ([FairVMCConfig.cxx](/source/examples/common/gconfig/FairVMCConfig.cxx/#L26-L34)). See
+[Transport engines and their configuration](/simulation/engines/).
+
+After the configuration, the MC application connects the stack:
+
+- [`InitMC()`](/api/FairMCApplication/#InitMC) gets the stack from the transport engine. If the
+  stack does not derive from `FairGenericStack`, it logs the fatal error `No Stack defined.`
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L259-L262)).
+- `InitGeometry()` calls `Register()` of the stack, but only if the run has a primary generator.
+  Else it logs the warning `Stack is not registered`
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L947-L952)).
+- `RunMC()` gives the list of active detectors to the stack with `SetDetArrayList()`
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L298-L299)).
+
+Your code gets the stack with `TVirtualMC::GetMC()->GetStack()`, or with
+[`FairMCApplication::GetStack()`](/api/FairMCApplication/#GetStack).
+
+## The stack during an event
+
+### Primaries
+
+In each event, `GeneratePrimaries()` of the MC application gives the stack to
+[`GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) of the primary generator. Each
+generator adds its particles with [`AddTrack()`](/api/FairPrimaryGenerator/#AddTrack), which calls
+`PushTrack()` of the stack. `AddTrack()` sets the tracking flag `toBeDone`:
+
+<Snippet file="fairroot/base/sim/FairPrimaryGenerator.cxx" start="Int_t doTracking = 0;" end="Int_t dummyparent = -1;" title="FairPrimaryGenerator.cxx" />
+
+The flag is 1 only if two settings are true: the setting of
+[`DoTracking()`](/api/FairPrimaryGenerator/#DoTracking) and the argument `wanttracking` of
+`AddTrack()`. Both are true by default. `AddTrack()` gives the parent index −1 to the stack for each
+particle, so the stack counts each particle of a generator as a primary. The argument `parent` of
+`AddTrack()` goes into the last argument of `PushTrack()`, and `FairStack` does not use it
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L378-L400)).
+
+### Add a particle
+
+`FairStack` keeps two lists. The array `fParticles` keeps a `TParticle` for each particle that the
+stack gets. A last-in, first-out `std::stack` keeps the particles for `PopNextTrack()`.
+`PushTrack()` adds each particle to the array:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="// --> Create new TParticle and add it to the TParticle array" end="particle->SetUniqueID(proc);" title="FairStack.cxx" />
+
+The index in `fParticles` is the track number of the particle. `PushTrack()` returns it in `ntr` and
+also keeps it as the status code of the `TParticle`. The first mother is the parent index, and the
+unique ID is the production process. A particle with a negative parent index counts as a primary.
+At the end, `PushTrack()` puts the particle on the `std::stack` if `toBeDone` is 1:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="// --> Push particle on the stack if toBeDone is set" title="FairStack.cxx" />
+
+### How the transport engines take the particles
+
+The two transport engines use the stack in different ways. This is the behavior of Geant3 and
+Geant4 VMC:
+
+- **Geant3** calls `PopNextTrack()` until the stack is empty. `FairStack::PopNextTrack()` takes the
+  top particle from the `std::stack` and makes it the current track
+  ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L134-L156)). Geant3 pushes each
+  secondary with `toBeDone` 1, and thus takes the secondaries in the same way.
+- **Geant4 VMC** calls `PopPrimaryForTracking()` for each index from 0 to `GetNtrack()` − 1, after
+  `GeneratePrimaries()`. Geant4 transports the secondaries itself. By default, Geant4 VMC pushes each
+  secondary with `toBeDone` 0 before it tracks it, and calls `SetCurrentTrack()` before each track.
+
+:::caution[The tracking flag and Geant4]
+`FairStack::PopPrimaryForTracking()` returns each primary and does not look at `toBeDone`
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L158-L176)). The VMC interface asks
+this function to return only primaries with `toBeDone` 1
+([TVirtualMCStack.h](https://github.com/vmc-project/vmc/blob/master/source/include/TVirtualMCStack.h)).
+Thus Geant4 VMC transports all primaries, also with `DoTracking(kFALSE)`. Geant3 transports only
+the primaries with `toBeDone` 1.
+:::
+
+### The current track and the point count
+
+A detector reads the current track number in `ProcessHits()` and keeps it in the MC point. This
+number is the index in `fParticles`, and it is correct only until the end of the event. The detector
+of Tutorial 1 also counts its MC points in the stack:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="// Increment number of tutorial det points in TParticle" end="stack->AddPoint(kTutDet);" title="FairTutorialDet1.cxx" />
+
+`AddPoint()` is not part of `FairGenericStack`. Thus the detector casts the stack to `FairStack`.
+This cast is correct only if the engine configuration makes a `FairStack`.
+`FairStack::AddPoint()` adds 1 to the count of the current track in the given detector
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L336-L363)). The selection at the end
+of the event uses these counts.
+
+## At the end of the event
+
+After the last particle, [`FinishEvent()`](/api/FairMCApplication/#FinishEvent) of the MC
+application calls the stack:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="// --> Fill the stack output array" end="fStack->UpdateTrackIndex(&fActiveDetectors);" title="FairMCApplication.cxx" />
+
+Then the tasks execute, and the sink writes the event. At the end of `FinishEvent()`, `Reset()`
+clears both lists, the MC track array and the point counts for the next event
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L302-L313)).
+[How a simulation runs](/simulation/overview/) shows the complete order.
+
+### Select the particles to store
+
+`FillTrackArray()` first calls `SelectTracks()`, which selects the particles to store. Four settings
+of `FairStack` control the selection
+([FairStack.h](/source/examples/common/mcstack/FairStack.h/#L172-L175)):
+
+| Setting | Default | Effect on secondaries |
+| --- | --- | --- |
+| `StoreSecondaries(Bool_t)` | `kTRUE` | With `kFALSE`, the stack stores no secondaries. |
+| `SetMinPoints(Int_t)` | 1 | The stack drops secondaries with fewer MC points. |
+| `SetEnergyCut(Double_t)` | 0 | The stack drops secondaries with a lower kinetic energy, in GeV. |
+| `StoreMothers(Bool_t)` | `kTRUE` | The stack also stores the mother, grandmother and so on of each stored particle. |
+
+The defaults come from the constructor
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L30-L46)). The stack always stores
+the primaries:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="// --> Check for cuts (store primaries in any case)" end="fStoreMap[i] = store;" title="FairStack.cxx" />
+
+The number of MC points is the sum of the `AddPoint()` counts of the particle, for the detector IDs
+before `kSTOPHERE`. Thus a secondary has 0 points if its detectors do not call `AddPoint()`. The
+stack never stores the helper tracks of fast simulation. Then, with `StoreMothers`, it marks the
+ancestors of each stored particle ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L446-L457)).
+
+The macros `g3Config.C` and `g4Config.C` of the examples and the templates call `SetMinPoints(0)` and
+`StoreSecondaries(kTRUE)`. The YAML files of the examples set the same values. With these settings
+and the energy cut 0, the stack stores all particles, except the helper tracks of fast simulation.
+
+### Fill the MC track array
+
+Next, `FillTrackArray()` copies each selected particle as a `FairMCTrack` into the array of MC
+tracks. It also fills the index map `fIndexMap` and the point counts of each MC track:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="for (Int_t iPart = 0; iPart < fNParticles; iPart++) {" end="^    }" title="FairStack.cxx" />
+
+The index map gives the new index of each particle in the MC track array. A particle that the stack
+does not store gets −2. After the loop, the parent index −1 of the primaries maps to −1.
+
+### Correct the track numbers
+
+[`UpdateTrackIndex()`](/api/FairGenericStack/#UpdateTrackIndex) replaces the old indices with the
+new ones. First, it replaces the mother index of each MC track. With `StoreMothers(kFALSE)`, a mother
+that the stack did not store becomes −2. Then it goes through the MC points of each active detector:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="FairDetector* det = nullptr;" end="// List of active detectors" title="FairStack.cxx" />
+
+This loop needs three things from your detector:
+
+- [`GetCollection()`](/api/FairDetector/#GetCollection) returns the point collections for the
+  indices 0, 1, 2 and so on, and `nullptr` after the last one. See [Write a detector](/simulation/detectors/).
+- The point class derives from [`FairMCPoint`](/api/FairMCPoint/). The stack casts each object to
+  `FairMCPoint` and does not check the type.
+- The track ID of each MC point is the current track number of the stack at the time of the step.
+
+An MC point of a particle that the stack did not store gets the track ID −2. For a track ID that is
+not in the index map, the stack logs the fatal error `Particle index … not found in index map!`.
+Without a fatal handler, the run continues. The stack then does not replace the track ID of that MC
+point and gives it no link ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L288-L294)).
+See [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+The loop also gives each MC point a link to its MC track. [`SetLink()`](/api/FairMultiLinkedData_Interface/#SetLink)
+keeps the link only if the run uses links, see
+[`FairRun::SetUseFairLinks()`](/api/FairRun/#SetUseFairLinks)
+([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L64-L75)).
+Links are off by default. See [Turn links on](/concepts/links/#turn-links-on).
+
+## The MCTrack branch
+
+`FairStack::Register()` registers the MC track array as the branch `MCTrack`:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="void FairStack::Register()" title="FairStack.cxx" />
+
+With a transport engine, it uses [`FairRootManager::Register()`](/api/FairRootManager/#Register-2)
+with the folder `Stack`. Without a transport engine, it uses
+[`RegisterAny()`](/api/FairRootManager/#RegisterAny). The last argument `kTRUE` makes the branch
+persistent, so the sink writes it. See [Register a branch](/concepts/io/#register-a-branch).
+
+A task gets the MC tracks as a `TClonesArray` with
+[`FairRootManager::GetObject()`](/api/FairRootManager/#GetObject) and the branch name `MCTrack`.
+The track ID of an MC point is the index in this array. The hit producer of the propagator example
+uses it ([FairTutPropHitProducer.cxx](/source/examples/advanced/propagator/src/FairTutPropHitProducer.cxx/#L61)):
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropHitProducer.cxx" start="FairMCTrack* track = static_cast<FairMCTrack*>(fTracksArray->At(point->GetTrackID()));" end="TParticlePDG* particle = dbPDG->GetParticle(track->GetPdgCode());" title="FairTutPropHitProducer.cxx" />
+
+:::caution
+The track ID −2 is not a valid index of the MC track array. If your stack drops particles, check
+the track ID of an MC point before you use it as an index.
+:::
+
+## The MC track
+
+`FairMCTrack` keeps the data of one particle at its start vertex:
+
+| Member | Accessors | Content |
+| --- | --- | --- |
+| `fPdgCode` | `GetPdgCode()` | PDG code |
+| `fMotherId` | `GetMotherId()` | Index of the mother MC track, −1 for a primary |
+| `fPx`, `fPy`, `fPz` | `GetPx()`, `GetPy()`, `GetPz()`, `GetMomentum()` | Momentum at the start vertex, in GeV |
+| `fStartX`, `fStartY`, `fStartZ` | `GetStartX()`, `GetStartY()`, `GetStartZ()`, `GetStartVertex()` | Start vertex, in cm |
+| `fStartT` | `GetStartT()` | Start time, in ns |
+| `fNPoints` | `GetNPoints()` | Number of MC points in each detector, packed into bits |
+
+The constructor from a `TParticle` changes the time from seconds to nanoseconds
+([FairMCTrack.cxx](/source/examples/common/mcstack/FairMCTrack.cxx/#L71-L83)). `GetMass()` takes
+the mass from `TDatabasePDG` and returns 0 for an unknown PDG code. `GetEnergy()` and
+`GetRapidity()` use this mass.
+
+Each detector has a fixed number of bits in `fNPoints`:
+
+<Snippet file="examples/common/mcstack/FairMCTrack.cxx" start="Int_t FairMCTrack::GetNPoints(DetectorId detId) const" title="FairMCTrack.cxx" />
+
+`kREF` has bit 0, `kTutDet` has bits 1 to 3 and `kFairRutherford` has bits 4 to 8. `SetNPoints()`
+sets a larger count to the maximum of the bits: 1, 7 and 31
+([FairMCTrack.cxx](/source/examples/common/mcstack/FairMCTrack.cxx/#L130-L161)).
+For other detector IDs, both functions log the error `Unknown detector ID`. The comment on
+`fNPoints` in `FairMCTrack.h` gives the same bits 0 to 8, but with the detector names of another
+experiment. The other fields of that comment do not exist in the code.
+
+## Detector IDs
+
+`FairDetectorList.h` defines the enum `DetectorId` of the examples. `AddPoint()`, `SetNPoints()` and
+`GetNPoints()` use its values:
+
+<Snippet file="examples/common/mcstack/FairDetectorList.h" start="// kSTOPHERE is needed" title="FairDetectorList.h" />
+
+`SelectTracks()` and `FillTrackArray()` loop from `kREF` to `kSTOPHERE`, and do not use the IDs after
+`kSTOPHERE` ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L412-L419)). The
+propagator example counts its points with `kTutProp`
+([FairTutPropDet.cxx](/source/examples/advanced/propagator/src/FairTutPropDet.cxx/#L111)), and the
+pixel detector example with `kPixel` ([Pixel.cxx](/source/examples/MQ/pixelDetector/src/Pixel.cxx/#L126)).
+The selection and the MC tracks do not use these counts. Put each detector of your experiment before
+`kSTOPHERE`.
+
+## Write the stack of your experiment
+
+The FairRoot libraries contain only the abstract class `FairGenericStack`. `FairStack` is part of
+the example library `ExMCStack` ([CMakeLists.txt](/repo/examples/common/mcstack/CMakeLists.txt)). The project templates
+contain `MyProjStack`, `MyProjMCTrack` and `MyProjDetectorList.h` in the folder `MyProjData`. The
+two template variants are different:
+
+| | `project_root_containers` | `project_stl_containers` |
+| --- | --- | --- |
+| Default of `fMinPoints` | 1 | 0 |
+| Selection in `FillTrackArray()` | Calls `SelectTracks()` | Stores all particles; the call is a comment |
+| `UpdateTrackIndex()` | Corrects the mothers and the MC points | Does nothing; the code is a comment |
+| Point counts in `MyProjMCTrack` | Not kept: `SetNPoints()` is empty and `GetNPoints()` returns 0 | The same |
+| Screen output | `Print(1)` with `cout` in each event | The same |
+| Fast simulation | No special handling of the helper tracks | The same |
+
+In the stl variant, the selection settings have no effect, and the MC points get no links. The
+track numbers in the MC points are correct, because the stack stores all particles in their order
+([MyProjStack.cxx](/source/templates/project_stl_containers/MyProjData/MyProjStack.cxx/#L251-L263)).
+
+To make the stack of your experiment:
+
+<Steps>
+1. Start a project from a template, see [Start a project from a template](/start/new-project/).
+2. Add an ID for each detector to `DetectorId` in
+   [`MyProjDetectorList.h`](/source/templates/project_stl_containers/MyProjData/MyProjDetectorList.h/#L19-L24),
+   before `kSTOPHERE`.
+3. In `ProcessHits()` of each detector, call `AddPoint()` of your stack for each MC point.
+4. Write `SetNPoints()` and `GetNPoints()` of your MC track class for your detector IDs.
+5. If you use the stl variant and need a selection, copy `FillTrackArray()` and `UpdateTrackIndex()`
+   from the root variant.
+6. Make the stack in your engine configuration.
+7. Set the selection on the stack in the same place.
+8. For multithreaded Geant4, make sure that `CloneStack()` copies the selection settings.
+</Steps>
+
+## Multithreaded Geant4
+
+With multithreaded Geant4, each worker thread has its own stack. The MC application of a worker
+calls `CloneStack()` of the master stack
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L193-L194)). Then
+[`InitOnWorker()`](/api/FairMCApplication/#InitOnWorker) registers the branch of the clone and gives
+the clone to the transport engine of the thread.
+
+`FairGenericStack::CloneStack()` calls `Fatal()` of ROOT with the message
+`Has to be overriden in multi-threading applications.` This call stops the program
+([FairGenericStack.cxx](/source/fairroot/base/sim/FairGenericStack.cxx/#L95-L99)). Thus each stack
+for multithreaded Geant4 must override it. `FairStack` makes a new stack with the same selection
+settings:
+
+<Snippet file="examples/common/mcstack/FairStack.h" start="FairGenericStack* CloneStack() const override" title="FairStack.h" />
+
+`RunMC()` runs only on the master thread, so a clone gets no `SetDetArrayList()` call.
+`FairStack::UpdateTrackIndex()` then uses the list of active detectors from its argument
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L261-L267)). The MC points of
+the worker threads get no links, see [Limits of MT mode](/simulation/geant4-mt/#limits-of-mt-mode).
+
+## Related pages
+
+- [How a simulation runs](/simulation/overview/): where the stack works in each event.
+- [Write a detector](/simulation/detectors/): `ProcessHits()`, MC points and `GetCollection()`.
+- [Primary generators](/simulation/generators/): `AddTrack()` and the generators.
+- [Links between data levels](/concepts/links/): the links from MC points to MC tracks.
+- [Transport engines and their configuration](/simulation/engines/): where the stack is made.
+- [Multithreaded Geant4](/simulation/geant4-mt/): worker threads and their clones.
+- [Fast simulation](/simulation/fast-simulation/): the helper tracks of moved particles.

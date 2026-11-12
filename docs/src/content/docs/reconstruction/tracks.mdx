@@ -1,0 +1,411 @@
+---
+title: 'Track parameters and propagation'
+description: 'Track parameters in three frames with covariance matrices, the propagator interface, the Runge-Kutta propagator for the field only, and Geane, which also uses the materials.'
+sidebar:
+  order: 6
+code: [fairroot/trackbase/FairTrackPar.h, fairroot/trackbase/FairTrackParH.h, fairroot/trackbase/FairTrackParH.cxx, fairroot/trackbase/FairTrackParP.h, fairroot/trackbase/FairTrackParP.cxx, fairroot/trackbase/FairGeaneUtil.h, fairroot/trackbase/FairGeaneUtil.cxx, fairroot/trackbase/FairPropagator.h, fairroot/trackbase/FairRKPropagator.h, fairroot/trackbase/FairRKPropagator.cxx, fairroot/geane/FairGeane.h, fairroot/geane/FairGeane.cxx, fairroot/geane/FairGeanePro.h, fairroot/geane/FairGeanePro.cxx, fairroot/base/sim/FairGeaneApplication.h, fairroot/base/sim/FairGeaneApplication.cxx, fairroot/base/event/FairTrackParam.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+import TrackFrames from '../../../components/diagrams/TrackFrames.astro';
+
+A track parameter object holds the state of a charged particle at one point: position, momentum, charge and a
+covariance matrix. A propagator moves this state through the magnetic field to a destination. The destination is a
+plane, a volume, a track length, or the point of closest approach (PCA) to a point or a wire.
+
+FairRoot has two propagators. `FairRKPropagator` uses only the field and ignores the materials. `FairGeanePro`
+uses Geane, the track and error propagation of Geant3, with the materials of the geometry.
+
+## The classes and their libraries
+
+| Class | CMake target | What it does |
+| --- | --- | --- |
+| [`FairTrackPar`](/api/FairTrackPar/) | `FairRoot::TrackBase` | Base class: position, momentum, their errors, q/p and charge in the lab frame |
+| [`FairTrackParH`](/api/FairTrackParH/) | `FairRoot::TrackBase` | Track as a helix, with a covariance matrix in the SC frame |
+| [`FairTrackParP`](/api/FairTrackParP/) | `FairRoot::TrackBase` | Track on a plane ("parabola" in the code), with a covariance matrix in the SD frame |
+| [`FairGeaneUtil`](/api/FairGeaneUtil/) | `FairRoot::TrackBase` | Conversion of the variables and the covariance matrices between the frames |
+| [`FairPropagator`](/api/FairPropagator/) | `FairRoot::TrackBase` | Interface of the propagators |
+| [`FairRKPropagator`](/api/FairRKPropagator/) | `FairRoot::TrackBase` | Runge-Kutta propagator in the field |
+| [`FairGeane`](/api/FairGeane/) | `FairRoot::Geane` | Task that sets up Geant3 for Geane |
+| [`FairGeanePro`](/api/FairGeanePro/) | `FairRoot::Geane` | Propagator with Geane |
+| [`FairGeaneApplication`](/api/FairGeaneApplication/) | `FairRoot::Base` | VMC application of Geane |
+| [`FairTrackParam`](/api/FairTrackParam/) | `FairRoot::Base` | Fit parameters (x, y, tx, ty, q/p) at a z position. No propagator uses it. |
+
+CMake always builds `FairRoot::TrackBase`. Its library file keeps the old name `TrkBase`
+([CMakeLists.txt](/repo/fairroot/trackbase/CMakeLists.txt#L25-L26)). CMake builds `FairRoot::Geane` only when it finds
+Geant3 ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L20-L24)).
+
+## Track parameters
+
+### Frames and variables
+
+The classes use the three frames of Geane. The names and the variables come from the comments and the code of
+`FairGeaneUtil` ([FairGeaneUtil.cxx](/source/fairroot/trackbase/FairGeaneUtil.cxx/#L344-L373)):
+
+| Frame | Name in the code | Variables | Class |
+| --- | --- | --- | --- |
+| MARS | Master reference system, the lab frame | px, py, pz, x, y, z | `FairTrackPar` |
+| SC | Transverse system | q/p, λ, φ, y⊥, z⊥ | `FairTrackParH` |
+| SD | Detector system, a plane | q/p, v′, w′, v, w | `FairTrackParP` |
+
+- In SC, λ is the dip angle and φ the azimuth: λ = asin(pz/p) and φ = atan2(py, px)
+  ([FairTrackParH.cxx](/source/fairroot/trackbase/FairTrackParH.cxx/#L183-L188)). The x axis of SC points along the
+  momentum. y⊥ and z⊥ are the coordinates on the two axes across the momentum.
+- In SD, a plane has an origin o and two unit vectors: j for the v axis and k for the w axis. The normal i = j × k
+  is the u axis. v′ = dv/du and w′ = dw/du are the slopes of the track.
+- `spu` is the sign of the momentum component along u: sign[p · (j × k)]. Two tracks with opposite directions have
+  the same v′ and w′, but a different `spu`.
+- The units are cm, GeV/c and kG. The Runge-Kutta code states "units cm,gev/c and kgauss"
+  ([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L545-L557)).
+
+The diagram shows the SC frame and the SD frame at one point of a track:
+
+<TrackFrames />
+
+### FairTrackPar
+
+The base class keeps the state in MARS:
+
+<Snippet file="fairroot/trackbase/FairTrackPar.h" start="Position of track [cm]" end="Int_t fq;" title="FairTrackPar.h" />
+
+- `GetQ()` gives `fq`. Most constructors of the derived classes set it to +1 or −1 from the sign of the charge or
+  of q/p. `TDatabasePDG` gives the charge in units of |e|/3, for example 3 for a π+, and these constructors accept
+  this value. `FairTrackParH(FairTrackPar&)` copies `fq` without a change
+  ([FairTrackParH.cxx](/source/fairroot/trackbase/FairTrackParH.cxx/#L571-L575)). With a charge of 0, the MARS
+  constructor of `FairTrackParH` divides by zero ([FairTrackParH.cxx](/source/fairroot/trackbase/FairTrackParH.cxx/#L183)).
+- All constructors with values and the `SetTrackPar()` functions of the derived classes call `GetFieldValue()`. This
+  function reads the field of `FairRunAna::Instance()` without a check for a null run
+  ([FairTrackPar.cxx](/source/fairroot/trackbase/FairTrackPar.cxx/#L108-L118)). Thus these classes need a
+  `FairRunAna`. If the run has no field, the field is zero.
+
+:::caution
+The constructor `FairTrackPar(x, y, z, px, py, pz, q)` copies the position and the momentum into the errors
+([FairTrackPar.cxx](/source/fairroot/trackbase/FairTrackPar.cxx/#L38-L62)). Set the errors after this call, or use
+the constructor with errors.
+:::
+
+### FairTrackParH: the helix in SC
+
+| Constructor | Input |
+| --- | --- |
+| [`FairTrackParH(x, y, z, lambda, phi, qp, cov)`](/api/FairTrackParH/#FairTrackParH-2) | The point in SC coordinates, the SC variables and 15 covariance values |
+| [`FairTrackParH(pos, mom, posErr, momErr, q)`](/api/FairTrackParH/#FairTrackParH-3) | MARS values with diagonal errors. `FairGeaneUtil::FromMarsToSC()` makes the SC matrix. |
+| [`FairTrackParH(FairTrackPar&)`](/api/FairTrackParH/#FairTrackParH-4) | The MARS values and errors of another object |
+| [`FairTrackParH(FairTrackParP*, ierr)`](/api/FairTrackParH/#FairTrackParH-5) | A track on a plane. `ierr` is the error flag of the conversion. |
+
+[`SetTrackPar()`](/api/FairTrackParH/#SetTrackPar) takes MARS values with an SC matrix.
+[`SetTrackPar()`](/api/FairTrackParH/#SetTrackPar-2) with SC values is the second overload.
+
+:::caution[Argument order]
+The SC overload of `SetTrackPar()` takes `(x, y, z, qp, lambda, phi, cov)`. The SC constructor takes
+`(x, y, z, lambda, phi, qp, cov)` ([FairTrackParH.h](/source/fairroot/trackbase/FairTrackParH.h/#L35-L41)).
+:::
+
+The MARS constructor and the constructor from `FairTrackPar&` do not set the errors of q/p, λ and φ. After them,
+`GetDQp()`, `GetDLambda()` and `GetDPhi()` give 0, but the covariance matrix has the values
+([FairTrackParH.cxx](/source/fairroot/trackbase/FairTrackParH.cxx/#L157-L248)). Read the errors from
+[`GetCov()`](/api/FairTrackParH/#GetCov).
+
+### FairTrackParP: the track on a plane in SD
+
+Each object has its own plane. [`SetPlane(o, j, k)`](/api/FairTrackParP/#SetPlane) normalizes j and k. If they are
+not orthogonal, it replaces k with (j × k) × j. It does not normalize this new k, so give orthogonal vectors. Then
+it sets i = j × k ([FairTrackParP.cxx](/source/fairroot/trackbase/FairTrackParP.cxx/#L878-L910)).
+
+| Constructor | Input |
+| --- | --- |
+| [`FairTrackParP(v, w, Tv, Tw, qp, cov, o, j, k)`](/api/FairTrackParP/#FairTrackParP-2) | SD variables and matrix. The constructor calculates `spu`. |
+| [`FairTrackParP(v, w, Tv, Tw, qp, cov, o, j, k, spu)`](/api/FairTrackParP/#FairTrackParP-3) | The same, with `spu` as input |
+| [`FairTrackParP(pos, mom, posErr, momErr, q, o, j, k)`](/api/FairTrackParP/#FairTrackParP-4) | MARS values with diagonal errors |
+| [`FairTrackParP(pos, mom, covMARS, q, o, j, k)`](/api/FairTrackParP/#FairTrackParP-5) | MARS values with a full 6×6 matrix |
+| [`FairTrackParP(FairTrackParH*, j, k, ierr)`](/api/FairTrackParP/#FairTrackParP-6) | A helix. Its point becomes the origin of the plane. |
+
+- The MARS constructors keep the position that you give. They calculate u, v and w, but they do not move the point
+  onto the plane ([FairTrackParP.cxx](/source/fairroot/trackbase/FairTrackParP.cxx/#L339-L344)). Give a point on
+  the plane.
+- The constructor without `spu` calculates the sign from the SD momentum and the MARS vector j × k
+  ([FairTrackParP.cxx](/source/fairroot/trackbase/FairTrackParP.cxx/#L151-L154)). The two vectors are in different
+  frames, so the sign can be wrong, or NaN when the product is 0. Use the constructor with `spu`.
+- `GetOrigin()`, `GetIVer()`, `GetJVer()` and `GetKVer()` give the plane. `GetV()`, `GetW()`, `GetTV()` and
+  `GetTW()` give the SD variables.
+
+### The covariance matrices
+
+Both classes keep 15 values: the upper triangle of the symmetric 5×5 matrix, row by row
+([FairGeaneUtil.cxx](/source/fairroot/trackbase/FairGeaneUtil.cxx/#L978-L1013)). The order of the variables is the
+order in the table of frames.
+
+| Row | Indices | Diagonal element |
+| --- | --- | --- |
+| 1 | 0 to 4 | 0 |
+| 2 | 5 to 8 | 5 |
+| 3 | 9 to 11 | 9 |
+| 4 | 12 and 13 | 12 |
+| 5 | 14 | 14 |
+
+- `GetCov()` gives the 15 values. `GetMARSCov()` gives the 6×6 matrix in MARS, in the order (px, py, pz, x, y, z).
+- `GetCovQ()` gives the matrix for 1/p instead of q/p. It divides element 0 by q² and elements 1 to 4 by q
+  ([FairTrackParP.cxx](/source/fairroot/trackbase/FairTrackParP.cxx/#L928-L943)). `FairGeanePro` gives this form to
+  Geane.
+
+### Conversions with FairGeaneUtil
+
+[`FairGeaneUtil`](/api/FairGeaneUtil/) converts three momentum variables and the error matrix. The momentum
+variables are (px, py, pz), (q/p, λ, φ) or (q/p, v′, w′). The track parameter classes call these functions in their
+constructors, and you can call them yourself.
+
+| Functions | Conversion |
+| --- | --- |
+| `FromMarsToSC()`, `FromSCToMars()` | MARS and SC |
+| `FromMarsToSD()`, `FromSDToMars()` | MARS and SD |
+| `FromSCToSD()`, `FromSDToSC()` | SC and SD |
+| `FromSD1ToSD2()` | SD of one plane to SD of a second plane |
+| `FromPtToSC()`, `FromSCToPt()`, `FromPtToSD()`, `FromSDToPt()` | q/pT and q/p as the first variable |
+| `FromMARSToSDCoord()`, `FromSDToMARSCoord()` | A point (x, y, z) and its plane coordinates (u, v, w) |
+| `FromVec15ToMat25()`, `FromMat25ToVec15()` | The 15 values and the symmetric 5×5 matrix |
+
+The SC to SD conversions need the charge and the field. The SC matrix is for a fixed path length, and the SD matrix
+is for a fixed u. This gives correlation terms that depend on the field. `IERR = 1` tells that the track moves in
+the plane, where v′ and w′ are not defined.
+
+### FairTrackParam
+
+[`FairTrackParam`](/api/FairTrackParam/) in `FairRoot::Base` is a separate class. It holds (x, y, tx, ty, q/p) at
+a z position, with 15 covariance values ([FairTrackParam.h](/source/fairroot/base/event/FairTrackParam.h/#L16-L22)).
+`Momentum()` gives p = 1/abs(q/p) and a positive pz
+([FairTrackParam.cxx](/source/fairroot/base/event/FairTrackParam.cxx/#L82-L89)). The straight-line fitter of
+[Tutorial 4](/examples/tutorial4/) uses it. The propagators do not accept it.
+
+## The propagator interface
+
+[`FairPropagator`](/api/FairPropagator/) declares the functions of all propagators
+([FairPropagator.h](/source/fairroot/trackbase/FairPropagator.h/#L55-L174)). Set the destination first, then call
+`Propagate()`.
+
+| Function | Purpose |
+| --- | --- |
+| `SetDestinationPlane(v0, v1, v2)` | Stop on the plane through the point v0, with the vectors v1 and v2 in the plane |
+| `SetOriginPlane(v0, v1)` | Give the two vectors of the plane of the start parameters |
+| `SetDestinationVolume(volName, copyNo, option)` | Stop at a volume of the geometry |
+| `SetDestinationLength(length)` | Stop after a track length |
+| `SetPropagateOnlyParameters()` | Do not propagate the errors |
+| `Propagate(start, end, pdg)` | Four overloads, with `FairTrackParH*` or `FairTrackParP*` for `start` and `end` |
+| `Propagate(x1, p1, x2, p2, pdg)` | Position and momentum as `float` arrays |
+| `SetPCAPropagation(pca, dir, par)` | Prepare a PCA search: `pca` 1 for a point or 2 for a wire, `dir` +1 or −1, `par` the start |
+| `FindPCA(pca, pdg, point, wire1, wire2, maxDistance)` | Find the PCA and give a `PCAOutputStruct` |
+
+The default implementations return `false`. `SetPCAPropagation()` returns `true`, and `FindPCA()` gives a status
+of 1. Thus a `false` result can also mean that the propagator does not support the call.
+
+The PDG code gives the particle. The Runge-Kutta propagator takes only the charge from `TDatabasePDG`. Geane
+converts the code to a Geant3 particle code. The result of a PCA search is this structure:
+
+<Snippet file="fairroot/trackbase/FairPropagator.h" start="struct PCAOutputStruct" title="FairPropagator.h" />
+
+## The two propagators
+
+| | `FairRKPropagator` | `FairGeanePro` |
+| --- | --- | --- |
+| Library | `FairRoot::TrackBase`, always built | `FairRoot::Geane`, only with Geant3 |
+| Setup | `new FairRKPropagator(field)` | The task `FairGeane`, then `new FairGeanePro()` after `FairRunAna::Init()` |
+| What it uses | The magnetic field | The field and the materials of the geometry |
+| Energy loss | No: the momentum stays constant | Yes, with the processes of `Geane.C` |
+| Errors | No: the errors of the result are 0 | Propagates the covariance matrix and gives the transport matrix |
+| Destinations | A plane, the PCA to a point or a wire | A plane, a volume, a track length, the PCA |
+
+## The Runge-Kutta propagator
+
+[`FairRKPropagator`](/api/FairRKPropagator/) gets the field in its constructor. Without a field, it logs a warning,
+and the tracks are straight lines ([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L27-L42)).
+
+<Steps>
+
+1. Create the propagator with a field. The propagator example uses the same `FairConstField` as its simulation.
+2. Set the plane with [`SetDestinationPlane()`](/api/FairRKPropagator/#SetDestinationPlane). Without this call, the
+   track parameter overloads of `Propagate()` log a warning and return `false`.
+3. Call [`Propagate(start, end, pdg)`](/api/FairRKPropagator/#Propagate-4) for each track.
+
+</Steps>
+
+<Snippet file="fairroot/trackbase/FairRKPropagator.cxx" start="bool FairRKPropagator::Propagate(FairTrackParP* TStart, FairTrackParP* TEnd, int PDG)" title="FairRKPropagator.cxx" />
+
+The result has only the MARS position, the momentum and q/p. The charge comes from the PDG code, not from the
+start parameters. The MARS errors of the result are 0. The SD variables, the plane and the covariance matrix of
+`end` do not change.
+
+[`PropagateToPlane()`](/api/FairRKPropagator/#PropagateToPlane) does the work. It calculates the distance to the
+plane along the normal and uses it as the step length. [`OneStepRungeKutta()`](/api/FairRKPropagator/#OneStepRungeKutta)
+makes one step with the Nyström algorithm. The loop stops when the distance is less than 0.1 % of the start
+distance, when the distance grows, or after about 1000 steps
+([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L356-L439)).
+
+- The end point is near the plane, not on it.
+- The steps go only along the momentum. For a plane behind the track, the result is wrong, and `Propagate()` still
+  returns `true`.
+- `PropagateToPlane()` writes the last state into its input array `vecRKIn`.
+- The `float` overload of `Propagate()` does not check that a plane is set. Without a plane, the result is NaN.
+
+:::caution[Planes that are not z = const]
+`PropagateToPlane()` has an error in the x component of the plane normal
+([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L377-L379)). The second product uses
+`vec2[2]` instead of `vec1[2]`. The distance after each step is also not the distance to a tilted plane
+([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L411-L414)). Planes z = const with two
+vectors in the x-y plane, as in the examples, are correct. The plane x = const with v1 = (0, 0, 1) and
+v2 = (0, 1, 0) gives a zero normal and NaN.
+:::
+
+For a PCA search, call [`SetPCAPropagation(pca, dir, par)`](/api/FairRKPropagator/#SetPCAPropagation) first. It
+keeps the start parameters `par`, and `dir` must be +1 or −1. Then [`FindPCA()`](/api/FairRKPropagator/#FindPCA)
+steps from `par` ([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L232-L328)):
+
+- It accepts only `pca` 1 (a point) and 2 (a wire). The wire is the segment from `wire1` to `wire2`.
+- The step length is 1/25 of the start distance. The search stops when the distance is less than 1 % of the start
+  distance or when it grows.
+- If the start distance is less than about 1 cm, the search stops after the first step. Then `OnTrackPCA` is
+  (0, 0, 0), and `PCAStatusFlag` is 0 ([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L271-L313)).
+- It fills `OnTrackPCA`, `Distance`, `TrackLength` and, for a wire, `OnWirePCA`. It does not use `MaxDistance`.
+- It does not check `par`. Call `SetPCAPropagation()` with start parameters before `FindPCA()`.
+
+## Geane
+
+Geane needs Geant3 as the current `TVirtualMC`. In a reconstruction run, the task `FairGeane` creates it.
+
+### Set up Geane
+
+The propagator example shows the order of the calls:
+
+<Snippet file="examples/advanced/propagator/macros/runProp.C" start="Set propagator and run" end="fRun->Run();" title="runProp.C" />
+
+Nothing defines the symbol `Geant3_FOUND` for the macro, so the example skips the Geane lines. See
+[Propagator](/examples/propagator/).
+
+<Steps>
+
+1. Give the field to the run with `FairRunAna::SetField()`. `FairGeane::Init()` takes this field and does not
+   check it for null ([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L128-L130)).
+2. Add a `FairGeane` task before `FairRunAna::Init()`. The constructor without a file uses the geometry that
+   `FairRunAna::Init()` loads before it initializes the tasks.
+3. Create `FairGeanePro` after `FairRunAna::Init()`. Its constructor casts the current VMC to `TGeant3` without a
+   type check. Without a VMC, it logs a fatal error ([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L31-L59)).
+4. Set the destination and call `Propagate()` in `Exec()` of your task.
+
+</Steps>
+
+Tasks initialize in the order of the task list. If your task creates `FairGeanePro` in its `Init()`, add it after
+the `FairGeane` task. The constructor `FairGeane(file)` imports the geometry from a file into a new `TGeoManager`.
+It also turns on the debug printout of `FairGeaneApplication::GeaneStepping()`
+([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L33-L44)). A string literal as the first argument always
+selects this constructor ([FairGeane.h](/source/fairroot/geane/FairGeane.h/#L29-L31)). To give only `UserConfig`,
+pass a `TString`.
+
+`FairGeane::Init()` loads two macros and calls their functions
+([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L59-L136)):
+
+<Snippet file="fairroot/geane/FairGeane.cxx" start="gROOT->LoadMacro(LibMacro.Data());" end="fApp->InitMC(" title="FairGeane.cxx" />
+
+- It finds `g3libs.C` in `$CONFIG_DIR`, else in `$VMCWORKDIR/gconfig/`.
+- It uses `Geane.C`, or the name that you give as `UserConfig`. A name with `/` is a path. For a name without `/`,
+  it looks in `$CONFIG_DIR`, then in `$VMCWORKDIR/gconfig/`.
+- `Config()` creates `TGeant3TGeo`. `InitMC()` calls `Init()`, `BuildPhysics()` and `SetMagField()` of the VMC
+  ([FairGeaneApplication.cxx](/source/fairroot/base/sim/FairGeaneApplication.cxx/#L45-L54)).
+
+:::note
+The argument `UserCuts` has no effect. `Init()` finds a cuts file, but the lines that load it are comments
+([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L113-L126)). Set the cuts in the configuration macro.
+`FairGeane::SetField()` has no effect either. Use `FairRunAna::SetField()`.
+:::
+
+[`Geane.C`](/source/examples/common/gconfig/Geane.C/) creates `TGeant3TGeo` and a `FairStack`. It turns off most
+processes. It keeps bremsstrahlung (`SetBREM(1)`), energy loss (`SetLOSS(4)`) and multiple scattering
+(`SetMULS(1)`, Molière). The cuts for delta rays and bremsstrahlung are 10 TeV:
+
+<Snippet file="examples/common/gconfig/Geane.C" start="PAY ATTENTION" end="Float_t cutb = cutd;" title="examples/common/gconfig/Geane.C" />
+
+### Destinations and options
+
+Each setter sets an option string for the Geant3 call `Ertrak()` and the frame of the errors:
+
+| Setter | Option | Errors in | Use with |
+| --- | --- | --- | --- |
+| [`SetDestinationPlane(v0, v1, v2)`](/api/FairGeanePro/#SetDestinationPlane) | `PE` | SD | `Propagate(FairTrackParP*, FairTrackParP*, pdg)` |
+| [`SetDestinationVolume(name, copyNo, option)`](/api/FairGeanePro/#SetDestinationVolume) | `VE` | SC | `Propagate(FairTrackParH*, FairTrackParH*, pdg)` |
+| [`SetDestinationLength(length)`](/api/FairGeanePro/#SetDestinationLength) | `LE`, or `BLE` for a negative length | SC | `Propagate(FairTrackParH*, FairTrackParH*, pdg)` |
+| [`SetPCAPropagation(pca, dir, par)`](/api/FairGeanePro/#SetPCAPropagation) | `LE`, or `BLE` for a negative `dir` | SC | `FindPCA()` |
+| [`SetPropagateOnlyParameters()`](/api/FairGeanePro/#SetPropagateOnlyParameters) | Replaces `E` with `O` | No change | All |
+| [`setBackProp()`](/api/FairGeanePro/#setBackProp) | `BPE` | No change | Backward to a plane |
+
+The code uses these letters: `P` plane, `V` volume, `L` length, `B` backward, `E` with errors, `O` only parameters
+([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L451-L519)). For a volume, `option` 1 sets the flag
+`VEnter` of `FairGeanePro`. Each destination setter replaces the whole option string. Thus call `setBackProp()`
+after `SetDestinationPlane()`, and call `SetPropagateOnlyParameters()` last.
+
+[`SetOriginPlane(v1, v2)`](/api/FairGeanePro/#SetOriginPlane) sets the start plane of a plane-to-plane propagation.
+`Propagate()` uses this plane, not the plane of the start parameters. The default is the x-y plane
+([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L100-L105)).
+
+### What each overload supports
+
+| Overload | `FairRKPropagator` | `FairGeanePro` |
+| --- | --- | --- |
+| `Propagate(FairTrackParH*, FairTrackParH*, pdg)` | Plane | Volume, length, PCA. A plane gives a warning and `false`. |
+| `Propagate(FairTrackParP*, FairTrackParP*, pdg)` | Plane | Plane. A volume, a length or a PCA gives a warning and `false`. |
+| `Propagate(FairTrackParP*, FairTrackParH*, pdg)` | Plane | Not implemented: a warning and `false` |
+| `Propagate(FairTrackParH*, FairTrackParP*, pdg)` | Plane | Not implemented: a warning and `false` |
+| `Propagate(float*, float*, float*, float*, pdg)` | Plane | Always a track length of 1000 with option `L`. It ignores the destination and overwrites the length of `SetDestinationLength()`. |
+
+### Errors, track length and transport matrix
+
+- `FairGeanePro` takes the start matrix with `GetCovQ()`. After the propagation, it multiplies the result again
+  with the charge.
+- The helix overload writes MARS values and the SC matrix with `SetTrackPar()`. The plane overload also writes the
+  destination plane ([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L343-L365)).
+- `Propagate()` returns `false` when Geant3 gives no end point, when the track leaves the geometry, or when the end
+  momentum is 0 ([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L390-L417)).
+- [`GetTransportMatrix(trm)`](/api/FairGeanePro/#GetTransportMatrix) gives the 5×5 transport matrix of the last
+  propagation.
+- `Propagate()` also keeps the track length and the time. Only the deprecated `GetLengthAtPCA()` and
+  `GetTimeAtPCA()` give them.
+
+### Closest approach with Geane
+
+<Steps>
+
+1. Call [`SetPCAPropagation(pca, dir, par)`](/api/FairGeanePro/#SetPCAPropagation) with the start parameters
+   `par`.
+2. Call [`FindPCA(pca, pdg, point, wire1, wire2, maxDistance)`](/api/FairGeanePro/#FindPCA-2). The comment in the
+   code gives twice the distance from the start to the point or the wire as `maxDistance`.
+3. Check that `PCAStatusFlag` is 0.
+
+</Steps>
+
+Geant3 tracks the particle up to `maxDistance` and keeps the last three points near the PCA. `FindPCA()` then fits a
+circle through three points or a line through two points
+([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L673-L979)). `TrackLength` adds the length on the fit
+to the length from Geant3. For some failures, `FindPCA()` logs a warning. `SetPrintErrors(false)` stops these
+warnings.
+
+:::caution[PCA mode in Propagate()]
+After `SetPCAPropagation()` with `pca` 1 or 2, the helix overload of `Propagate()` searches the PCA first. It takes
+the point and the wire from members that only the deprecated `SetPoint()` and `SetWire()` set. Without these calls,
+the point and the wire are at (0, 0, 0) ([FairGeanePro.cxx](/source/fairroot/geane/FairGeanePro.cxx/#L159-L199)).
+The PCA mode stays on until you call `SetPCAPropagation()` with `pca` 0.
+:::
+
+### Deprecated functions
+
+`FairGeanePro.h` marks the old interface as deprecated before v18.8, for removal in v20
+([FairGeanePro.h](/source/fairroot/geane/FairGeanePro.h/#L70-L194)). Examples are `PropagateToPlane()`,
+`PropagateToPCA()`, `SetPoint()` and `SetWire()`. [Track propagation with Geane](/reference/deprecations/#track-propagation-with-geane) lists them with
+their replacements. `FairGeaneApplication::Instance()` is deprecated in v18.8 as well.
+
+## Related pages
+
+- [Propagator](/examples/propagator/): the Runge-Kutta propagator in an example, with a comparison to
+  the MC truth. The Geane lines of the macro do not run.
+- [Magnetic fields](/simulation/fields/): the field classes that the propagators read.
+- [Transport engines and their configuration](/simulation/engines/): Geant3 and the VMC.
+- [Configuration files](/reference/config-files/): `Geane.C` and `g3libs.C`.
+- [Event display](/reconstruction/event-display/): tracks that the Runge-Kutta propagator draws.
+- [Libraries and headers](/reference/libraries/): the targets `FairRoot::TrackBase` and `FairRoot::Geane`.
+- [Deprecated APIs](/reference/deprecations/): the old functions and their replacements.

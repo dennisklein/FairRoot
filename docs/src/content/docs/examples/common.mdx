@@ -1,0 +1,182 @@
+---
+title: 'Common parts of the examples'
+description: 'The code and data that the examples share: passive modules, constant field, stack and MC track, engine configuration, geometry files, MC tracks in the event display and UrQMD input.'
+sidebar:
+  order: 16
+code:
+  [
+    examples/common/passive/FairCave.cxx,
+    examples/common/passive/FairConstField.cxx,
+    examples/common/mcstack/FairStack.cxx,
+    examples/common/mcstack/FairMCTrack.cxx,
+    examples/common/mcstack/FairDetectorList.h,
+    examples/common/gconfig/FairVMCConfig.cxx,
+    examples/common/eventdisplay/FairEveMCTracks.cxx,
+    examples/common/eventdisplay/FairMCTracksDraw.cxx,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+The folder [`examples/common/`](/repo/examples/common/) holds the code and the data that several
+examples use. The libraries of the examples link `ExPassive` and `ExMCStack`, and the macros find
+the files of `common/` through `VMCWORKDIR`. Read this page to know where a class or a file of an
+example comes from.
+
+## Contents
+
+<FileTree>
+- examples/common/
+  - passive/ library `ExPassive`: passive modules and constant field
+  - mcstack/ library `ExMCStack`: stack, MC track and detector IDs
+  - gconfig/ engine configuration, library `ExGConfig`
+  - geometry/ media file and geometry files
+  - eventdisplay/ library `ExEventDisplay`: MC tracks in the event display
+  - input/ UrQMD events and particle table
+</FileTree>
+
+## Libraries and build conditions
+
+CMake builds the folders of `common/` with the examples (option `BUILD_EXAMPLES`, default `ON`).
+Two libraries need more packages:
+
+<Snippet file="examples/CMakeLists.txt" start="add_subdirectory(common/passive)" end="^endif" title="examples/CMakeLists.txt" />
+
+| Library | Built when | Classes |
+| --- | --- | --- |
+| `ExPassive` | Always | `FairCave`, `FairMagnet`, `FairTarget`, `FairPipe` and their `FairGeo...` readers, `FairGeoPassivePar`, `FairPassiveContFact`, `FairConstField`, `FairConstFieldCreator`, `FairConstPar`, `FairMapPar` |
+| `ExMCStack` | Always | `FairStack`, `FairMCTrack`, the enum `DetectorId` in `FairDetectorList.h` |
+| `ExGConfig` | CMake found Geant3, and the target `MCConfigurator` exists | `FairVMCConfig` |
+| `ExEventDisplay` | CMake found Geant3, and the target `FairRoot::EventDisplay` exists | `FairMCTracksDraw`, `FairEveMCTracks`, `FairEveMCTracksEditor` |
+
+FairRoot installs these libraries and their headers. They are not in the CMake package of FairRoot
+([passive/CMakeLists.txt](/repo/examples/common/passive/CMakeLists.txt#L57-L58)), so a project
+that calls `find_package(FairRoot)` gets no target `FairRoot::ExPassive`.
+
+## Passive modules and the constant field
+
+A passive module has volumes but no sensitive volumes. The library `ExPassive` has four of them:
+
+| Module | Geometry input | Used by |
+| --- | --- | --- |
+| `FairCave` | `cave.geo` or `cave_vacuum.geo` | All simulation examples |
+| `FairMagnet` | `magnet.geo`, or a ROOT file | Tutorial 3 |
+| `FairTarget` | `target_rutherford.geo` | Rutherford experiment |
+| `FairPipe` | None: it builds the volumes in code | No example |
+
+`FairCave` reads the cave file and stores its volumes in the parameter container
+`FairGeoPassivePar` ([FairCave.cxx](/source/examples/common/passive/FairCave.cxx/#L24-L51)). The
+container factory `FairPassiveContFact` makes this container and `FairConstPar`. `FairPipe` needs the
+media `steel` and `Al+Be`, which `media.geo` of the examples does not have. For the details, see
+[Geometry and materials](/simulation/geometry/).
+
+`FairConstField` is a homogeneous magnetic field in a box, in kG, with the box limits in cm. Outside
+the box the field is 0. `FairConstFieldCreator` makes this field from `FairConstPar` in a
+reconstruction run. Tutorial 3 and the propagator example use the field. For the details, see
+[Magnetic fields](/simulation/fields/).
+
+## Stack and MC tracks
+
+`FairStack` is the stack of all examples. It derives from `FairGenericStack`, keeps the particles of
+the transport engine, and writes the selected ones as `FairMCTrack` objects to the branch `MCTrack`.
+`g4Config.C` makes it with `FairStack(1000)`, `g3Config.C` with `FairStack()`. Both macros call
+`StoreSecondaries(kTRUE)` and `SetMinPoints(0)`.
+
+`FairDetectorList.h` defines the detector IDs that `FairStack` and `FairMCTrack` use:
+
+<Snippet file="examples/common/mcstack/FairDetectorList.h" start="// kSTOPHERE is needed" title="examples/common/mcstack/FairDetectorList.h" />
+
+`FairStack` loops over the IDs before `kSTOPHERE` only. `FairMCTrack` keeps the number of MC points
+for `kREF`, `kTutDet` and `kFairRutherford` only. The propagator and the pixel detector use
+`kTutProp` and `kPixel`, which come after `kSTOPHERE`. For the selection rules and the bit layout, see
+[The particle stack and MC tracks](/simulation/stack/).
+
+## Engine configuration
+
+The folder `gconfig/` has the configuration of the transport engines for all examples. It has the
+macros `g3Config.C`, `g4Config.C` and `SetCuts.C`, the YAML files, the Geant4 command files and the
+decay macros. The simulation macros set `CONFIG_DIR` to this folder, for example Tutorial 1:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string tut_configdir = dir + "/common/gconfig";' end='gSystem->Setenv("CONFIG_DIR"' title="run_tutorial1.C" />
+
+Tutorial 4 is an exception: it has its own folder `simulation/Tutorial4/gconfig/`. The library
+`ExGConfig` has the class `FairVMCConfig` for the YAML configuration. No example macro uses it. For the
+use of these files, see [Transport engines and their configuration](/simulation/engines/). For each
+file and its format, see [Configuration files](/reference/config-files/).
+
+## Geometry files
+
+The simulation macros set `GEOMPATH` to `$VMCWORKDIR/common/geometry`. All simulation examples read
+the media file `media.geo` with `SetMaterials()`.
+
+| File | Content | Used by |
+| --- | --- | --- |
+| `media.geo` | The media `vacuum`, `carbon`, `gold`, `lead`, `silicon`, `aluminium`, `magAl`, `beryllium`, `iron` and `air` | All simulation examples |
+| `cave_vacuum.geo` | The cave: a box with sides of 40 m, filled with `vacuum` | Tutorials 1, 2 and 4, Rutherford experiment, propagator, MQ pixel examples |
+| `cave.geo` | The same box, filled with `air` | Tutorial 3 |
+| `double_sector.geo` | The detector `FairTutorialDet1` or `FairTutorialDet2` | Tutorials 1 and 2 |
+| `tutorial4.root` | The detector `FairTutorialDet4`, as a ROOT geometry | Tutorial 4 |
+| `rutherford.geo`, `target_rutherford.geo` | The detector `FairRutherford` and a gold target for `FairTarget` | Rutherford experiment |
+| `magnet.geo`, `torino.geo` | Iron boxes for `FairMagnet`, and the detector `FairTestDetector` | Tutorial 3 |
+| `tutProp.geo`, `tutProp2.geo` | The two detectors `FairTutPropDet` | Propagator |
+| `pixel.geo` | The pixel detector | MQ pixel examples |
+
+The format of the `.geo` files is in [Geometry and media file format](/reference/geo-format/).
+
+## MC tracks in the event display
+
+The library `ExEventDisplay` draws the MC tracks of the branch `MCTrack`. Add the task
+`FairMCTracksDraw` to the event manager, as Tutorial 1 does:
+
+<Snippet file="examples/simulation/Tutorial1/macros/eventDisplay.C" start="FairEventManager *fMan = new FairEventManager();" end="fMan->Init();" title="examples/simulation/Tutorial1/macros/eventDisplay.C" />
+
+`FairMCTracksDraw::Init()` makes a `FairEveMCTracks` object. A `FairMCTrack` has only the start
+point and the start momentum. Thus `FairEveMCTracks` propagates each track in the field of the run,
+with `FairRKPropagator`. It gives the track a point on each of 100 planes, from z = 0 cm to z = 990 cm
+([FairEveMCTracks.cxx](/source/examples/common/eventdisplay/FairEveMCTracks.cxx/#L120-L131)). The
+color comes from the PDG code, see [Configuration files](/reference/config-files/).
+
+The editor `FairEveMCTracksEditor` shows cuts on the transverse momentum, the pseudorapidity, the
+energy and the PDG code, and switches for primary and secondary tracks
+([FairEveMCTracksEditor.cxx](/source/examples/common/eventdisplay/FairEveMCTracksEditor.cxx/#L35-L52)).
+
+## Input files
+
+| File | Content | Used by |
+| --- | --- | --- |
+| `urqmd.ftn14` | 5 Au+Au events from UrQMD, in the output format 14 of UrQMD | `run_tutorial1_urqmd.C` |
+| `urqmd_pdg.dat` | The table from UrQMD particle codes to PDG codes | `FairUrqmdGenerator` in `run_tutorial1_urqmd.C` |
+
+The default path of the table in `FairUrqmdGenerator` is `$VMCWORKDIR/input/urqmd_pdg.dat`. This
+path does not match the examples, so Tutorial 1 gives the path to the constructor. For the format
+of the table, see [Configuration files](/reference/config-files/).
+
+FairRoot installs `gconfig/` and `geometry/` to `<prefix>/share/fairbase/examples/common`, but not
+`input/` ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L58-L62)).
+
+## Use the common parts in your project
+
+Do not build a project on `examples/common/`. Start from a project template instead, see
+[Start a project from a template](/start/new-project/). A template has its own cave, magnet, pipe,
+stack, MC track and `gconfig/` folder. Copy single files from `examples/common/` if you need them,
+and keep these points in mind:
+
+- Add the IDs of your detectors to `DetectorId` before `kSTOPHERE`, and give each of them bits in
+  `FairMCTrack`.
+- `g4Config.C` and `g4ConfigPostInit.C` read their Geant4 command files from
+  `$VMCWORKDIR/common/gconfig/`. Change this path in your copy.
+- Change `TVirtual::GetMC()` to `TVirtualMC::GetMC()` in `UserDecay.C` and `flConfig.C` before you
+  use them, see [Configuration files](/reference/config-files/).
+- Set `GEOMPATH` and `CONFIG_DIR` to your own folders, see
+  [Environment variables](/reference/environment/).
+
+## Related pages
+
+- [Examples](/examples/overview/): all examples and how to run them.
+- [The particle stack and MC tracks](/simulation/stack/): `FairStack`, `FairMCTrack` and the
+  detector IDs.
+- [Transport engines and their configuration](/simulation/engines/): the use of `gconfig/`.
+- [Magnetic fields](/simulation/fields/): `FairConstField` and its parameter container.
+- [Geometry and materials](/simulation/geometry/): the passive modules and the media file.
+- [Templates](/tools/templates/): the project templates with their own copies of these parts.

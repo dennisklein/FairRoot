@@ -1,0 +1,190 @@
+---
+title: 'MQ: parameter server'
+description: 'A client device asks parmq-server for the parameter container FairMQExParamsParOne for the run IDs 2000 to 2099. The container, its factory, the macros, the scripts and the test.'
+sidebar:
+  order: 13
+code: [examples/MQ/parameters/FairMQExParamsClient.h, examples/MQ/parameters/FairMQExParamsClient.cxx,
+  examples/MQ/parameters/runExParamsClient.cxx, examples/MQ/parameters/FairMQExParamsParOne.h,
+  examples/MQ/parameters/FairMQExParamsParOne.cxx, examples/MQ/parameters/FairMQExParamsContFact.cxx,
+  examples/MQ/parameters/fill_parameters.C, examples/MQ/parameters/read_parameters.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps, FileTree } from '@astrojs/starlight/components';
+
+This example shows a FairMQ device that gets a parameter container from the parameter server
+`parmq-server`. The client sends the name of the container and a run ID. The server reads the
+container for this run ID from a ROOT parameter file and sends it back.
+[Parameters over FairMQ](/online/parameters/) explains the server and its options.
+
+## Files
+
+<FileTree>
+
+- examples/MQ/parameters/
+  - FairMQExParamsParOne.h the parameter container (also `.cxx`)
+  - FairMQExParamsContFact.h the container factory (also `.cxx`)
+  - FairMQExParamsClient.h the client device (also `.cxx`)
+  - runExParamsClient.cxx main function of `ex-params-client`
+  - FairMQExParamsLinkDef.h classes of the ROOT dictionary
+  - fill_parameters.C makes a parameter file
+  - read_parameters.C reads the parameter file
+  - mq_ex_params.root parameter file for the run IDs 2000 to 2099
+  - start-mq-ex-params.sh.in starts the devices in two `xterm` windows
+  - test-mq-ex-params.sh.in the test script
+  - README.md
+
+</FileTree>
+
+CMake builds the library `ExParameters` from the three classes and the executable
+`ex-params-client` ([CMakeLists.txt](/repo/examples/MQ/parameters/CMakeLists.txt)). The server
+`parmq-server` comes from `fairroot/parmq` and is in `<build>/bin/`. CMake copies
+`mq_ex_params.root` into the build folder of the example.
+
+## The parameter container
+
+`FairMQExParamsParOne` is a [`FairParGenericSet`](/api/FairParGenericSet/) with one integer value:
+
+<Snippet file="examples/MQ/parameters/FairMQExParamsParOne.h" start="class FairMQExParamsParOne : public FairParGenericSet" />
+
+- `putParams()` writes the value with the key `Example7ParameterValue`, and `getParams()` reads it
+  ([FairMQExParamsParOne.cxx](/source/examples/MQ/parameters/FairMQExParamsParOne.cxx/#L28-L52)).
+- `print()` calls `FairParGenericSet::print()` and then logs `fParameterValue: ` with the value.
+- `fParameterValue` has no `//!` comment, thus it is persistent. The ROOT file and the message of
+  the server contain it.
+
+## The container factory
+
+The library makes a static object of its container factory. The constructor of
+[`FairContFact`](/api/FairContFact/) registers the factory with the runtime database
+([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)):
+
+<Snippet file="examples/MQ/parameters/FairMQExParamsContFact.cxx" start="static FairMQExParamsContFact" end="^}$" />
+
+The factory knows one container, `FairMQExParamsParOne`, with the default context
+`TestDefaultContext`. `createContainer()` makes a new `FairMQExParamsParOne` with the name, the
+title and the context of this `FairContainer`. A process that loads the library `ExParameters` can
+thus get the container with [`FairRuntimeDb::getContainer()`](/api/FairRuntimeDb/#getContainer).
+
+`parmq-server` does not link `ExParameters`
+([fairroot/parmq/CMakeLists.txt](/repo/fairroot/parmq/CMakeLists.txt#L43-L44)). In `InitTask()`, it
+opens `mq_ex_params.root`, and ROOT reads the class descriptions in the file
+([ParameterMQServer.cxx](/source/fairroot/parmq/ParameterMQServer.cxx/#L77-L87)). For a class
+without a dictionary in the process, ROOT loads the library that a rootmap file names. ROOT looks
+for the rootmap files in the folders of `LD_LIBRARY_PATH` (ROOT behavior). Thus the server loads
+`ExParameters` when it runs in the environment of `config.sh`, and the factory registers itself.
+Without the factory, the server sends an empty reply, see
+[Request a container](/online/parameters/#request-a-container).
+
+## The client device
+
+`ex-params-client` runs the device `FairMQExParamsClient`. Its main function uses
+`FairRunFairMQDevice.h`, see [Write the main function](/online/fairmq-devices/#write-the-main-function).
+It adds two options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--parameter-name` | `FairMQExParamsParOne` | The name of the requested container. |
+| `--max-iterations` | `0` | The number of requests before the device leaves `RUNNING`. `0` means no limit. |
+
+`InitTask()` reads the options and sets the run ID to 2000. Each call of `ConditionalRun()` sends
+one request:
+
+<Snippet file="examples/MQ/parameters/FairMQExParamsClient.cxx" start="bool FairMQExParamsClient::ConditionalRun()" mark='"data"' />
+
+- The name of the channel is `data` in the code. The channel must have the type `req`.
+- The request is the string `<name>,<run ID>`, for example `FairMQExParamsParOne,2000`.
+- After each request, the run ID goes up by one. After 2099, it goes back to 2000.
+- The device waits one second between two requests.
+
+## The parameter file
+
+The file `mq_ex_params.root` in the repository has a version of `FairMQExParamsParOne` for each run
+ID from 2000 to 2099. The scripts give the copy in the build folder to the server with
+`--first-input-name`. The macro `fill_parameters.C` makes a file like it:
+
+<Snippet file="examples/MQ/parameters/fill_parameters.C" title="fill_parameters.C" />
+
+- `FairParRootFileIo(kTRUE)` opens a file that exists with the option `UPDATE`, and makes a new file
+  otherwise ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L114-L136)).
+- For each run ID, the macro adds a run, sets the value `1983 + i` and marks the container as
+  changed. Then [`writeContainers()`](/api/FairRuntimeDb/#writeContainers) writes a new version of
+  the container.
+- [`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes the versions of the runs into the file.
+  The runtime database needs them to find the version of a container for a run ID.
+
+`read_parameters.C` opens the same file as the first input. It fills the container for each run ID
+and prints it:
+
+<Snippet file="examples/MQ/parameters/read_parameters.C" title="read_parameters.C" />
+
+No test runs the two macros. To make your own file, run them in an empty folder. In a folder that
+has `mq_ex_params.root` already, `fill_parameters.C` adds new versions to the file.
+
+```sh
+source <build>/config.sh
+cd <empty folder>
+root -l -b -q $VMCWORKDIR/MQ/parameters/fill_parameters.C
+root -l -b -q $VMCWORKDIR/MQ/parameters/read_parameters.C
+```
+
+The macros have no `#include` lines. ROOT finds the classes, for example `FairMQExParamsParOne`,
+through the rootmap files that CMake makes for the libraries
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake)).
+`config.sh` adds `<build>/lib`, the folder of the libraries and the rootmap files, to `LD_LIBRARY_PATH`.
+
+## Run the example
+
+The script `start-mq-ex-params.sh` starts the client and the server, each in an `xterm` window:
+
+<Snippet file="examples/MQ/parameters/start-mq-ex-params.sh.in" lang="sh" title="start-mq-ex-params.sh.in" />
+
+<Steps>
+
+1. Set the environment:
+
+   ```sh
+   source <build>/config.sh
+   ```
+
+2. Start the script that CMake made from the template:
+
+   ```sh
+   <build>/examples/MQ/parameters/start-mq-ex-params.sh
+   ```
+
+3. Look at the window of the client. Each second, it logs `Received parameter from the server:`
+   and the container for the next run ID.
+
+4. Stop each device with Ctrl+C in its window. The option `-hold` keeps the windows open, so close
+   them after the devices stop.
+
+</Steps>
+
+The server binds the port 5005 on all network interfaces. The client connects to
+`tcp://localhost:5005`.
+
+## The test
+
+CTest runs `test-mq-ex-params.sh` as the test `ex_MQ_parameters`. The test passes when the output
+contains `Received parameter from the server:`. Its time limit is 30 seconds, and CTest runs no
+other test at the same time (`RUN_SERIAL`):
+
+<Snippet file="examples/MQ/parameters/test-mq-ex-params.sh.in" start='CLIENT="ex-params-client"' end="kill -SIGINT $PARAMETERSERVER_PID" lang="sh" />
+
+- With `--control static`, each device goes to `RUNNING` without a controller.
+- With `--max-iterations 1`, the client sends one request and then leaves `RUNNING`.
+- The script waits for the end of the client. Then it stops the server with `SIGINT`.
+
+```sh
+cd <build>
+ctest -R ex_MQ_parameters --output-on-failure
+```
+
+## Related pages
+
+- [Parameters over FairMQ](/online/parameters/): the server, its options and the request format.
+- [Parameters and the runtime database](/concepts/parameters/): containers, factories and versions.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the main function of a device.
+- [MQ: pixel detector](/examples/mq-pixel-detector/): task processors that ask the server for
+  their containers.

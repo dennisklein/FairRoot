@@ -1,0 +1,790 @@
+---
+// The runtime database and one parameter container, step by step: FairTutorialDet2DigiPar of
+// Tutorial2, as the macro create_digis.C uses it. Two drawings of the same stage: a wide one, and a
+// tall one for narrow columns (container query on .rdb-box). The step classes go on the outer SVG.
+//
+// Facts (paths relative to the FairRoot repository):
+// - examples/simulation/Tutorial2/macros/create_digis.C:59-68: io1 is a FairParRootFileIo (ROOT file,
+//   opened "UPDATE"), parInput2 a FairParAsciiFileIo on parameters/tutdet.digi.par ("in");
+//   setFirstInput(io1), setSecondInput(parInput2). :90-91: setOutput(io1), then saveOutput(). The output
+//   is the same object as the first input. :81, :94: the order is fRun->Init(), saveOutput(), fRun->Run().
+// - fairroot/parbase/FairRuntimeDb.h:33-37: containerList, firstInput ("first (prefered) input"),
+//   secondInput ("used if not found in first input"), output. FairRuntimeDb.cxx:68: static contFactories.
+// - Tutorial2/src/FairTutorialDet2Digitizer.cxx:23 fDigiPar(nullptr); :39-51 SetParContainers() calls
+//   rtdb->getContainer("FairTutorialDet2DigiPar"), comment "parameters are not filled yet"; :53-63 ReInit()
+//   gets the container again; :94-95 Init() only has the comment "now parameters are filled" (no read).
+// - FairRuntimeDb.cxx:199-218 getContainer(): asks the factories in contFactories one after the other
+//   until one returns a container. FairContFact.cxx:182-209 getContainer(): nullptr if the name is not in
+//   its list; the existing container if containerList has it; else createContainer() and addContainer().
+// - Tutorial2/src/FairTutorialDet2ContFact.cxx:15 static factory (FairContFact.cxx:157 adds it to the
+//   list), :30 FairContainer "FairTutorialDet2DigiPar" (default context "TestDefaultContext", so no name
+//   suffix, FairContFact.cxx:121-135), :47 new FairTutorialDet2DigiPar(...).
+//   fairroot/base/sim/FairBaseContFact.cxx:24-37: FairBaseContFact (FairBaseParSet, FairGeoParSet) is the
+//   other factory; libExSimulation2 links FairRoot::Base, so that factory registers first.
+// - Tutorial2/src/FairTutorialDet2DigiPar.cxx:23 ftutdetdigiparstation(-1); :68-101 getParams() fills
+//   "FairTutorialDet2DigiStations", "...SectorsPerStation", "FairTutorialDet2DigiPar".
+//   parameters/tutdet.digi.par:10 [FairTutorialDet2DigiPar], :12 FairTutorialDet2DigiStations: Int_t 8.
+// - fairroot/base/steer/FairRunAna.cxx:191 fRunId from the event header of the input, :201/209
+//   SetParTask(), :220 initContainers(fRunId), :238 InitTask() (FairTask.cxx:49-88: SetParTask ->
+//   SetParContainers, InitTask -> Init). With an input file, :198 calls initContainers(fRunId) once
+//   before SetParTask(); FairTutorialDet2DigiPar is not in containerList then.
+//   :568-584 CheckRunIdChanged(): new run ID -> Reinit(fRunId) (:589 initContainers) -> ReInitTask()
+//   (not when the initialisation is static, :577).
+// - FairRuntimeDb.cxx:464-484 initContainers(runId) (writes the old run first if the ID changes),
+//   :508-564 readVersions() of both inputs, then init() of each container that is not static.
+// - fairroot/parbase/FairParSet.cxx:55-76 init(): CallInitIO(firstInput); if true, done; else
+//   CallInitIO(secondInput). :43-53 CallInitIO(): false for no input, else init(io) (warning if it fails).
+//   FairParGenericSet.cxx:38-46 init(io) uses the "FairGenericParIo" of the input.
+// - FairDetParRootFileIo.cxx:48-77, :111-130: the version comes from the FairRtdbRun of the run ID in the
+//   ROOT file (FairParRootFileIo.cxx:71); no version -> false. :79-97 write(): Write(name), version = cycle.
+// - FairGenericParAsciiFileIo.cxx:145 finds "[name]" (FairDetParAsciiFileIo.cxx:45-70), :261-270
+//   getParams(), version 1, "initialized from Ascii file".
+// - FairRuntimeDb.cxx:818-830 saveOutput(): writeContainers() (:317-339, calls writeContainer(), :385-462,
+//   which writes a changed container) and writeVersions() (:303-315, runs->Write(): the versions of each
+//   run ID). create_digis.C:88-89 also marks the container changed before saveOutput().
+import Explainer from './Explainer.astro';
+
+const steps = [
+  {
+    cap: 'The macro create_digis.C gives the runtime database two inputs. The first input is a ROOT file. The second input is the ASCII file tutdet.digi.par.',
+    code: 'rtdb->setFirstInput(io1); rtdb->setSecondInput(parInput2);',
+  },
+  {
+    cap: 'In SetParContainers(), the digitizer asks for its container by name. The runtime database asks the container factories, one after the other, until one knows the name.',
+    code: 'rtdb->getContainer("FairTutorialDet2DigiPar")',
+  },
+  {
+    cap: 'FairTutorialDet2ContFact creates the container and adds it to containerList. The digitizer keeps the pointer, but the parameters are not filled yet.',
+    code: 'cont = createContainer(c);',
+  },
+  {
+    cap: 'FairRunAna::Init() calls initContainers() with the run ID. The runtime database calls init() of each container in containerList.',
+    code: 'fRtdb->initContainers(fRunId)',
+    set: { run: 'run <runId>' },
+  },
+  {
+    cap: 'init() reads from firstInput first. The ROOT file has no version of FairTutorialDet2DigiPar for this run ID, so the read returns false.',
+    code: 'bool allFound = CallInitIO(rtdb->getFirstInput(), "first input");',
+    set: { run: 'run <runId>' },
+  },
+  {
+    cap: 'Then init() reads from secondInput. tutdet.digi.par has the section [FairTutorialDet2DigiPar], and getParams() fills the values from it.',
+    code: 'allFound = CallInitIO(rtdb->getSecondInput(), "second input");',
+    set: { run: 'run <runId>' },
+  },
+  {
+    cap: 'Then FairRunAna::Init() calls Init() of each task. fDigiPar points to the filled container, so the task can use the values.',
+    code: 'fTask->InitTask();',
+    set: { run: 'run <runId>' },
+  },
+  {
+    cap: 'saveOutput() writes the changed containers and the versions of the run to the output. Here the output is io1, so a later job finds the container in firstInput.',
+    code: 'rtdb->setOutput(io1); rtdb->saveOutput();',
+    set: { run: 'run <runId>' },
+  },
+  {
+    cap: 'When the run ID changes in the event loop, FairRunAna calls initContainers() with the new ID. Then it calls ReInit() of each task.',
+    code: 'Reinit(fRunId); fTask->ReInitTask();',
+    set: { run: 'run <next runId>' },
+  },
+];
+---
+
+<Explainer title="One parameter container in the runtime database" meta="Tutorial2 · create_digis.C" steps={steps}>
+  <div class="rdb-box">
+    <svg
+      class="rdb"
+      data-stage
+      role="img"
+      aria-label="The task FairTutorialDet2Digitizer, the runtime database FairRuntimeDb with its container factories and its containerList, the first input FairParRootFileIo (a ROOT file, also the output) and the second input FairParAsciiFileIo (tutdet.digi.par).">
+      <!-- Wide drawing -->
+      <svg class="lay lay-d" viewBox="0 0 600 382" width="100%" height="100%">
+        <g class="lnk lnk1">
+          <path class="ln" d="M276 216 V245" pathLength="1"></path>
+          <path class="ah" d="M271.5 244 L276 252 L280.5 244 z"></path>
+        </g>
+        <text class="lbl lbl1" x="268" y="238" text-anchor="end">firstInput</text>
+        <text class="lbl lbl-out" x="284" y="238">output</text>
+        <g class="lnk lnk2">
+          <path class="ln" d="M470 216 V245" pathLength="1"></path>
+          <path class="ah" d="M465.5 244 L470 252 L474.5 244 z"></path>
+        </g>
+        <text class="lbl lbl2" x="478" y="238">secondInput</text>
+
+        <rect class="box" x="12" y="12" width="214" height="204" rx="3"></rect>
+        <text class="nm" x="24" y="36">FairTutorialDet2Digitizer</text>
+        <text class="sb" x="24" y="54">FairTask</text>
+        <g class="mt m-set"><rect x="24" y="74" width="144" height="24" rx="3"></rect><text x="35" y="90">SetParContainers()</text></g>
+        <g class="mt m-init"><rect x="24" y="106" width="60" height="24" rx="3"></rect><text x="35" y="122">Init()</text></g>
+        <g class="mt m-re"><rect x="24" y="138" width="74" height="24" rx="3"></rect><text x="35" y="154">ReInit()</text></g>
+        <text class="fld" x="24" y="188">fDigiPar</text>
+        <text class="sb nul" x="90" y="188">nullptr</text>
+
+        <rect class="box" x="254" y="12" width="334" height="204" rx="3"></rect>
+        <text class="nm" x="266" y="36">FairRuntimeDb</text>
+        <g class="run"><rect x="444" y="20" width="136" height="22" rx="11"></rect><text x="512" y="35" text-anchor="middle" data-slot="run"></text></g>
+        <text class="sb" x="266" y="66">contFactories</text>
+        <g class="fac fac1"><rect x="266" y="74" width="146" height="24" rx="3"></rect><text x="276" y="90">FairBaseContFact</text></g>
+        <g class="fac fac2"><rect x="266" y="104" width="204" height="24" rx="3"></rect><text x="276" y="120">FairTutorialDet2ContFact</text></g>
+        <g class="no-fac" transform="translate(400 86)"><path class="x" d="M-4 -4L4 4M4 -4L-4 4"></path></g>
+        <g class="ok-fac" transform="translate(457 116)"><path class="ck" d="M-5 0L-1.5 3.5L5 -4"></path></g>
+        <text class="sb" x="266" y="150">containerList</text>
+        <rect class="slot" x="266" y="160" width="310" height="48" rx="3"></rect>
+        <g class="card" style="--cy:-56px">
+          <rect class="cbox" x="266" y="160" width="310" height="48" rx="3"></rect>
+          <text class="cn" x="278" y="179">FairTutorialDet2DigiPar</text>
+          <text class="sb" x="278" y="199">ftutdetdigiparstation</text>
+          <text class="v v-old" x="432" y="199">-1</text>
+          <text class="v v-new" x="432" y="199">8</text>
+          <g class="ini"><rect x="508" y="167" width="60" height="20" rx="10"></rect><text x="538" y="181" text-anchor="middle">init()</text></g>
+        </g>
+        <g class="ptr">
+          <circle cx="86" cy="184" r="3.5"></circle>
+          <path class="ln" d="M86 184 H259" pathLength="1"></path>
+          <path class="ah" d="M258 179.5 L266 184 L258 188.5 z"></path>
+        </g>
+
+        <rect class="box" x="12" y="252" width="280" height="118" rx="3"></rect>
+        <text class="nm" x="24" y="276">FairParRootFileIo</text>
+        <text class="sb" x="280" y="276" text-anchor="end">io1</text>
+        <text class="sb" x="24" y="294">ROOT file</text>
+        <g class="miss">
+          <g transform="translate(29 318)"><path class="x" d="M-4 -4L4 4M4 -4L-4 4"></path></g>
+          <text class="no-t" x="40" y="322">no version for &lt;runId&gt;</text>
+        </g>
+        <g class="keys">
+          <rect class="key" x="24" y="306" width="188" height="22" rx="3"></rect>
+          <text class="key-t" x="34" y="321">FairTutorialDet2DigiPar;1</text>
+          <rect class="key2" x="24" y="336" width="64" height="22" rx="3"></rect>
+          <text class="key2-t" x="34" y="351">&lt;runId&gt;</text>
+          <text class="sb" x="98" y="351">container versions</text>
+        </g>
+
+        <rect class="box" x="308" y="252" width="280" height="118" rx="3"></rect>
+        <text class="nm" x="320" y="276">FairParAsciiFileIo</text>
+        <text class="sb" x="576" y="276" text-anchor="end">parInput2</text>
+        <text class="sb" x="320" y="294">tutdet.digi.par</text>
+        <rect class="hl" x="316" y="307" width="181" height="18" rx="2"></rect>
+        <text class="fl fl-h" x="320" y="320">[FairTutorialDet2DigiPar]</text>
+        <text class="fl" x="320" y="340">FairTutorialDet2DigiStations: Int_t <tspan class="fl-v">8</tspan></text>
+        <text class="fl" x="320" y="360">…</text>
+
+        <rect class="tok tok-req" x="168" y="82" width="8" height="8" style="--x1:228px;--y1:0px;--x2:285px;--y2:30px"></rect>
+        <rect class="tok tok-in1" x="272" y="206" width="8" height="8" style="--x1:0px;--y1:60px"></rect>
+        <rect class="tok tok-in2" x="466" y="206" width="8" height="8" style="--x1:0px;--y1:60px"></rect>
+        <text class="tok tok-val" x="568.4" y="340" style="--x1:-136.4px;--y1:-141px">8</text>
+        <rect class="tok tok-out" x="272" y="206" width="8" height="8" style="--x1:0px;--y1:100px"></rect>
+      </svg>
+
+      <!-- Tall drawing for narrow columns -->
+      <svg class="lay lay-m" viewBox="0 0 340 598" width="100%" height="100%">
+        <g class="lnk lnk1">
+          <path class="ln" d="M270 332 V361" pathLength="1"></path>
+          <path class="ah" d="M265.5 360 L270 368 L274.5 360 z"></path>
+        </g>
+        <text class="lbl lbl1" x="262" y="348" text-anchor="end">firstInput</text>
+        <text class="lbl lbl-out" x="262" y="362" text-anchor="end">output</text>
+        <g class="lnk lnk2">
+          <path class="ln" d="M324 332 V475" pathLength="1"></path>
+          <path class="ah" d="M319.5 474 L324 482 L328.5 474 z"></path>
+        </g>
+        <text class="lbl lbl2" x="316" y="476" text-anchor="end">secondInput</text>
+
+        <rect class="box" x="8" y="8" width="324" height="100" rx="3"></rect>
+        <text class="nm" x="20" y="30">FairTutorialDet2Digitizer</text>
+        <text class="sb" x="320" y="30" text-anchor="end">FairTask</text>
+        <g class="mt m-set"><rect x="20" y="42" width="144" height="24" rx="3"></rect><text x="31" y="58">SetParContainers()</text></g>
+        <g class="mt m-init"><rect x="172" y="42" width="60" height="24" rx="3"></rect><text x="183" y="58">Init()</text></g>
+        <g class="mt m-re"><rect x="240" y="42" width="74" height="24" rx="3"></rect><text x="251" y="58">ReInit()</text></g>
+        <text class="fld" x="20" y="92">fDigiPar</text>
+        <text class="sb nul" x="88" y="92">nullptr</text>
+
+        <rect class="box" x="8" y="132" width="324" height="200" rx="3"></rect>
+        <text class="nm" x="20" y="154">FairRuntimeDb</text>
+        <g class="run"><rect x="128" y="140" width="136" height="22" rx="11"></rect><text x="196" y="155" text-anchor="middle" data-slot="run"></text></g>
+        <text class="sb" x="20" y="182">contFactories</text>
+        <g class="fac fac1"><rect x="20" y="190" width="146" height="24" rx="3"></rect><text x="30" y="206">FairBaseContFact</text></g>
+        <g class="fac fac2"><rect x="20" y="220" width="204" height="24" rx="3"></rect><text x="30" y="236">FairTutorialDet2ContFact</text></g>
+        <g class="no-fac" transform="translate(154 202)"><path class="x" d="M-4 -4L4 4M4 -4L-4 4"></path></g>
+        <g class="ok-fac" transform="translate(211 232)"><path class="ck" d="M-5 0L-1.5 3.5L5 -4"></path></g>
+        <text class="sb" x="20" y="266">containerList</text>
+        <rect class="slot" x="20" y="274" width="300" height="50" rx="3"></rect>
+        <g class="card" style="--cy:-54px">
+          <rect class="cbox" x="20" y="274" width="300" height="50" rx="3"></rect>
+          <text class="cn" x="32" y="294">FairTutorialDet2DigiPar</text>
+          <text class="sb" x="32" y="315">ftutdetdigiparstation</text>
+          <text class="v v-old" x="186" y="315">-1</text>
+          <text class="v v-new" x="186" y="315">8</text>
+          <g class="ini"><rect x="252" y="299" width="60" height="20" rx="10"></rect><text x="282" y="313" text-anchor="middle">init()</text></g>
+        </g>
+        <g class="ptr">
+          <circle cx="84" cy="88" r="3.5"></circle>
+          <path class="ln" d="M84 88 H300 V267" pathLength="1"></path>
+          <path class="ah" d="M295.5 266 L300 274 L304.5 266 z"></path>
+        </g>
+
+        <rect class="box" x="8" y="368" width="304" height="96" rx="3"></rect>
+        <text class="nm" x="20" y="390">FairParRootFileIo</text>
+        <text class="sb" x="300" y="390" text-anchor="end">io1</text>
+        <g class="miss">
+          <g transform="translate(25 410)"><path class="x" d="M-4 -4L4 4M4 -4L-4 4"></path></g>
+          <text class="no-t" x="36" y="414">no version for &lt;runId&gt;</text>
+        </g>
+        <g class="keys">
+          <rect class="key" x="20" y="400" width="188" height="22" rx="3"></rect>
+          <text class="key-t" x="30" y="415">FairTutorialDet2DigiPar;1</text>
+          <rect class="key2" x="20" y="430" width="64" height="22" rx="3"></rect>
+          <text class="key2-t" x="30" y="445">&lt;runId&gt;</text>
+          <text class="sb" x="94" y="445">container versions</text>
+        </g>
+
+        <rect class="box" x="8" y="482" width="324" height="108" rx="3"></rect>
+        <text class="nm" x="20" y="504">FairParAsciiFileIo</text>
+        <text class="sb" x="306" y="504" text-anchor="end">parInput2</text>
+        <text class="sb" x="20" y="522">tutdet.digi.par</text>
+        <rect class="hl" x="16" y="536" width="181" height="18" rx="2"></rect>
+        <text class="fl fl-h" x="20" y="549">[FairTutorialDet2DigiPar]</text>
+        <text class="fl" x="20" y="569">FairTutorialDet2DigiStations: Int_t <tspan class="fl-v">8</tspan></text>
+
+        <rect class="tok tok-req" x="88" y="68" width="8" height="8" style="--x1:62px;--y1:130px;--x2:119px;--y2:160px"></rect>
+        <rect class="tok tok-in1" x="266" y="324" width="8" height="8" style="--x1:0px;--y1:58px"></rect>
+        <rect class="tok tok-in2" x="320" y="324" width="8" height="8" style="--x1:0px;--y1:170px"></rect>
+        <text class="tok tok-val" x="268.4" y="569" style="--x1:-82.4px;--y1:-254px">8</text>
+        <rect class="tok tok-out" x="266" y="324" width="8" height="8" style="--x1:0px;--y1:100px"></rect>
+      </svg>
+    </svg>
+  </div>
+</Explainer>
+
+<style>
+  /* Layout: the wide drawing, or the tall one when the column is narrow. */
+  .rdb-box {
+    container-type: inline-size;
+  }
+  .rdb {
+    aspect-ratio: 600 / 382;
+  }
+  .lay-m {
+    display: none;
+  }
+  @container (max-width: 519px) {
+    .rdb {
+      aspect-ratio: 340 / 598;
+      max-width: 420px;
+      margin-inline: auto;
+    }
+    .lay-d {
+      display: none;
+    }
+    .lay-m {
+      display: inline;
+    }
+  }
+
+  /* Marks */
+  .box {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .nm {
+    fill: var(--fr-stage-ink);
+    font-size: 12.5px;
+    font-weight: 700;
+  }
+  .sb {
+    fill: var(--fr-stage-dim);
+    font-size: 11.5px;
+  }
+  .fld {
+    fill: var(--fr-stage-ink);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .mt rect,
+  .fac rect {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    transition:
+      fill 0.4s,
+      stroke 0.4s;
+  }
+  .mt text {
+    fill: var(--fr-stage-dim);
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: fill 0.4s;
+  }
+  .fac text {
+    fill: var(--fr-stage-ink);
+    font-size: 11.5px;
+  }
+  .x {
+    fill: none;
+    stroke: var(--fr-c-num);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .ck {
+    fill: none;
+    stroke: var(--fr-mint);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .slot {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-dasharray: 4 3;
+  }
+  .cbox {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-dim);
+    stroke-width: 1.2;
+    stroke-dasharray: 4 3;
+  }
+  .cn {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .v {
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .v-old {
+    fill: var(--fr-stage-dim);
+  }
+  .v-new {
+    fill: var(--fr-saffron);
+  }
+  .ini rect {
+    fill: var(--fr-saffron);
+  }
+  .ini text {
+    fill: var(--fr-on-saffron);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .run rect {
+    fill: var(--fr-stage);
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.2;
+  }
+  .run text {
+    fill: var(--fr-sky-bright);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .ln {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.4;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+    transition: stroke 0.4s;
+  }
+  .ah {
+    fill: var(--fr-stage-line);
+    transition: fill 0.4s;
+  }
+  .lbl {
+    fill: var(--fr-stage-dim);
+    font-size: 11.5px;
+    font-weight: 600;
+    transition: fill 0.4s;
+  }
+  .ptr .ln {
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.6;
+  }
+  .ptr .ah,
+  .ptr circle {
+    fill: var(--fr-sky-bright);
+  }
+  .no-t {
+    fill: var(--fr-c-num);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .key {
+    fill: var(--fr-saffron);
+  }
+  .key-t {
+    fill: var(--fr-on-saffron);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .key2 {
+    fill: none;
+    stroke: var(--fr-sky-bright);
+    stroke-width: 1.2;
+  }
+  .key2-t {
+    fill: var(--fr-sky-bright);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .hl {
+    fill: var(--fr-mint);
+    fill-opacity: 0.16;
+  }
+  .fl {
+    fill: var(--fr-stage-dim);
+    font-size: 11.5px;
+  }
+  .fl-h {
+    fill: var(--fr-stage-ink);
+    transition: fill 0.4s;
+  }
+  .fl-v {
+    transition: fill 0.4s;
+  }
+  .tok {
+    fill: var(--fr-saffron);
+  }
+  text.tok {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  /* Choreography. Hidden first, then shown by step. */
+  .ptr,
+  .card,
+  .run,
+  .ini,
+  .miss,
+  .keys,
+  .lbl-out,
+  .no-fac,
+  .ok-fac,
+  .hl,
+  .tok {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .nul,
+  .slot {
+    transition: opacity 0.4s;
+  }
+  .v-new {
+    opacity: 0;
+  }
+  /* A delayed change that stays for the next steps is an animation of its own step, not a
+     transition-delay: then it is there at once when the steps are clicked fast. */
+
+  /* 1: the two inputs */
+  .rdb.now1 .lnk .ln {
+    stroke: var(--fr-sky-bright);
+    animation: rdb-draw 0.9s 0.3s ease-out both;
+  }
+  .rdb.now1 .lnk .ah {
+    fill: var(--fr-sky-bright);
+    animation: rdb-show 0.3s 1.1s both;
+  }
+  .rdb.now1 .lbl1,
+  .rdb.now1 .lbl2 {
+    fill: var(--fr-sky-bright);
+  }
+
+  /* 2: getContainer() asks the factories */
+  .rdb.now2 .m-set rect,
+  .rdb.now3 .m-set rect,
+  .rdb.now7 .m-init rect,
+  .rdb.now9 .m-re rect {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-saffron);
+  }
+  .rdb.now2 .m-set text,
+  .rdb.now3 .m-set text,
+  .rdb.now7 .m-init text,
+  .rdb.now9 .m-re text {
+    fill: var(--fr-on-saffron);
+  }
+  .rdb.now2 .tok-req {
+    animation: rdb-req 2.2s 0.3s ease-in-out both;
+  }
+  .rdb.now2 .no-fac {
+    opacity: 1;
+    transition-delay: 1.15s;
+  }
+  .rdb.now2 .ok-fac,
+  .rdb.now3 .ok-fac {
+    opacity: 1;
+  }
+  .rdb.now2 .ok-fac {
+    animation: rdb-show 0.3s 2.2s both;
+  }
+  .rdb.now2 .fac2 rect,
+  .rdb.now3 .fac2 rect {
+    stroke: var(--fr-saffron);
+  }
+  .rdb.now2 .fac2 rect {
+    animation: rdb-pick 0.3s 2.2s both;
+  }
+
+  /* 3: the factory creates the container; the task keeps the pointer */
+  .card {
+    transform: translate(0, var(--cy));
+    transition:
+      opacity 0.5s,
+      transform 0.8s cubic-bezier(0.2, 0, 0.1, 1);
+  }
+  .rdb.r3 .card {
+    opacity: 1;
+    transform: translate(0, 0);
+  }
+  .rdb.r3 .slot,
+  .rdb.r3 .nul {
+    opacity: 0;
+  }
+  .rdb.r3 .ptr {
+    opacity: 1;
+  }
+  .rdb.now3 .ptr {
+    animation: rdb-show 0.3s 0.6s both;
+  }
+  .rdb.now3 .ptr .ln {
+    animation: rdb-draw 0.7s 0.6s ease-out both;
+  }
+  .rdb.now3 .ptr .ah {
+    animation: rdb-show 0.2s 1.25s both;
+  }
+
+  /* 4: initContainers(runId) calls init() */
+  .rdb.r4 .run {
+    opacity: 1;
+  }
+  .rdb.now4 .ini,
+  .rdb.now5 .ini,
+  .rdb.now6 .ini,
+  .rdb.now9 .ini {
+    opacity: 1;
+  }
+  .rdb.now4 .ini {
+    animation: rdb-show 0.4s 0.5s both;
+  }
+
+  /* 5: first input, no version */
+  .rdb.now5 .tok-in1 {
+    animation: rdb-go 1s 0.3s ease-in-out both;
+  }
+  .rdb.now5 .lnk1 .ln {
+    stroke: var(--fr-c-num);
+  }
+  .rdb.now5 .lnk1 .ah,
+  .rdb.now5 .lbl1 {
+    fill: var(--fr-c-num);
+  }
+  .rdb.r5 .miss {
+    opacity: 0.5;
+  }
+  .rdb.now5 .miss {
+    opacity: 1;
+    transition-delay: 1.2s;
+  }
+  .rdb.r8 .miss {
+    opacity: 0;
+  }
+
+  /* 6: second input, the section is there */
+  .rdb.now6 .tok-in2 {
+    animation: rdb-go 0.9s 0.3s ease-in-out both;
+  }
+  .rdb.now6 .lnk2 .ln {
+    stroke: var(--fr-mint);
+  }
+  .rdb.now6 .lnk2 .ah,
+  .rdb.now6 .lbl2 {
+    fill: var(--fr-mint);
+  }
+  .rdb.now6 .hl {
+    opacity: 1;
+    transition-delay: 1.1s;
+  }
+  .rdb.now6 .fl-h {
+    fill: var(--fr-mint);
+    transition-delay: 1.1s;
+  }
+  .rdb.now6 .fl-v {
+    fill: var(--fr-saffron);
+    transition-delay: 1.1s;
+  }
+  .rdb.now6 .tok-val {
+    animation: rdb-go 1s 1.4s ease-in-out both;
+  }
+  .rdb.r6 .v-old {
+    opacity: 0;
+  }
+  .rdb.r6 .v-new {
+    opacity: 1;
+  }
+  .rdb.r6 .cbox {
+    stroke: var(--fr-saffron);
+    stroke-dasharray: 4 0;
+  }
+  .rdb.now6 .v-old {
+    animation: rdb-hide 0.4s 2.3s both;
+  }
+  .rdb.now6 .v-new {
+    animation: rdb-show 0.4s 2.3s both;
+  }
+  .rdb.now6 .cbox {
+    animation: rdb-fill 0.4s 2.3s both;
+  }
+
+  /* 7: Init() of the task */
+  .rdb.now7 .ptr .ln,
+  .rdb.now9 .ptr .ln {
+    stroke-width: 2.6;
+  }
+  .rdb.now7 .ptr,
+  .rdb.now9 .ptr {
+    filter: drop-shadow(0 0 3px rgb(98 198 230 / 0.55));
+  }
+  .rdb.now7 .v-new {
+    animation: rdb-pulse 1.2s 0.3s ease-in-out 2;
+  }
+
+  /* 8: saveOutput() writes to io1 */
+  .rdb.r8 .lbl-out {
+    opacity: 1;
+  }
+  .rdb.now8 .lbl-out,
+  .rdb.now8 .lbl1 {
+    fill: var(--fr-saffron);
+  }
+  .rdb.now8 .lnk1 .ln {
+    stroke: var(--fr-saffron);
+  }
+  .rdb.now8 .lnk1 .ah {
+    fill: var(--fr-saffron);
+  }
+  .rdb.now8 .tok-out {
+    animation: rdb-go 1s 0.4s ease-in-out both;
+  }
+  .rdb.r8 .keys {
+    opacity: 1;
+  }
+  .rdb.now8 .keys {
+    animation: rdb-show 0.4s 1.3s both;
+  }
+
+  /* 9: new run ID */
+  .rdb.now9 .run rect {
+    animation: rdb-flash 1s 0.1s ease-in-out both;
+  }
+  .rdb.now9 .cbox {
+    animation: rdb-flash 1s 0.5s ease-in-out both;
+  }
+
+  @keyframes rdb-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes rdb-show {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes rdb-pick {
+    from {
+      stroke: var(--fr-stage-line);
+    }
+    to {
+      stroke: var(--fr-saffron);
+    }
+  }
+  @keyframes rdb-hide {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+  @keyframes rdb-fill {
+    from {
+      stroke: var(--fr-stage-dim);
+      stroke-dasharray: 4 3;
+    }
+    to {
+      stroke: var(--fr-saffron);
+      stroke-dasharray: 4 0;
+    }
+  }
+  @keyframes rdb-go {
+    0% {
+      transform: translate(0, 0);
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    85% {
+      transform: translate(var(--x1), var(--y1));
+      opacity: 1;
+    }
+    100% {
+      transform: translate(var(--x1), var(--y1));
+      opacity: 0;
+    }
+  }
+  @keyframes rdb-req {
+    0% {
+      transform: translate(0, 0);
+      opacity: 0;
+    }
+    6% {
+      opacity: 1;
+    }
+    40%,
+    52% {
+      transform: translate(var(--x1), var(--y1));
+    }
+    86% {
+      transform: translate(var(--x2), var(--y2));
+      opacity: 1;
+    }
+    100% {
+      transform: translate(var(--x2), var(--y2));
+      opacity: 0;
+    }
+  }
+  @keyframes rdb-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @keyframes rdb-flash {
+    0%,
+    100% {
+      stroke-width: 1.2;
+    }
+    40% {
+      stroke-width: 3.2;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .rdb * {
+      transition: none !important;
+      animation: none !important;
+    }
+    .rdb .tok {
+      display: none;
+    }
+  }
+</style>

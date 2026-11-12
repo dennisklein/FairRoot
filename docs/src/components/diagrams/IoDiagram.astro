@@ -1,0 +1,1046 @@
+---
+// The data flow through FairRootManager in one FairRunAna run: a source fills the input branches,
+// the tasks read branches and register new ones, and the sink writes the persistent branches.
+// The flag of each registered branch is a switch: the diagram shows if the branch reaches the output file.
+// Paths are relative to the FairRoot repository.
+//
+// The example: examples/advanced/Tutorial3/macro/run_digi_reco_one.C:32-57. One FairRunAna with a
+// FairFileSource (data/testrun_<engine>_f0.root), a FairRootFileSink and two tasks, added in this order:
+// FairTestDetectorDigiTask, then FairTestDetectorRecoTask. The diagram does not show the file names.
+//
+// Facts and where they come from:
+// - Input tree: run_sim_sep.C (FairRunSim) writes data/testrun_<engine>_f<n>.root (run_sim_sep.C:40-43) and
+//   calls SetStoreTraj(kTRUE) (87). FairMCApplication::InitGeometry() calls FairTrajFilter::Init() before
+//   RegisterOutput() (fairroot/base/sim/FairMCApplication.cxx:857-862, 875). The registrations, in order, all
+//   with kTRUE: "GeoTracks" (fairroot/base/steer/FairTrajFilter.h:119, FairTrajFilter.cxx:78-81); "MCTrack"
+//   (examples/common/mcstack/FairStack.cxx:315-322, FairMCApplication.cxx:949; the stack is made in
+//   examples/common/gconfig/g3Config.C:27); "FairTestDetectorPoint" (examples/advanced/Tutorial3/simulation/
+//   FairTestDetector.cxx:122-131, FairMCApplication.cxx:957-969, only active detectors register); and
+//   "MCEventHeader." (fairroot/base/event/FairMCEventHeader.cxx:82-86, FairMCApplication.cxx:977).
+//   FairRunSim registers no "EventHeader.". The tested run_sim.C makes the same branches (SetStoreTraj(kTRUE)
+//   at 110, FairTestDetector at 90); it feeds run_digi.C and run_reco.C, which run the same two tasks in two runs.
+// - Tree and folder names: GetTreeName() is "cbmsim" by default; GetFolderName() is "cbmroot" if the run is
+//   not an analysis run, else "cbmout" (fairroot/base/steer/FairRootManager.cxx:932-961; both can come from
+//   rootmanager.dat, 898-930). FairRunAna sets fAna = kTRUE (fairroot/base/steer/FairRunAna.cxx:88), FairRun
+//   starts with kFALSE (FairRun.cxx:49). So the input file has the folder cbmroot and the output file the folder
+//   cbmout. FairFileSource looks for GetFolderName(), then "cbmroot", then "cbmout"
+//   (fairroot/base/source/FairFileSource.cxx:164-175). The sink writes the folder and the tree with
+//   GetFolderName() and GetTreeName() (fairroot/base/sink/FairRootFileSink.cxx:242-245).
+// - FairRunAna::Init(): InitSource(), InitSink() (FairRunAna.cxx:142-143). The run registers its event header:
+//   evtHeader->Register(GetSink() ? fStoreEventHeader : false) (FairRunAna.cxx:194 or 204), which is
+//   Register("EventHeader.", "EvtHeader", this, ...) (fairroot/base/event/FairEventHeader.cxx:17-20).
+//   fStoreEventHeader is kTRUE (FairRunAna.cxx:85); SetEventHeaderPersistence() changes it (FairRunAna.h:70).
+//   Then fTask->InitTask() (238), then WriteFolder() (250). FairTrajFilter::Init() runs only if a filter exists
+//   (FairRunAna.cxx:241-244, FairTrajFilter.cxx:32); the macro makes none, so the output has no GeoTracks.
+// - Tasks: FairRun::AddTask() adds to the main task (FairRun.cxx:110-114). InitTask() and ExecuteTasks()
+//   go through the tasks in list order (fairroot/base/steer/FairTask.cxx:49-64, 128-168, 170-208).
+//   FairTestDetectorDigiTask::Init(): GetObject("FairTestDetectorPoint"), then
+//   Register("FairTestDetectorDigi", "FairTestDetector", fDigiArray, kTRUE)
+//   (examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx:39, 48).
+//   FairTestDetectorRecoTask::Init(): GetObject("FairTestDetectorDigi"), then
+//   Register("FairTestDetectorHit", "FairTestDetector", fHitArray, kTRUE)
+//   (examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx:44, 52).
+// - GetObject() looks in the memory map first, then in the folders of the input file, and lets the source
+//   connect the branch; then the object is in the memory map (FairRootManager.cxx:486-495, 723-753;
+//   FairFileSource::ActivateObject() sets the branch address, FairFileSource.cxx:538-550). So a branch that a
+//   task registers with kFALSE is still in memory, and a later task gets it with GetObject(). Only the input
+//   branches that a task asks for get into the memory map. The source itself connects "MCEventHeader." to
+//   fill the event header of the run (FairFileSource.cxx:255-265, 700-712).
+// - Register() -> RegisterImpl(): with kTRUE, the object goes to the sink; always, it goes to the memory map and
+//   the branch list (FairRootManager.cxx:148-178). FairRootFileSink::RegisterImpl() puts it into a subfolder
+//   of the output folder (FairRootFileSink.cxx:214-226), which InitSink() makes (78-98,
+//   FairRootManager.cxx:378-381). RegisterAny() and InitObjectAs() follow the same model
+//   (fairroot/base/steer/FairRootManager.h:452-466, 471-515); Tutorial3 uses Register() and GetObject().
+// - WriteFolder() makes the output tree: new TTree(GetTreeName(), "/<folder name>", 99)
+//   (FairRootFileSink.cxx:238-249). In ROOT, a title that starts with "/" makes one branch for each object
+//   in that folder (ROOT tree/tree/src/TTree.cxx: TTree::TTree() calls TTree::Branch(const char* foldername,
+//   ...)); TruncateBranchNames() cuts the names to the object names (FairRootFileSink.cxx:100-175). Branches of
+//   RegisterAny() come from CreatePersistentBranchesAny() (261-289). So the output tree has only the branches
+//   registered with kTRUE: EventHeader., FairTestDetectorDigi, FairTestDetectorHit, in this order (folder
+//   order: EvtHeader first, because the run registers it before InitTask()).
+// - Input branches: FairFileSource::Init() adds the input folder to the list of input folders and the input
+//   names to the branch list (FairFileSource.cxx:189-212), not to the output folder. So the sink does not copy
+//   them. (Their names are in the BranchList object of the output file, FairRootManager.cxx:383-390.)
+// - Each event, FairRunAna::Run() calls ReadEvent(i), FillEventHeader(), ExecuteTask(""), Fill()
+//   (FairRunAna.cxx:313-327). ReadEvent(i) -> FairFileSource::ReadEvent() -> fInChain->GetEntry(i)
+//   (FairRootManager.cxx:409-431, FairFileSource.cxx:290-298). FillEventHeader() lets the source fill the
+//   event header of the run, the object registered as "EventHeader." (FairRunAna.cxx:321, FairRun.cxx:162-168,
+//   241-249, FairFileSource.cxx:700-712). ReadEvent(i) fills only the private header of the manager
+//   (FairRootManager.cxx:89, 425), so the diagram fills "EventHeader." in the FillEventHeader() step.
+//   ExecuteTask("") calls Exec() of each active task in order. Fill() -> FairRootManager::Fill() ->
+//   FairRootFileSink::Fill() -> fOutTree->Fill() (FairRunAna.cxx:617-624, FairRootManager.cxx:331-335,
+//   FairRootFileSink.cxx:302-309).
+
+type P = [number, number];
+type Reg = 'eh' | 'dg' | 'ht';
+type Key = Reg | 'pt';
+interface T {
+  x: number;
+  y: number;
+}
+interface Layout {
+  id: 'wide' | 'narrow';
+  W: number;
+  H: number;
+  lanes: (T & { t: string })[];
+  src: { x: number; y: number; w: number; h: number; title: T; sub: (T & { t: string })[]; ent: (T & { n: string; port?: boolean })[] };
+  snk: { x: number; y: number; w: number; h: number; title: T; sub: (T & { t: string })[]; ent: Record<Reg, T> };
+  mgr: { title: T; sub: T };
+  chipW: number;
+  chips: Record<Key, P>;
+  taskW: number;
+  tasks: [P, P];
+  arrows: { x: number; y1: number; y2: number; t: string; reg?: Reg }[];
+  read: P[];
+  flagX: number;
+  skip: T; // "not copied", on the row of the input branch
+  cw: number; // width of one character of the names (JetBrains Mono: 0.6 em)
+  post: Record<Reg, P[]>;
+  stop: Record<Reg, P>;
+  rails?: { d: string; on: Reg[] }[];
+  loop: { label: T; steps: (T & { t: string; more?: string })[]; rail: string; dir: 'v' | 'h' };
+  toks: Record<string, P[]>;
+}
+
+const CH = 22; // chip height
+const TH = 26; // task height
+const FW = 56; // flag width
+const FH = 20; // flag height
+const NAMES: Record<Key, string> = {
+  eh: 'EventHeader.',
+  pt: 'FairTestDetectorPoint',
+  dg: 'FairTestDetectorDigi',
+  ht: 'FairTestDetectorHit',
+};
+const TASKS = ['FairTestDetectorDigiTask', 'FairTestDetectorRecoTask'];
+const REG: Reg[] = ['eh', 'dg', 'ht'];
+const cy = (L: Layout, k: Key) => L.chips[k][1] + CH / 2;
+
+// Wide: input file | FairRootManager and the tasks | output file. The rows of a branch line up.
+const wide: Layout = {
+  id: 'wide',
+  W: 660,
+  H: 344,
+  lanes: [
+    { t: 'INPUT FILE', x: 0, y: 12 },
+    { t: 'OUTPUT FILE', x: 480, y: 12 },
+  ],
+  src: {
+    x: 0,
+    y: 22,
+    w: 170,
+    h: 160,
+    title: { x: 12, y: 44 },
+    sub: [
+      { t: 'TTree cbmsim', x: 12, y: 61 },
+      { t: 'TFolder cbmroot', x: 12, y: 77 },
+    ],
+    ent: [
+      { n: 'GeoTracks', x: 12, y: 102 },
+      { n: 'MCTrack', x: 12, y: 124 },
+      { n: 'FairTestDetectorPoint', x: 12, y: 146, port: true },
+      { n: 'MCEventHeader.', x: 12, y: 168 },
+    ],
+  },
+  snk: {
+    x: 480,
+    y: 22,
+    w: 180,
+    h: 318,
+    title: { x: 492, y: 44 },
+    sub: [
+      { t: 'TTree cbmsim', x: 492, y: 61 },
+      { t: 'TFolder cbmout', x: 492, y: 77 },
+    ],
+    // baseline 4.5 below the row, as in the chips: the arrow meets the middle of the name
+    ent: { eh: { x: 492, y: 102.5 }, dg: { x: 492, y: 234.5 }, ht: { x: 492, y: 322.5 } },
+  },
+  mgr: { title: { x: 192, y: 44 }, sub: { x: 192, y: 61 } },
+  chipW: 200,
+  chips: { eh: [192, 87], pt: [192, 131], dg: [192, 219], ht: [192, 307] },
+  taskW: 216,
+  tasks: [
+    [192, 173],
+    [192, 261],
+  ],
+  arrows: [
+    { x: 212, y1: 153, y2: 173, t: 'GetObject()' },
+    { x: 212, y1: 199, y2: 219, t: 'Register', reg: 'dg' },
+    { x: 212, y1: 241, y2: 261, t: 'GetObject()' },
+    { x: 212, y1: 287, y2: 307, t: 'Register', reg: 'ht' },
+  ],
+  read: [
+    [164, 142],
+    [192, 142],
+  ],
+  flagX: 436,
+  skip: { x: 436, y: 146 },
+  cw: 6.9,
+  post: {
+    eh: [
+      [464, 98],
+      [480, 98],
+    ],
+    dg: [
+      [464, 230],
+      [480, 230],
+    ],
+    ht: [
+      [464, 318],
+      [480, 318],
+    ],
+  },
+  stop: { eh: [470, 98], dg: [470, 230], ht: [470, 318] },
+  loop: {
+    label: { x: 0, y: 222 },
+    rail: 'M5 238V307',
+    dir: 'v',
+    steps: [
+      { t: 'ReadEvent(i)', x: 5, y: 242 },
+      { t: 'FillEventHeader()', x: 5, y: 265 },
+      { t: 'Exec()', more: ' of each task', x: 5, y: 288 },
+      { t: 'Fill()', x: 5, y: 311 },
+    ],
+  },
+  toks: {
+    read: [
+      [160, 142],
+      [192, 142],
+    ],
+    t1in: [
+      [212, 153],
+      [212, 173],
+    ],
+    t1out: [
+      [212, 199],
+      [212, 219],
+    ],
+    t2in: [
+      [212, 241],
+      [212, 261],
+    ],
+    t2out: [
+      [212, 287],
+      [212, 307],
+    ],
+    'f-eh': [
+      [392, 98],
+      [480, 98],
+    ],
+    'f-dg': [
+      [392, 230],
+      [480, 230],
+    ],
+    'f-ht': [
+      [392, 318],
+      [480, 318],
+    ],
+  },
+};
+
+// Narrow (phones): the same parts, stacked. The flags lead to a rail at the right, down to the output file.
+const narrow: Layout = {
+  id: 'narrow',
+  W: 340,
+  H: 620,
+  lanes: [
+    { t: 'INPUT FILE', x: 0, y: 12 },
+    { t: 'OUTPUT FILE', x: 0, y: 438 },
+  ],
+  src: {
+    x: 0,
+    y: 20,
+    w: 340,
+    h: 100,
+    title: { x: 12, y: 42 },
+    sub: [{ t: 'TTree cbmsim · TFolder cbmroot', x: 12, y: 60 }],
+    ent: [
+      { n: 'GeoTracks', x: 12, y: 84 },
+      { n: 'MCTrack', x: 184, y: 84 },
+      { n: 'FairTestDetectorPoint', x: 12, y: 106, port: true },
+      { n: 'MCEventHeader.', x: 184, y: 106 },
+    ],
+  },
+  snk: {
+    x: 0,
+    y: 446,
+    w: 340,
+    h: 100,
+    title: { x: 12, y: 468 },
+    sub: [{ t: 'TTree cbmsim · TFolder cbmout', x: 12, y: 486 }],
+    ent: { eh: { x: 12, y: 510 }, dg: { x: 128, y: 510 }, ht: { x: 12, y: 532 } },
+  },
+  mgr: { title: { x: 58, y: 146 }, sub: { x: 58, y: 162 } },
+  chipW: 206,
+  chips: { pt: [12, 172], dg: [12, 260], ht: [12, 348], eh: [12, 386] },
+  taskW: 300,
+  tasks: [
+    [12, 214],
+    [12, 302],
+  ],
+  arrows: [
+    { x: 34, y1: 194, y2: 214, t: 'GetObject()' },
+    { x: 34, y1: 240, y2: 260, t: 'Register', reg: 'dg' },
+    { x: 34, y1: 282, y2: 302, t: 'GetObject()' },
+    { x: 34, y1: 328, y2: 348, t: 'Register', reg: 'ht' },
+  ],
+  read: [
+    [44, 112],
+    [44, 172],
+  ],
+  flagX: 262,
+  skip: { x: 262, y: 187 },
+  cw: 7.2,
+  // The rail is at x 316, so that its arrow does not meet the folded corner of the output file.
+  post: {
+    dg: [
+      [290, 271],
+      [316, 271],
+    ],
+    ht: [
+      [290, 359],
+      [316, 359],
+    ],
+    eh: [
+      [290, 397],
+      [316, 397],
+    ],
+  },
+  stop: { dg: [296, 271], ht: [296, 359], eh: [296, 397] },
+  rails: [
+    { d: 'M316 271V359', on: ['dg'] },
+    { d: 'M316 359V397', on: ['dg', 'ht'] },
+    { d: 'M316 397V446', on: ['dg', 'ht', 'eh'] },
+  ],
+  // Two rows, read from left to right. The rail goes from the end of a name to the next stop, not through a name.
+  loop: {
+    label: { x: 0, y: 568 },
+    rail: 'M109 586H180M159 608H180',
+    dir: 'h',
+    steps: [
+      { t: 'ReadEvent(i)', x: 5, y: 586 },
+      { t: 'FillEventHeader()', x: 180, y: 586 },
+      { t: 'Exec()', more: ' of each task', x: 5, y: 608 },
+      { t: 'Fill()', x: 180, y: 608 },
+    ],
+  },
+  toks: {
+    read: [
+      [44, 112],
+      [44, 172],
+    ],
+    t1in: [
+      [34, 194],
+      [34, 214],
+    ],
+    t1out: [
+      [34, 240],
+      [34, 260],
+    ],
+    t2in: [
+      [34, 282],
+      [34, 302],
+    ],
+    t2out: [
+      [34, 328],
+      [34, 348],
+    ],
+    'f-dg': [
+      [218, 271],
+      [316, 271],
+      [316, 446],
+    ],
+    'f-ht': [
+      [218, 359],
+      [316, 359],
+      [316, 446],
+    ],
+    'f-eh': [
+      [218, 397],
+      [316, 397],
+      [316, 446],
+    ],
+  },
+};
+
+const layouts = [wide, narrow];
+const uid = 'io' + Math.random().toString(36).slice(2, 8);
+const line = (p: P[]) => 'M' + p.map(([x, y]) => `${x} ${y}`).join('L');
+// A file: a box with a folded corner.
+const doc = (b: { x: number; y: number; w: number; h: number }) => `M${b.x} ${b.y}H${b.x + b.w - 10}L${b.x + b.w} ${b.y + 10}V${b.y + b.h}H${b.x}Z`;
+const fold = (b: { x: number; y: number; w: number; h: number }) => `M${b.x + b.w - 10} ${b.y}V${b.y + 10}H${b.x + b.w}`;
+const desc =
+  'One FairRunAna run of Tutorial3. FairFileSource reads the input file, which has the TTree cbmsim and the TFolder cbmroot. ' +
+  'The tree has the branches GeoTracks, MCTrack, FairTestDetectorPoint and MCEventHeader.. FairRootManager keeps the branches of the event in memory: ' +
+  'FairTestDetectorPoint from the input file, EventHeader. from FairRunAna, and FairTestDetectorDigi and FairTestDetectorHit from the tasks. ' +
+  'Task 1, FairTestDetectorDigiTask, gets FairTestDetectorPoint with GetObject() and registers FairTestDetectorDigi with Register(…, kTRUE). ' +
+  'Task 2, FairTestDetectorRecoTask, gets FairTestDetectorDigi and registers FairTestDetectorHit. FairRootFileSink writes the branches ' +
+  'with the flag kTRUE to the TTree cbmsim of the output file, which has the TFolder cbmout. It does not copy the input branches. ' +
+  'The flag buttons switch each flag between kTRUE and kFALSE. For each event, the run calls ReadEvent(i), then FillEventHeader(), ' +
+  'which fills EventHeader., then Exec() of each task, then Fill().';
+---
+
+<div class="fr-io not-content">
+  <div class="io-head">
+    <span>Select a flag to change it: <code>kTRUE</code> or <code>kFALSE</code>.</span>
+    <span>names from Tutorial3</span>
+  </div>
+  <p id={`${uid}-desc`} hidden>{desc}</p>
+  {
+    layouts.map((L) => {
+      const ah = `${uid}-${L.id}-ah`;
+      return (
+        <svg
+          class={`io io-${L.id}`}
+          viewBox={`0 0 ${L.W} ${L.H}`}
+          role="group"
+          aria-label="Branches, sources and sinks in one run"
+          aria-describedby={`${uid}-desc`}
+          data-geo={JSON.stringify(L.toks)}
+        >
+          <defs>
+            <marker id={ah} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" class="ah" />
+            </marker>
+          </defs>
+          <g aria-hidden="true">
+            {L.lanes.map((l) => (
+              <text class="lane" x={l.x} y={l.y}>
+                {l.t}
+              </text>
+            ))}
+
+            {/* the input file */}
+            <g class="file" data-box="src">
+              <path class="bx" d={doc(L.src)} />
+              <path class="fold" d={fold(L.src)} />
+              <text class="ttl" x={L.src.title.x} y={L.src.title.y}>
+                FairFileSource
+              </text>
+              {L.src.sub.map((s) => (
+                <text class="sub" x={s.x} y={s.y}>
+                  {s.t}
+                </text>
+              ))}
+              {L.src.ent.map((e) => (
+                <text class={e.port ? 'ent used' : 'ent'} x={e.x} y={e.y}>
+                  {e.n}
+                </text>
+              ))}
+            </g>
+            <path class="ln" d={line(L.read)} marker-end={`url(#${ah})`} />
+
+            {/* FairRootManager: the branches in memory */}
+            <text class="ttl" x={L.mgr.title.x} y={L.mgr.title.y}>
+              FairRootManager
+            </text>
+            <text class="sub" x={L.mgr.sub.x} y={L.mgr.sub.y}>
+              branches in memory
+            </text>
+
+            {/* the tasks, in the order of AddTask() */}
+            {L.tasks.map(([x, y], i) => (
+              <g class="task" data-box={`t${i + 1}`}>
+                <rect class="bx" x={x} y={y} width={L.taskW} height={TH} rx="2" />
+                <rect class="badge" x={x + 6} y={y + 5} width="16" height="16" rx="2" />
+                <text class="bn" x={x + 14} y={y + 17} text-anchor="middle">
+                  {i + 1}
+                </text>
+                <text class="nm" x={x + 30} y={y + 17.5}>
+                  {TASKS[i]}
+                </text>
+              </g>
+            ))}
+            {L.arrows.map((a) => (
+              <>
+                <path class="ln" d={`M${a.x} ${a.y1}V${a.y2}`} marker-end={`url(#${ah})`} />
+                <text class="call" x={a.x + 9} y={a.y1 + 14}>
+                  {a.reg ? (
+                    <>
+                      {a.t}(…, <tspan class="arg" data-arg={a.reg}>kTRUE</tspan>)
+                    </>
+                  ) : (
+                    a.t
+                  )}
+                </text>
+              </>
+            ))}
+
+            {/* the chips of the branches */}
+            {(['pt', 'eh', 'dg', 'ht'] as Key[]).map((k) => {
+              const [x, y] = L.chips[k];
+              return (
+                <g class="chip" data-chip={k}>
+                  <rect class="cbg" x={x} y={y} width={L.chipW} height={CH} rx="11" />
+                  <rect class="slot" x={x + 10} y={y + 7} width="8" height="8" />
+                  <text class="nm" x={x + 26} y={y + 15.5}>
+                    {NAMES[k]}
+                  </text>
+                  {k === 'eh' && (
+                    <text class="tag" x={x + L.chipW - 11} y={y + 15.5} text-anchor="end">
+                      FairRunAna
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+
+            {/* an input branch has no flag: the sink does not copy it */}
+            <text class="skip" x={L.skip.x} y={L.skip.y} text-anchor="middle">
+              not copied
+            </text>
+
+            {/* from the flag to the output file */}
+            {REG.map((k) => (
+              <>
+                <path class="ln" d={`M${L.chips[k][0] + L.chipW} ${cy(L, k)}H${L.flagX - FW / 2}`} />
+                <path class="ln post" data-post={k} d={line(L.post[k])} marker-end={L.rails ? undefined : `url(#${ah})`} />
+                <path class="stop" data-stop={k} d={`M${L.stop[k][0]} ${L.stop[k][1] - 6}V${L.stop[k][1] + 6}`} />
+              </>
+            ))}
+            {L.rails?.map((r) => (
+              <path class="ln rail" data-rail={r.on.join(' ')} d={r.d} marker-end={r.on.length === 3 ? `url(#${ah})` : undefined} />
+            ))}
+
+            {/* the output file */}
+            <g class="file" data-box="snk">
+              <path class="bx" d={doc(L.snk)} />
+              <path class="fold" d={fold(L.snk)} />
+              <text class="ttl" x={L.snk.title.x} y={L.snk.title.y}>
+                FairRootFileSink
+              </text>
+              {L.snk.sub.map((s) => (
+                <text class="sub" x={s.x} y={s.y}>
+                  {s.t}
+                </text>
+              ))}
+              {REG.map((k) => {
+                const e = L.snk.ent[k];
+                return (
+                  <g class="out" data-out={k}>
+                    <rect class="ph" x={e.x - 4} y={e.y - 14} width={NAMES[k].length * L.cw + 22} height="19" rx="2" />
+                    <rect class="slot" x={e.x} y={e.y - 9} width="8" height="8" />
+                    <text class="nm" x={e.x + 14} y={e.y}>
+                      {NAMES[k]}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+
+            {/* what the run does for each event */}
+            <g class="loop">
+              <text class="lane" x={L.loop.label.x} y={L.loop.label.y}>
+                EACH EVENT
+              </text>
+              <path class="lrail" d={L.loop.rail} />
+              {L.loop.steps.map((s, i) => (
+                <g class="lstep" data-step={i}>
+                  <circle class="lstop" cx={s.x} cy={L.loop.dir === 'v' ? s.y - 4 : s.y} r="4" />
+                  <text class="call lt" x={s.x + 11} y={L.loop.dir === 'v' ? s.y : s.y + 4}>
+                    {s.t}
+                    {s.more && <tspan class="more">{s.more}</tspan>}
+                  </text>
+                </g>
+              ))}
+            </g>
+          </g>
+
+          {/* the data of one event; below the flags, so that a token goes behind a flag and does not cover its text */}
+          <g class="toks" aria-hidden="true">
+            {Object.keys(L.toks).map((k) => (
+              <rect class="tok" data-tok={k} width="7" height="7" x="-20" y="-20" style="visibility:hidden" />
+            ))}
+          </g>
+
+          {/* the flags: switches */}
+          {/* in the order of the rows, so that Tab follows the picture */}
+          {[...REG]
+            .sort((a, b) => cy(L, a) - cy(L, b))
+            .map((k) => {
+              const y = cy(L, k);
+              return (
+                <g class="flag" data-flag={k} role="button" tabindex="0" aria-pressed="true" aria-label={`Persistent: ${NAMES[k]}`}>
+                  <rect class="hit" x={L.flagX - FW / 2 - 8} y={y - 16} width={FW + 16} height="32" />
+                  <rect class="ring" x={L.flagX - FW / 2 - 3} y={y - FH / 2 - 3} width={FW + 6} height={FH + 6} rx="5" />
+                  <rect class="fbg" x={L.flagX - FW / 2} y={y - FH / 2} width={FW} height={FH} rx="3" />
+                  <text class="ft" x={L.flagX} y={y + 4} text-anchor="middle">
+                    kTRUE
+                  </text>
+                </g>
+              );
+            })}
+        </svg>
+      );
+    })
+  }
+  <p class="io-cap" aria-live="polite">
+    <code>Fill()</code> writes <code>EventHeader.</code>, <code>FairTestDetectorDigi</code> and <code>FairTestDetectorHit</code> to the output
+    tree.
+  </p>
+</div>
+
+<script>
+  type P = [number, number];
+  type Reg = 'eh' | 'dg' | 'ht';
+  const KEYS: Reg[] = ['eh', 'dg', 'ht'];
+  const NAME: Record<Reg, string> = { eh: 'EventHeader.', dg: 'FairTestDetectorDigi', ht: 'FairTestDetectorHit' };
+  // One event, in seconds: ReadEvent(i), FillEventHeader(), Exec() of task 1 and task 2, Fill().
+  const T = 5.85;
+  const MOVES: { k: string; t0: number; d: number; reg?: Reg }[] = [
+    { k: 'read', t0: 0.2, d: 0.5 },
+    { k: 't1in', t0: 1.4, d: 0.4 },
+    { k: 't1out', t0: 1.95, d: 0.4 },
+    { k: 't2in', t0: 2.65, d: 0.4 },
+    { k: 't2out', t0: 3.2, d: 0.4 },
+    { k: 'f-eh', t0: 4.0, d: 0.7, reg: 'eh' },
+    { k: 'f-dg', t0: 4.0, d: 0.7, reg: 'dg' },
+    { k: 'f-ht', t0: 4.0, d: 0.7, reg: 'ht' },
+  ];
+  const ease = (u: number) => u * u * (3 - 2 * u);
+  // The point at the part u (0 … 1) of the length of a polyline.
+  const along = (p: P[], u: number): P => {
+    const seg = p.slice(1).map((q, i) => Math.hypot(q[0] - p[i][0], q[1] - p[i][1]));
+    let d = u * seg.reduce((a, b) => a + b, 0);
+    for (let i = 0; i < seg.length; i++) {
+      if (d <= seg[i] || i === seg.length - 1) {
+        const f = seg[i] ? Math.min(1, d / seg[i]) : 0;
+        return [p[i][0] + (p[i + 1][0] - p[i][0]) * f, p[i][1] + (p[i + 1][1] - p[i][1]) * f];
+      }
+      d -= seg[i];
+    }
+    return p[p.length - 1];
+  };
+  const list = (a: string[]) => (a.length < 2 ? a.join('') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+  const code = (s: string) => `<code>${s}</code>`;
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-io')) {
+    const on: Record<Reg, boolean> = { eh: true, dg: true, ht: true };
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const cap = root.querySelector<HTMLElement>('.io-cap')!;
+
+    const caption = () => {
+      const w = KEYS.filter((k) => on[k]).map((k) => code(NAME[k]));
+      const m = KEYS.filter((k) => !on[k]).map((k) => code(NAME[k]));
+      let s = w.length ? `${code('Fill()')} writes ${list(w)} to the output tree.` : `The output tree ${code('cbmsim')} has no branches.`;
+      if (m.length) s += ` ${list(m)} ${m.length > 1 ? 'stay' : 'stays'} in memory only.`;
+      if (!on.dg) s += ` ${code('FairTestDetectorRecoTask')} still reads ${code('FairTestDetectorDigi')}.`;
+      if (!on.eh) s += ` To do this for ${code('EventHeader.')}, call ${code('SetEventHeaderPersistence(kFALSE)')} on the run.`;
+      return s;
+    };
+
+    const render = () => {
+      for (const k of KEYS) {
+        root.querySelectorAll<SVGGElement>(`[data-flag="${k}"]`).forEach((g) => {
+          g.setAttribute('aria-pressed', String(on[k]));
+          g.classList.toggle('off', !on[k]);
+          g.querySelector('text')!.textContent = on[k] ? 'kTRUE' : 'kFALSE';
+        });
+        root.querySelectorAll(`[data-post="${k}"], [data-stop="${k}"], [data-out="${k}"], [data-arg="${k}"]`).forEach((e) => e.classList.toggle('off', !on[k]));
+        root.querySelectorAll(`[data-arg="${k}"]`).forEach((e) => (e.textContent = on[k] ? 'kTRUE' : 'kFALSE'));
+      }
+      root.querySelectorAll<SVGPathElement>('[data-rail]').forEach((e) => {
+        e.classList.toggle('off', !(e.dataset.rail!.split(' ') as Reg[]).some((k) => on[k]));
+      });
+      cap.innerHTML = caption();
+    };
+    const flip = (g: Element | null) => {
+      const k = (g as SVGGElement | null)?.dataset.flag as Reg | undefined;
+      if (!k) return;
+      on[k] = !on[k];
+      render();
+    };
+    root.addEventListener('click', (e) => flip((e.target as Element).closest('[data-flag]')));
+    root.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const g = (e.target as Element).closest('[data-flag]');
+      if (!g) return;
+      e.preventDefault();
+      flip(g);
+    });
+    render();
+
+    // No motion: show the end of one event, with the data in all branches.
+    if (reduce || !('IntersectionObserver' in window)) {
+      root.classList.add('still');
+      continue;
+    }
+
+    for (const svg of root.querySelectorAll<SVGSVGElement>('svg.io')) {
+      const geo: Record<string, P[]> = JSON.parse(svg.dataset.geo!);
+      const tok = new Map<string, SVGRectElement>();
+      svg.querySelectorAll<SVGRectElement>('[data-tok]').forEach((e) => tok.set(e.dataset.tok!, e));
+      const found = new Map<string, SVGElement[]>();
+      const all = (s: string) => {
+        if (!found.has(s)) found.set(s, [...svg.querySelectorAll<SVGElement>(s)]);
+        return found.get(s)!;
+      };
+      const box = (n: string) => all(`[data-box="${n}"]`);
+      const chip = (k: string) => all(`[data-chip="${k}"]`);
+      const step = (n: number) => all(`[data-step="${n}"]`);
+      const set = (els: SVGElement[], c: string, v: boolean) => els.forEach((e) => e.classList.toggle(c, v));
+      const out = (k: Reg) => all(`[data-out="${k}"]`);
+
+      const draw = (t: number) => {
+        const w = (a: number, b: number) => t >= a && t < b;
+        // ReadEvent(i): the source reads the entry into FairTestDetectorPoint.
+        set(box('src'), 'on', w(0.1, 1.3));
+        set(step(0), 'on', w(0.1, 0.8));
+        set(chip('pt'), 'has', w(0.7, 5.55));
+        // FillEventHeader(): the source fills the event header of the run, EventHeader.
+        set(step(1), 'on', w(0.85, 1.3));
+        set(chip('eh'), 'rd', w(0.85, 1.3));
+        set(chip('eh'), 'has', w(0.95, 5.55));
+        // ExecuteTask(""): Exec() of task 1, then of task 2.
+        set(step(2), 'on', w(1.35, 3.75));
+        set(box('t1'), 'on', w(1.35, 2.5));
+        set(chip('pt'), 'rd', w(1.4, 1.85));
+        set(chip('dg'), 'has', w(2.35, 5.55));
+        set(box('t2'), 'on', w(2.6, 3.75));
+        set(chip('dg'), 'rd', w(2.65, 3.1));
+        set(chip('ht'), 'has', w(3.6, 5.55));
+        // Fill(): the sink writes the branches with the flag kTRUE.
+        set(step(3), 'on', w(3.95, 5.05));
+        set(box('snk'), 'on', w(3.95, 5.05));
+        for (const k of KEYS) set(out(k), 'got', on[k] && w(4.7, 5.55));
+        for (const m of MOVES) {
+          const e = tok.get(m.k);
+          if (!e) continue;
+          const u = (t - m.t0) / m.d;
+          if (u < 0 || u >= 1 || (m.reg && !on[m.reg])) {
+            e.style.visibility = 'hidden';
+            continue;
+          }
+          const [x, y] = along(geo[m.k], ease(u));
+          e.style.visibility = '';
+          e.setAttribute('x', (x - 3.5).toFixed(1));
+          e.setAttribute('y', (y - 3.5).toFixed(1));
+        }
+      };
+
+      let t = 0;
+      let last = 0;
+      let raf = 0;
+      let running = false;
+      const frame = (ts: number) => {
+        if (!running) return;
+        const dt = Math.min(0.05, (ts - (last || ts)) / 1000);
+        last = ts;
+        t = (t + dt) % T;
+        draw(t);
+        raf = requestAnimationFrame(frame);
+      };
+      new IntersectionObserver(
+        (es) => {
+          for (const e of es) {
+            if (e.isIntersecting && !running) {
+              running = true;
+              last = 0;
+              raf = requestAnimationFrame(frame);
+            } else if (!e.isIntersecting && running) {
+              running = false;
+              cancelAnimationFrame(raf);
+            }
+          }
+        },
+        { threshold: 0.3 }
+      ).observe(svg);
+    }
+  }
+</script>
+
+<style>
+  .fr-io {
+    container-type: inline-size;
+    min-width: 0;
+    border: 1px solid var(--fr-rule);
+    background: var(--fr-paper);
+    border-radius: 6px;
+    padding: 0.75rem 0.75rem 0.6rem;
+    margin-block: 1.5rem;
+  }
+  .io-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.25rem 0.75rem;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+    color: var(--fr-ink-3);
+  }
+  .io-head code,
+  .io-cap :global(code) {
+    font-family: var(--fr-font-mono);
+    font-size: 0.92em;
+    color: var(--fr-ink);
+    background: var(--fr-paper-2);
+    border: 1px solid var(--fr-rule);
+    border-radius: 3px;
+    padding: 0.02em 0.3em;
+    overflow-wrap: anywhere;
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-top: 0.6rem;
+  }
+  .io-narrow {
+    display: none;
+    max-width: 400px;
+    margin-inline: auto;
+  }
+  @container (max-width: 629.98px) {
+    .io-wide {
+      display: none;
+    }
+    .io-narrow {
+      display: block;
+    }
+  }
+  .io-cap {
+    margin: 0.55rem 0.15rem 0;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--fr-ink-2);
+    min-height: 3.1em;
+  }
+
+  /* Text */
+  .lane {
+    font: 650 11.5px var(--fr-font-body);
+    letter-spacing: 0.12em;
+    fill: var(--fr-ink-3);
+  }
+  .ttl {
+    font: 700 12.5px var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .sub {
+    font: 400 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .ent {
+    font: 400 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink-2);
+  }
+  .ent.used {
+    fill: var(--fr-ink);
+    font-weight: 600;
+  }
+  .nm {
+    font: 600 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .tag {
+    font: 400 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .call {
+    font: 500 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink-2);
+  }
+  .skip {
+    font: italic 400 11.5px var(--fr-font-body);
+    fill: var(--fr-ink-3);
+  }
+  .arg {
+    font-weight: 700;
+    fill: var(--fr-accent-ink);
+  }
+  .arg.off {
+    fill: var(--fr-ink-2);
+  }
+  .io-narrow :is(.ttl) {
+    font-size: 13px;
+  }
+  .io-narrow :is(.sub, .ent, .nm, .call, .tag, .bn, .skip) {
+    font-size: 12px;
+  }
+  .io-narrow .lane {
+    font-size: 12px;
+  }
+
+  /* Boxes, chips and lines */
+  .bx {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-2);
+    stroke-width: 1.2;
+    transition:
+      fill 0.25s,
+      stroke 0.25s;
+  }
+  .file .bx {
+    fill: var(--fr-paper-2);
+  }
+  .fold {
+    fill: none;
+    stroke: var(--fr-ink-2);
+    stroke-width: 1;
+  }
+  :is(.file, .task).on .bx {
+    fill: var(--fr-saffron-tint);
+    stroke: var(--fr-bar);
+  }
+  .badge {
+    fill: var(--fr-paper-2);
+    stroke: var(--fr-ink-3);
+    stroke-width: 1;
+  }
+  .bn {
+    font: 700 11.5px var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .cbg {
+    fill: var(--fr-paper);
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.2;
+    transition: stroke 0.2s;
+  }
+  .chip.rd .cbg {
+    stroke: var(--fr-ink);
+    stroke-width: 1.8;
+  }
+  .slot {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-3);
+    stroke-width: 1;
+    transition: fill 0.2s;
+  }
+  :is(.chip.has, .out.got, .still .chip, .still .out) .slot {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+  .ln {
+    fill: none;
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.2;
+    transition: opacity 0.3s;
+  }
+  .ah {
+    fill: var(--fr-ink-3);
+  }
+  .ln.off {
+    opacity: 0;
+  }
+  .stop {
+    stroke: var(--fr-ink-3);
+    stroke-width: 2;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .stop.off {
+    opacity: 1;
+  }
+  .out {
+    transition: opacity 0.3s;
+  }
+  .ph {
+    fill: none;
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .out.off :is(.slot, .nm) {
+    opacity: 0;
+  }
+  .out.off .ph {
+    opacity: 1;
+  }
+  .out :is(.slot, .nm) {
+    transition: opacity 0.3s;
+  }
+
+  /* Each event */
+  .lrail {
+    fill: none;
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.2;
+  }
+  .lstop {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.2;
+    transition: fill 0.2s;
+  }
+  .lstep.on .lstop {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+  .lt {
+    fill: var(--fr-ink);
+  }
+  .lstep.on .lt {
+    fill: var(--fr-accent-ink);
+  }
+  .more {
+    font-family: var(--fr-font-body);
+    font-weight: 400;
+    fill: var(--fr-ink-2);
+  }
+
+  /* Flags */
+  .flag,
+  .flag:focus-visible {
+    cursor: pointer;
+    outline: none;
+  }
+  .hit {
+    fill: transparent;
+  }
+  .ring {
+    fill: none;
+    stroke: var(--fr-link);
+    stroke-width: 2;
+    opacity: 0;
+  }
+  .flag:focus-visible .ring {
+    opacity: 1;
+  }
+  .fbg {
+    fill: var(--fr-saffron-tint);
+    stroke: var(--fr-bar);
+    stroke-width: 1.2;
+    transition:
+      fill 0.2s,
+      stroke 0.2s;
+  }
+  .ft {
+    font: 700 11.5px var(--fr-font-mono);
+    fill: var(--fr-accent-ink);
+    pointer-events: none;
+  }
+  .io-narrow .ft {
+    font-size: 12px;
+  }
+  .flag.off .fbg {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-3);
+  }
+  .flag.off .ft {
+    fill: var(--fr-ink-2);
+  }
+  .flag:hover .fbg {
+    stroke: var(--fr-link);
+  }
+
+  .tok {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+    stroke-width: 1;
+    pointer-events: none;
+  }
+
+  @media (max-width: 30rem) {
+    .fr-io {
+      padding: 0.6rem 0.4rem 0.5rem;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-io * {
+      transition: none !important;
+    }
+  }
+</style>

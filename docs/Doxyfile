@@ -1,0 +1,52 @@
+# Doxygen reads the FairRoot sources for the API and source pages of the site.
+# It writes XML only. scripts/api.mjs turns the XML into page data.
+# The library (fairroot/) gives the API pages. The examples and the templates
+# are read too, so that their source pages link to the API pages.
+
+PROJECT_NAME           = FairRoot
+OUTPUT_DIRECTORY       = build/doxygen
+INPUT                  = ../fairroot ../examples ../templates
+FILE_PATTERNS          = *.h *.cxx *.C *.c *.cpp *.cc
+EXTENSION_MAPPING      = C=C++
+RECURSIVE              = YES
+STRIP_FROM_PATH        = ..
+FULL_PATH_NAMES        = YES
+
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_PROGRAMLISTING     = YES
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_PACKAGE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = NO
+EXTRACT_ANON_NSPACES   = NO
+HIDE_FRIEND_COMPOUNDS  = YES
+BUILTIN_STL_SUPPORT    = YES
+INLINE_INHERITED_MEMB  = NO
+
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = NO
+SEARCH_INCLUDES        = YES
+INCLUDE_PATH           = ..
+# The ROOT macros add dictionary members to a class. They are not API.
+# __attribute__ hides the members after it (FairLogger.h). The interceptor macro of
+# MCStepInterceptor.cxx declares a second FairMCApplication class.
+PREDEFINED             = "ClassDef(name,id)=" \
+                         "ClassDefOverride(name,id)=" \
+                         "ClassDefNV(name,id)=" \
+                         "ClassImp(name)=" \
+                         "__attribute__(x)=" \
+                         "DECLARE_INTERCEPT_SYMBOLS(APP)="
+
+QUIET                  = YES
+WARNINGS               = NO
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = NO
+WARN_IF_INCOMPLETE_DOC = NO
+WARN_NO_PARAMDOC       = NO
+HAVE_DOT               = NO
+CLASS_GRAPH            = NO

@@ -1,0 +1,196 @@
+---
+title: 'MQ: LMD sampler and unpacker'
+description: 'Three FairMQ devices unpack the LMD file of the MBS tutorial: a sampler sends MBS subevents, an unpacker makes FairMBSRawItem objects, and a sink writes them to a ROOT file.'
+sidebar:
+  order: 15
+code: [fairroot/basemq/devices/FairMQLmdSampler.h, fairroot/basemq/devices/FairMQUnpacker.h, examples/MQ/Lmd/FairMBSUnpacker.cxx, examples/MQ/Lmd/runLmdSampler.cxx, examples/MQ/Lmd/runMBSMQUnpacker.cxx, examples/MQ/Lmd/runMBSSink.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+This example unpacks the LMD file of the [MBS tutorial](/examples/mbs-tutorial/) with three FairMQ
+devices instead of `FairRunOnline`. A sampler reads the file and sends the data of the selected MBS
+subevents. An unpacker converts the data into `FairMBSRawItem` objects, and a sink writes them into
+a ROOT file.
+
+## The devices
+
+| Device | Program | Class | Channels |
+| --- | --- | --- | --- |
+| Sampler | `ex-lmd-sampler` | [`FairMQLmdSampler`](/api/FairMQLmdSampler/) | `ToMBSUnpacker`: push, binds port 5565 |
+| Unpacker | `ex-lmd-mbs-unpacker` | [`FairMQUnpacker<FairMBSUnpacker>`](/api/FairMQUnpacker/) | `ToMBSUnpacker`: pull, connects to port 5565. `data`: push, connects to port 5570. |
+| Sink | `ex-lmd-mbs-sink` | `MBSSink` in [runMBSSink.cxx](/source/examples/MQ/Lmd/runMBSSink.cxx/#L31-L77) | `data`: pull, binds port 5570 |
+
+`FairMQLmdSampler` and `FairMQUnpacker` are header-only devices of `FairRoot::BaseMQ`. The example
+adds the unpacker class `FairMBSUnpacker`, the sink and the three programs.
+
+## Files
+
+| File | Content |
+| --- | --- |
+| [`runLmdSampler.cxx`](/source/examples/MQ/Lmd/runLmdSampler.cxx/) | The program of the sampler |
+| [`runMBSMQUnpacker.cxx`](/source/examples/MQ/Lmd/runMBSMQUnpacker.cxx/) | The program of the unpacker |
+| [`runMBSSink.cxx`](/source/examples/MQ/Lmd/runMBSSink.cxx/) | The class `MBSSink` and its program |
+| [`FairMBSUnpacker.h`](/source/examples/MQ/Lmd/FairMBSUnpacker.h/), [`FairMBSUnpacker.cxx`](/source/examples/MQ/Lmd/FairMBSUnpacker.cxx/) | The unpacker of the library `ExLmd` |
+| [`LmdLinkDef.h`](/source/examples/MQ/Lmd/LmdLinkDef.h/) | The ROOT dictionary of `FairMBSUnpacker` |
+| [`startMQExLmd.sh.in`](/repo/examples/MQ/Lmd/startMQExLmd.sh.in) | The template of the start script |
+| [`CMakeLists.txt`](/repo/examples/MQ/Lmd/CMakeLists.txt) | The library, the three programs and the start script |
+
+Each program includes [FairRunFairMQDevice.h](/source/fairroot/fairmq/FairRunFairMQDevice.h/#L23-L61).
+With this header, the `main()` of FairMQ calls two functions of the program: `addCustomOptions()`
+adds the options of the device, and `fairGetDevice()` makes the device. See
+[Write the main function](/online/fairmq-devices/#write-the-main-function).
+
+`FairMBSUnpacker` decodes the data as `FairMBSUnpack` of the MBS tutorial does. Its `Register()` is
+empty, and its `GetOutputData()` returns the array of items
+([FairMBSUnpacker.h](/source/examples/MQ/Lmd/FairMBSUnpacker.h/#L46-L50)). The sink uses
+`FairMBSRawItem` from the library `ExMbs` of the MBS tutorial.
+
+## Build and run
+
+CMake builds the example only if it finds FairMQ and Boost, and if `BUILD_MBS` and `BUILD_ONLINE`
+are on ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L43-L56)). CMake looks for FairMQ
+only if `BUILD_BASEMQ` is on, which is the default ([CMakeLists.txt](/repo/CMakeLists.txt#L202-L204)).
+`BUILD_MBS` is off by default. The MBS code is deprecated, and the [changelog](/repo/CHANGELOG.md)
+plans to remove MbsAPI in the next major release.
+
+<Steps>
+
+1. Configure FairRoot with the option `-DBUILD_MBS=ON`, and build it.
+
+2. Start the script in the build folder of the example:
+
+   ```sh
+   cd <build>/examples/MQ/Lmd
+   ./startMQExLmd.sh
+   ```
+
+3. Wait until the sampler logs `Sent <n> messages.` in its window.
+
+4. Stop the three devices with the key `q` or with Ctrl-C in their windows.
+
+5. Close the three windows.
+
+</Steps>
+
+The sink writes the output file `ex-lmd-output.root` into the same build folder. CMake writes the
+script and the programs into this folder
+([CMakeLists.txt](/repo/examples/MQ/Lmd/CMakeLists.txt#L9-L56)). The script uses absolute paths.
+Thus you can start it from any folder. It needs `xterm`. The example has no test.
+
+The script starts each device in an `xterm` window:
+
+<Snippet file="examples/MQ/Lmd/startMQExLmd.sh.in" start='LMDFILE="@CMAKE_SOURCE_DIR@' end="xterm -geometry 80x30+1000+0" lang="sh" title="startMQExLmd.sh.in" />
+
+The sampler and the unpacker get the five values of the MBS tutorial: 94, 9400, 12, 0 and 3. The
+unpacker gets its two channels in one `--channel-config` option.
+
+## The sampler
+
+`InitTask()` reads the options, adds the file and opens it:
+
+<Snippet file="fairroot/basemq/devices/FairMQLmdSampler.h" start="void InitTask() override" title="FairMQLmdSampler.h" />
+
+The options have no default values
+([runLmdSampler.cxx](/source/examples/MQ/Lmd/runLmdSampler.cxx/#L20-L32)):
+
+| Option | Meaning |
+| --- | --- |
+| `--input-file-name` | The LMD file |
+| `--lmd-type`, `--lmd-sub-type`, `--lmd-proc-id`, `--lmd-sub-crate`, `--lmd-control` | The five values of the subevents to send |
+| `--lmd-chan-name` | The channel for the data of these subevents |
+
+[`Run()`](/api/FairMQLmdSampler/#Run) calls [`ReadEvent()`](/api/FairMQLmdSampler/#ReadEvent)
+until the file ends or the state of the device changes. For each subevent with the five values,
+`ReadEvent()` sends a message with two parts:
+
+<Snippet file="fairroot/basemq/devices/FairMQLmdSampler.h" start="SubEvtKey key(setype, sesubtype, seprocid, sesubcrate, secontrol);" end="fMsgCounter++;" title="FairMQLmdSampler.h" />
+
+- The first part holds the number of 32-bit words of the data. The second part holds the data.
+- The sampler compares all five values. A negative subcrate does not select all subcrates, as it
+  does in [`FairMbsSource`](/online/mbs/#how-a-source-selects-the-unpackers).
+- The sampler sends no MBS headers.
+- After the last event, the sampler logs `Sent <n> messages.`, and `Run()` returns. The sampler
+  sends no message at the end of the data.
+
+:::caution[Size and lifetime of the data part]
+The second part has a size of `sebuflength` bytes, but `sebuflength` is a number of 32-bit words.
+The unpacker reads `sebuflength` words, which is four times the size of the part. Also, the part
+does not copy the data. It points into the read buffer of MbsAPI, and its deleter does nothing.
+MbsAPI can write new data into this buffer before the transport sends the part. A correct sampler
+makes the part with `sebuflength * sizeof(int)` bytes and copies the data into it.
+:::
+
+## The unpacker
+
+[`InitTask()`](/api/FairMQUnpacker/#InitTask) reads the five values, `--lmd-chan-name` and
+`--out-chan-name`. It checks that the input channel exists. Then it makes the unpacker with
+`new UnpackerType(type, subType, procId, subCrate, control)`
+([FairMQUnpacker.h](/source/fairroot/basemq/devices/FairMQUnpacker.h/#L71-L106)). It does not call
+`Init()` of the unpacker.
+
+<Snippet file="fairroot/basemq/devices/FairMQUnpacker.h" start="void Run() override" title="FairMQUnpacker.h" />
+
+For each subevent, [`Run()`](/api/FairMQUnpacker/#Run) receives the two parts and calls
+`DoUnpack()` with the data and the size. It serializes the output of `GetOutputData()` into the
+message, sends the message and calls `Reset()` of the unpacker. The second template argument selects
+the serializer. The default is [`RootSerializer`](/api/RootSerializer/), which writes the object
+into a `TMessage`.
+
+Thus your unpacker class needs a constructor with the five values, `DoUnpack()`, `Reset()` and
+`GetOutputData()`. The program of this example makes the device for `FairMBSUnpacker`:
+
+<Snippet file="examples/MQ/Lmd/runMBSMQUnpacker.cxx" start="std::unique_ptr<fair::mq::Device> fairGetDevice" title="runMBSMQUnpacker.cxx" />
+
+## The sink
+
+<Snippet file="examples/MQ/Lmd/runMBSSink.cxx" start="struct MBSSink : fair::mq::Device" title="runMBSSink.cxx" />
+
+- `InitTask()` opens the output file with `RECREATE` and makes the branch `FairMBSRawItem` of the
+  tree `mbstree`.
+- `Run()` deserializes each message into a new `TClonesArray` and fills the tree. At the end, it
+  logs `Received <n> messages!`.
+- `Reset()` writes the tree.
+
+The option `--in-chan-name` has the default value `data`. The option `--output-file-name` has no
+default value ([runMBSSink.cxx](/source/examples/MQ/Lmd/runMBSSink.cxx/#L79-L86)).
+
+## Stop the devices
+
+After the last event, `Run()` of the sampler returns, and FairMQ puts the device into the state
+READY. The unpacker and the sink do not know that the data ended, so they wait for more messages.
+
+Stop each device with the key `q` in its window, or with Ctrl-C. FairMQ then runs the shutdown
+sequence of the device, which calls `Reset()`. Thus the sink writes `mbstree` into the output file.
+The script starts `xterm` with `-hold`, so the windows stay open after the devices end. See the
+[FairMQ documentation](https://fairrootgroup.github.io/FairMQ/) for the states of a device.
+
+## Compare with the MBS tutorial
+
+| | MBS tutorial | This example |
+| --- | --- | --- |
+| Processes | One ROOT macro | Three devices |
+| Input | `FairLmdSource` | `FairMQLmdSampler` |
+| Selection of the subevents | Each unpacker with the five values. A negative subcrate selects all subcrates. | One set of five values, compared exactly |
+| Unpacker | `FairMBSUnpack` registers the branch `MBSRawItem` | `FairMBSUnpacker` gives its array to the device |
+| Output | Histograms over HTTP, and `output.root` | `ex-lmd-output.root` with the tree `mbstree` |
+
+## Problems that can occur
+
+- **The sampler ends with the error `FairMQLmdSampler::InitTask: No files provided`:** the input
+  file does not exist. The sampler also logs `FairMQLmdSampler: file '<file>' not found`.
+- **The sampler ends with `FairMQLmdSampler::InitTask: cannot open file <file>`:** MbsAPI could not
+  open the file. For example, MbsAPI does not open a path of 128 characters or more. See
+  [Read MBS and LMD data](/online/mbs/#read-lmd-files-with-fairlmdsource).
+- **The unpacker ends with `MQ-channel name '<name>' does not exist`:** `--lmd-chan-name` names no
+  channel of `--channel-config`.
+- **The unpacked values are wrong, or the unpacker crashes:** see the caution about the data part.
+- **`ex-lmd-output.root` has no tree:** the sink did not call `Reset()`. Stop the sink with `q` or
+  Ctrl-C before you close its window.
+
+## Related pages
+
+- [MBS tutorial](/examples/mbs-tutorial/): the same file and the same decoding with `FairRunOnline`.
+- [Read MBS and LMD data](/online/mbs/): MbsAPI, the LMD files and the five values of a subevent.
+- [Online processing and FairMQ](/online/overview/): the libraries and the other MQ examples.

@@ -1,0 +1,276 @@
+---
+title: 'Parameters over FairMQ'
+description: 'The parameter server parmq-server sends parameter containers from its runtime database to FairMQ devices for a run ID, and stores the containers that simulation devices send.'
+sidebar:
+  order: 6
+code: [fairroot/parmq/ParameterMQServer.h, fairroot/parmq/ParameterMQServer.cxx, fairroot/parmq/runParameterMQServer.cxx,
+  examples/MQ/parameters/FairMQExParamsClient.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h,
+  examples/MQ/pixelDetector/src/devices/FairMQSimDevice.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+A task needs the parameter containers that belong to the run ID of its events. In a FairMQ
+topology, a device can get them without a parameter file of its own. The parameter server
+`parmq-server` holds one runtime database for all devices. A device sends the name of a parameter
+container and a run ID, and the server replies with the container for this run ID. Simulation
+devices also get their run ID from the server and send their containers to it. The server then
+writes them into a parameter file.
+
+## The server and its channels
+
+The program `parmq-server` runs the device [`ParameterMQServer`](/api/ParameterMQServer/) of the
+library `FairRoot::ParMQ`. CMake builds both with the option `BUILD_BASEMQ` (default `ON`) and puts
+the program into `<build>/bin/` ([CMakeLists.txt](/repo/fairroot/parmq/CMakeLists.txt)). The server
+does two jobs, each on its own channel:
+
+| Channel | Option for its name | The device sends | The server replies |
+| --- | --- | --- | --- |
+| Request channel | `--channel-name` | `<container name>,<run ID>` | The container, serialized with [`RootSerializer`](/api/RootSerializer/), or an empty message |
+| Update channel | `--update-channel-name` | A message shorter than 20 bytes, or a parameter container | `<run ID>_<device index>`, or `SUCCESS` or `FAIL` |
+
+Both channels use the pattern request and reply: the server sends each reply on the channel of the
+request. In the scripts of the examples, the server binds a socket of the type `rep`, and each
+device connects a socket of the type `req`. In [`Init()`](/api/ParameterMQServer/#Init), the
+server registers a data callback for each channel that has a name:
+
+<Snippet file="fairroot/parmq/ParameterMQServer.cxx" start="void ParameterMQServer::Init()" />
+
+A channel without a name gets no callback. One server can have both channels.
+
+### Options
+
+The main function adds these options. Give the channels themselves with the FairMQ options, for
+example `--channel-config`.
+
+<Snippet file="fairroot/parmq/runParameterMQServer.cxx" start="void addCustomOptions" title="runParameterMQServer.cxx" />
+
+- An empty input name gives no input. Without an update channel, an empty output name gives no
+  output.
+- With an update channel, always give `--output-name`. The server opens this file for each
+  container, and `FairParRootFileIo::open()` calls `Fatal()` of ROOT if it cannot open the file
+  ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L136-L146)).
+- An input has the type `ROOT` or `ASCII`. The server ignores an input with another type, and it
+  logs nothing. The output has the type `ROOT` only.
+- The help text of `--channel-name` says "Output channel name". It is the name of the request
+  channel: the server receives the requests and sends the replies on it.
+
+:::caution[Always give --channel-name]
+The constructor sets the name of the request channel to `data`, but `Init()` overwrites it with
+the value of `--channel-name`. The default of this option is empty
+([runParameterMQServer.cxx](/source/fairroot/parmq/runParameterMQServer.cxx/#L32)). Without the
+option, the server answers no request, and each client waits for its reply.
+:::
+
+### Inputs and the output
+
+[`InitTask()`](/api/ParameterMQServer/#InitTask) reads the options and gives the files to the
+runtime database. This is the first input:
+
+<Snippet file="fairroot/parmq/ParameterMQServer.cxx" start="// Set first input" end="^        }$" />
+
+The second input works in the same way, with
+[`setSecondInput()`](/api/FairRuntimeDb/#setSecondInput). The server opens a ROOT file with the
+option `UPDATE` and an ASCII file with `in`. When both inputs have a container, the container comes
+from the first input. [`FairParSet::init()`](/api/FairParSet/#init) tries the second input only if
+the first input fails ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L55-L76)).
+
+The output depends on the update channel:
+
+- Without an update channel, `InitTask()` sets the ROOT file `--output-name` as the output of the
+  runtime database and calls [`saveOutput()`](/api/FairRuntimeDb/#saveOutput) once. When the run
+  ID of a request changes, `initContainers()` writes the containers of the previous run ID to the
+  output ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L464-L471)).
+- With an update channel, `InitTask()` sets no output. The server opens the output for each
+  container that it gets, see [Store the containers of a simulation](#store-the-containers-of-a-simulation).
+
+If the environment variable `DDS_SESSION_ID` is set, the server puts the session ID into the name of
+the output. It replaces the last five characters, thus `sim.pars.root` becomes
+`sim.pars.<session ID>.root` ([ParameterMQServer.cxx](/source/fairroot/parmq/ParameterMQServer.cxx/#L67-L73)).
+Give an output name that ends with `.root`.
+
+## Request a container
+
+A request is a string: the name of the container, a comma and the run ID, for example
+`FairMQExParamsParOne,2000`. [`ProcessRequest()`](/api/ParameterMQServer/#ProcessRequest) answers
+it:
+
+<Snippet file="fairroot/parmq/ParameterMQServer.cxx" start="bool ParameterMQServer::ProcessRequest" />
+
+The server does these steps for each request:
+
+1. It splits the string at the last comma. It converts the text after the comma to the run ID with
+   `std::stoi()`.
+2. [`getContainer()`](/api/FairRuntimeDb/#getContainer) returns the container from the runtime
+   database. If the container is not there yet, a container factory makes it.
+3. [`initContainers()`](/api/FairRuntimeDb/#initContainers) fills all containers of the runtime
+   database for the run ID, not only the requested container.
+4. The server logs the container with `print()`. Then it serializes the container with
+   `RootSerializer` and sends it on the request channel.
+
+If no container factory knows the name, the server sends an empty message. Thus the client gets a
+reply, and the cycle of request and reply continues.
+
+### When a request fails
+
+| Case | What the server does |
+| --- | --- |
+| The request has no comma, or no number after the last comma | `std::stoi()` throws `std::invalid_argument`. The exception leaves the data callback, and the device goes to the FairMQ state `ERROR`. |
+| No container factory knows the name | `getContainer()` logs `Container <name> not created!`. The server logs `Parameter uninitialized! Sending empty message back` and sends an empty message. |
+| `initContainers()` cannot fill a container for the run ID | The server logs `ParameterMQServer::ProcessRequest: fRtdb->initContainers failed`. It sends no reply, and the data callback returns `false`. The server leaves `RUNNING`, and the client waits for its reply. |
+
+A ROOT input has no version of a container for a run ID that the file does not contain
+([FairDetParRootFileIo.cxx](/source/fairroot/parbase/FairDetParRootFileIo.cxx/#L111-L130)). If the
+other input does not have the container either, `initContainers()` fails. Because
+`initContainers()` fills all containers, a container from an earlier request can also make a
+request fail. See [Device states](https://fairrootgroup.github.io/FairMQ/concepts/states/) in the
+FairMQ documentation for `ERROR` and the end of `RUNNING`.
+
+:::caution[The server must know the container factory]
+`getContainer()` asks the registered container factories for the name. A factory registers itself
+in its constructor ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)), and
+the factories of the examples are static objects in their libraries. `parmq-server` links only
+`FairRoot::ParMQ` and `FairRoot::FairMQ`. Through `FairRoot::Base`, it has the factory of
+`FairBaseParSet` and `FairGeoParSet` ([FairBaseContFact.cxx](/source/fairroot/base/sim/FairBaseContFact.cxx/#L24-L38)).
+The server code loads no other library. A ROOT input brings the library in: `InitTask()` opens the
+file ([ParameterMQServer.cxx](/source/fairroot/parmq/ParameterMQServer.cxx/#L75-L87)), and ROOT
+loads the library of each class in the file through its rootmap file. The folder of the library
+must be in `LD_LIBRARY_PATH`, which `config.sh` sets. An ASCII input loads no library. With only
+ASCII inputs, the server sends an empty reply for each request of your containers.
+:::
+
+## Write a client
+
+The client of the example [MQ: parameter server](/examples/mq-parameters/) sends one request in each
+call of `ConditionalRun()`. Its channel `data` has the type `req`:
+
+<Snippet file="examples/MQ/parameters/FairMQExParamsClient.cxx" start="bool FairMQExParamsClient::ConditionalRun()" />
+
+- A socket of the type `req` must alternate `Send()` and `Receive()` (ZeroMQ behavior). Thus the
+  client sends one request and waits for its reply.
+- An empty reply means that the server has no container with this name.
+- [`Deserialize()`](/api/RootSerializer/#Deserialize) makes a new object. The client owns it and
+  deletes it.
+
+The received object is a copy of the container of the server. It has the persistent data members:
+name, title, context, author, description and the data members of your class. The transient
+members of `FairParSet` (comment `//!`), for example the input versions and the flag `changed`, keep
+the values of the default constructor ([FairParSet.h](/source/fairroot/parbase/FairParSet.h/#L20-L29)).
+
+:::caution[Deserialize() deletes the old object]
+`RootSerializer::Deserialize(msg, T*& output)` deletes the object of `output` before it reads the
+message ([RootSerializer.h](/source/fairroot/basemq/policies/Serialization/RootSerializer.h/#L59-L65)).
+If this object belongs to somebody else, set the pointer to `nullptr` first.
+:::
+
+### Get the parameters in a task processor
+
+The task processor of the [pixel detector example](/examples/mq-pixel-detector/) asks for its
+containers each time the run ID of the events changes. With `--static-pars true`, it asks only once,
+at the first message. For each container in its list, it sends a request on the channel
+`--par-channel` (default `param`):
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h" start="FairParGenericSet* UpdateParameter(FairParGenericSet* thisPar)" />
+
+- The list has `FairGeoParSet` and the containers that `GetParList()` of the task adds, for example
+  `PixelDigiParameters` of `PixelFindHits`.
+- The processor sets `thisPar` to `nullptr` before `Deserialize()`. Thus `Deserialize()` does not
+  delete the old container. `UpdateParameters()` replaces it in the list with the received
+  container, and the processor then calls `InitMQ()` of the task.
+- An empty reply has the size 0. Then `UpdateParameter()` returns `nullptr` instead of a container.
+  `TList::AddAt()` of ROOT does not add a null pointer, so the list loses this container.
+  `PixelFindHits::InitMQ()` throws `std::runtime_error` when it does not find `PixelDigiParameters`
+  ([PixelFindHits.cxx](/source/examples/MQ/pixelDetector/src/PixelFindHits.cxx/#L151-L157)).
+
+The script of the pixel topology gives two inputs to the server. The first input is the ROOT
+parameter file of the simulation. The second input is the ASCII file `pixel_digi.par`:
+
+<Snippet file="examples/MQ/pixelDetector/run/scripts/startFairMQPixel.sh.in" start="start Parameter server" end="--second-input-type ASCII" lang="sh" />
+
+## Store the containers of a simulation
+
+A simulation in FairMQ devices has no parameter file of its own. The devices `FairMQSimDevice`
+and `FairMQTransportDevice` use the update channel of the server instead. At the start of
+`RUNNING`, each device and the server do these steps:
+
+1. The device sends the string `ReportSimDevice` and waits for the reply. The server treats each
+   message shorter than 20 bytes as such a report. For the first report, it makes a new run ID with
+   [`FairRunIdGenerator::generateId()`](/api/FairRunIdGenerator/#generateId). It replies
+   `<run ID>_<device index>`. The index counts the reports from 0. Later devices get the same run ID
+   and the next index.
+2. The device initializes its `FairRunSim`. Then it sends each container of its runtime database
+   on the update channel. It puts `RUNID<run ID>RUNID` in front of the description of the container
+   ([FairMQSimDevice.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQSimDevice.cxx/#L148-L165)).
+   A `FairMQSimDevice` sends its containers only if its index is 0.
+3. The server reads the run ID from the description and calls `initContainers()` for it. It marks
+   the container as changed and static, and adds it to its runtime database. Then it writes the
+   output file.
+4. The server replies `SUCCESS`. If [`addContainer()`](/api/FairRuntimeDb/#addContainer) fails,
+   it replies `FAIL`. This occurs when the runtime database has a container with this name already.
+
+The stored container keeps the prefix `RUNID<run ID>RUNID` in its description.
+
+[`ProcessUpdate()`](/api/ParameterMQServer/#ProcessUpdate) handles both kinds of messages:
+
+<Snippet file="fairroot/parmq/ParameterMQServer.cxx" start="if (update->GetSize() < 20) {" end="fRtdb->closeOutput();" />
+
+- `generateId()` returns the time of the clock in seconds
+  ([FairRunIdGenerator.cxx](/source/fairroot/base/sim/FairRunIdGenerator.cxx/#L377-L395)).
+- `initContainers()` does not fill a static container
+  ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L549-L559)). The server of a
+  simulation has no input. Thus a stored container must be static, or the next call of
+  `initContainers()` fails.
+- For each container, the server opens the output with `FairParRootFileIo(kTRUE)`. This mode
+  updates an existing file and makes a new file otherwise
+  ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L114-L136)). Then the
+  server calls `saveOutput()` and `closeOutput()`.
+
+The two simulation devices use the reply in different ways:
+
+| | `FairMQSimDevice` (`pixel-sim`) | `FairMQTransportDevice` (`pixel-sim-transport`) |
+| --- | --- | --- |
+| Run ID of `FairRunSim` | The run ID of the server, with `SetRunId()` | A new run ID that `FairRunSim::Init()` makes |
+| Run ID in the events | The run ID of the server | The run ID of the server |
+| Containers sent to the server | Only from the device with index 0 | From each device |
+| Device index | Adds index × `--nof-events` to the event IDs | Not used |
+
+[Split a simulation over devices](/online/sim-split/) explains the transport device. The script of
+the pixel simulation starts the server with an update channel and an output file:
+
+<Snippet file="examples/MQ/pixelDetector/run/scripts/startFairMQPixelSimulation.sh.in" start="start Parameter server" end="--update-channel-name updateChannel" lang="sh" />
+
+## Run the example
+
+The example [MQ: parameter server](/examples/mq-parameters/) has a client device, a parameter
+container and a parameter file for the run IDs 2000 to 2099. Its test starts the client and the
+server, and passes when the client logs `Received parameter from the server:`:
+
+```sh
+cd <build>
+ctest -R ex_MQ_parameters --output-on-failure
+```
+
+## Problems that can occur
+
+- **The client waits and gets no reply:** the server has no `--channel-name`, or the name is not
+  the name of the channel. Or `initContainers()` failed, and the server left `RUNNING`. Read the
+  log of the server.
+- **The reply is empty:** no container factory in the server knows the name. Check the name and
+  the library of the factory.
+- **The server goes to `ERROR` after a request:** the request has no comma, or no run ID after the
+  last comma.
+- **A request for a new run ID stops the server:** no input has a version of a container for this
+  run ID. Each request fills all containers of the server, not only the requested one.
+
+## Related pages
+
+- [Parameters and the runtime database](/concepts/parameters/): containers, factories, inputs and
+  versions.
+- [MQ: parameter server](/examples/mq-parameters/): the example client, container and parameter
+  file.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the task processor and the
+  simulation device.
+- [Split a simulation over devices](/online/sim-split/): the transport devices and their run ID.
+- [Serialize FairRoot data for messages](/online/serialization/): `RootSerializer` and other formats.

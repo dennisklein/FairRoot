@@ -1,0 +1,265 @@
+---
+title: 'Geometry and media file format'
+description: 'The ASCII formats of the media file and of the volume files (.geo): all fields and units, positions, rotations and copies, module names, the cave file, and the points of each shape.'
+sidebar:
+  order: 4
+code: [fairroot/geobase/FairGeoMedia.cxx, fairroot/geobase/FairGeoMedium.cxx, fairroot/geobase/FairGeoSet.cxx, fairroot/geobase/FairGeoShapes.cxx, fairroot/geobase/FairGeoBasicShape.cxx, fairroot/geobase/FairGeoRootBuilder.cxx, fairroot/geobase/FairGeoTransform.cxx, examples/common/passive/FairGeoCave.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot reads two ASCII formats: the media file with the materials of the whole run, and the volume
+files of the modules. `FairGeoMedia` and `FairGeoMedium` read the media file. A `FairGeoSet` class
+reads the volumes of one module, and `FairGeoRootBuilder` makes the ROOT objects. How a run uses the
+files is in [Geometry and materials](/simulation/geometry/).
+
+## The media file
+
+The macro names the media file with `FairRunSim::SetMaterials()`. The examples use
+[examples/common/geometry/media.geo](/repo/examples/common/geometry/media.geo). The name must end
+with `.geo`, `.dat` or `.setup`, or the geometry interface does not read the file
+([FairGeoInterface.cxx](/source/fairroot/geobase/FairGeoInterface.cxx/#L405-L426)).
+
+### Syntax
+
+The reader reads the file value by value. Thus spaces, tabs and line breaks all separate values, and
+the line layout of an entry is only a convention ([FairGeoMedia.cxx](/source/fairroot/geobase/FairGeoMedia.cxx/#L105-L129)):
+
+- A value that starts with `/` starts a comment up to the end of the line.
+- Put comments only between two entries. Inside an entry, the reader takes each value as data
+  ([FairGeoMedium.cxx](/source/fairroot/geobase/FairGeoMedium.cxx/#L211-L253)).
+- The word `AUTONULL` changes the format of all entries after it: they have four more values.
+- A name is one word. The run finds a medium by its name, so give each medium a different name.
+
+### Fields of an entry
+
+| Order | Values | Meaning |
+| --- | --- | --- |
+| 1 | `name` | The name of the medium. The ROOT material and the ROOT medium get this name. |
+| 2 | `n` | The number of components. A negative number means that the weights are numbers of atoms. |
+| 3 | One `A` for each component | The atomic weights. |
+| 4 | One `Z` for each component | The atomic numbers. |
+| 5 | `density` | The density in g/cm³. |
+| 6 | One weight for each component | Only if the medium has more than one component. Relative weights, or numbers of atoms if `n` is negative. |
+| 7 | `sensFlag fldFlag fld epsil` | The sensitivity flag (0: not sensitive), the field flag, the maximum field in kG and the boundary crossing precision. |
+| 8 | `madfld maxstep maxde minstep` | Only after `AUTONULL`: the maximum angular deviation due to the field, the maximum step, the maximum fractional energy loss and the minimum step. |
+| 9 | `npckov` | The number of rows of optical parameters. Write `0` for none. |
+| 10 | `npckov` rows of `ppckov absco effic rindex` | The photon momentum in eV, the absorption length, the detection efficiency and the refraction index. |
+
+The descriptions come from the data members of [`FairGeoMedium`](/api/FairGeoMedium/)
+([FairGeoMedium.h](/source/fairroot/geobase/FairGeoMedium.h/#L22-L43)). Before `AUTONULL`, the
+reader sets the four values of row 8 to -1. A comment in the code says that Geant3 then calculates
+them, if `TGeant3::SetAUTO(0)` is set ([FairGeoMedium.cxx](/source/fairroot/geobase/FairGeoMedium.cxx/#L234-L244)).
+
+The media of the examples have one component, except air. Silicon, `magAl` and iron have the
+sensitivity flag 1:
+
+<Snippet file="examples/common/geometry/media.geo" lines="14-31" title="examples/common/geometry/media.geo" />
+
+Air has three components with relative weights, and the maximum field 30 kG. The media file of the
+templates has a medium with a negative number of components and with optical parameters. The two
+components of `FusedSil` are one silicon atom and two oxygen atoms. The first two of its 603 optical
+rows follow:
+
+<Snippet file="templates/project_root_containers/geometry/media.geo" start="FusedSil" end="1.5498" title="templates/project_root_containers/geometry/media.geo" />
+
+The media after `AUTONULL` have a fourth line with the values of row 8:
+
+<Snippet file="templates/project_root_containers/geometry/media.geo" start="// ----- Caution with putting materials below that line" end="/^\s+0$/" title="templates/project_root_containers/geometry/media.geo" />
+
+:::caution
+Give each entry all its values, also the `0` for no optical rows. If a value is missing, the reader
+takes the next name as a number, and the stream fails. `FairGeoMedia::read()` checks only for the
+end of the file. Thus, if the entry is not the last one, the reader loops without end.
+:::
+
+### From the entry to ROOT
+
+When a volume uses a medium for the first time,
+[`FairGeoRootBuilder::createMedium()`](/api/FairGeoRootBuilder/#createMedium) makes the ROOT
+objects ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L144-L186)):
+
+- One component: a `TGeoMaterial` with A, Z, the density and the radiation length. The reader
+  calculates the radiation length when it reads the entry. For Z below 1e-6, it uses 1e16
+  ([FairGeoMedium.cxx](/source/fairroot/geobase/FairGeoMedium.cxx/#L317-L360)).
+- More components: a `TGeoMixture`. FairRoot gives positive weights to ROOT as they are. It changes
+  numbers of atoms `w` to `A·w / Σ(A·w)`, the fractions by mass.
+- Then a `TGeoMedium` with the next medium number and the parameters `sensFlag`, `fldFlag`, `fld`,
+  `madfld`, `maxstep`, `maxde`, `epsil`, `minstep`, 0, 0 in this order
+  ([FairGeoMedium.cxx](/source/fairroot/geobase/FairGeoMedium.cxx/#L196-L209)).
+
+FairRoot itself does not use the field flag and the maximum field. It puts them into the ROOT
+medium, where the transport engine finds them. For each medium with optical rows that is in the ROOT
+geometry, [`FairMCApplication::ConstructOpGeometry()`](/api/FairMCApplication/#ConstructOpGeometry) calls
+`SetCerenkov()` of the transport engine. It multiplies the photon momentum by 1e-9, from eV to the
+GeV of the VMC interface ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L711-L749)).
+
+## Volume files
+
+A volume file (`.geo`) has the volumes of one FairRoot module, for example of one detector. Each
+volume is a block of lines:
+
+```text
+<name>
+<mother>
+<SHAPE>
+<medium>
+<one line for each point of the shape>
+<x> <y> <z>
+<r11> <r12> <r13> <r21> <r22> <r23> <r31> <r32> <r33>
+//----------------------------------------------
+```
+
+The file `torino.geo` has two volumes with one copy each. This is the first volume and its copy:
+
+<Snippet file="examples/common/geometry/torino.geo" lines="1-20" title="examples/common/geometry/torino.geo" />
+
+| Line | Content | Rules |
+| --- | --- | --- |
+| Name | The volume name, with `#` and a copy number for a volume with copies | It must start with a module name of the set, see [Names and modules](#names-and-modules). |
+| Mother | The name of the mother volume | The cave or a volume that the reader already read. |
+| Shape | A keyword from [Shapes](#shapes) | In capital letters. |
+| Medium | The name of a medium of the media file | An unknown name gives the error `Medium %s not found in list of media`. |
+| Points | One point on each line | The shape sets the number of lines and their values. Lengths in mm, angles in degrees. |
+| Translation | `x y z` | In mm. |
+| Rotation | Nine values | The rotation matrix, row by row. |
+
+The reader reads the point lines line by line
+([FairGeoBasicShape.cxx](/source/fairroot/geobase/FairGeoBasicShape.cxx/#L61-L82)), but the
+translation and the rotation value by value ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L143-L153)).
+Thus an empty line between the points and the translation does no harm. An empty line after the
+medium line or between two points moves all following points by one line.
+
+End each block with a line that starts with `/`. When the reader skips a block of another module,
+it skips all lines up to the next line that starts with `/`
+([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L382-L386)). Without this line, it also
+skips the blocks that follow.
+
+### Position and rotation
+
+The points are in the coordinate system of the volume. The translation `t` and the rotation `R`
+place this coordinate system in the coordinate system of the mother. A point `p` of the volume is at
+`R·p + t` in the mother ([FairGeoTransform.cxx](/source/fairroot/geobase/FairGeoTransform.cxx/#L69-L78)).
+The first three values of the rotation are the first row of `R`
+([FairGeoRotation.h](/source/fairroot/geobase/FairGeoRotation.h/#L152-L157)).
+
+FairRoot puts the ROOT shape at the center that the points give: for a `BOX`, the middle between
+points 3 and 5 ([FairGeoBrik.cxx](/source/fairroot/geobase/FairGeoBrik.cxx/#L74-L83)). It converts
+the position from mm to cm ([FairGeoBasicShape.cxx](/source/fairroot/geobase/FairGeoBasicShape.cxx/#L117-L130)).
+For a unit matrix, the ROOT node gets a `TGeoTranslation`. Otherwise, it gets a `TGeoCombiTrans` with
+a rotation named `R1`, `R2` and so on ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L117-L139)).
+
+The second pixel of the MQ examples is a copy that is turned by 90° around z. The matrix moves the x
+axis of the volume to the y axis of the mother:
+
+<Snippet file="examples/common/geometry/pixel.geo" start="Pixel1#2" end="0. -1.  0.  1." title="examples/common/geometry/pixel.geo" />
+
+### Copies
+
+The copy number is the number after the last `#` of the name. A name without `#` has the copy number
+0 ([FairGeoNode.cxx](/source/fairroot/geobase/FairGeoNode.cxx/#L130-L152)). The ROOT volume gets the
+part of the name before `#` ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L54-L64)),
+and the ROOT node gets the copy number ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L139)).
+
+The first block of a name defines the volume. A later block with the same name before `#` is a copy
+if its line after the mother line does not start with a letter. A copy has only four lines: the name,
+the mother, the translation and the rotation. It uses the shape, the medium and the points of the
+first block, and ROOT places the same volume again ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L228-L260)).
+A later block with the same name before `#` and its own shape lines also gets the ROOT volume of the
+first block. The builder makes no new volume from its shape
+([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L72-L78)).
+
+A copy before its first block stops the reading of the file. The reader then logs
+`Failed for module %s` ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L361-L368)).
+The same occurs if the first block has no `#` in its name, so write `torino1#1`, not `torino1`.
+
+### Names and modules
+
+The `FairGeoSet` class of a FairRoot module counts its volumes in numbered modules. These modules
+are groups of volumes in the file, not FairRoot modules. By default, a module name is the set name
+and a number from 1 to the maximum number of modules. For `FairGeoSet("tutdet", 10)`, the names are
+`tutdet1` to `tutdet10` ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L538-L563)).
+
+The reader reads the file once for each module name
+([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L114-L124)). It takes each block whose
+name starts with this module name and skips all other blocks
+([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L343-L388)). Thus:
+
+- The mother must be the cave or a volume that the reader already knows. This is a volume of a
+  lower module number, or a volume of the same module earlier in the file. Otherwise, the reader
+  logs the warning `Mother volume %s not found!` ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L172-L192)).
+  The builder then stops at this volume with the error `Creation of %s failed!`
+  ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L443-L461)).
+- The reader compares only the start of the name. With ten or more modules, the module name
+  `tutdet1` also matches `tutdet10`, and the reader reads this block twice.
+- A set class can override `getModuleName()`. `FairGeoMagnet` returns `m`, so it takes all blocks
+  whose names start with `m` ([FairGeoMagnet.h](/source/examples/common/passive/FairGeoMagnet.h/#L15-L27)).
+
+## The cave file
+
+The cave file has one volume, the top volume of the geometry. `FairGeoCave` of the examples reads it
+line by line ([FairGeoCave.cxx](/source/examples/common/passive/FairGeoCave.cxx/#L36-L91)):
+
+<Snippet file="examples/common/geometry/cave.geo" lines="1-11" title="examples/common/geometry/cave.geo" />
+
+- The first line that is not empty and not a comment must be `cave` exactly, with no blanks after
+  the name. Otherwise, the reading fails.
+- The next lines have the shape, the medium and the points. A cave file has no mother, no
+  translation and no rotation.
+- `FairGeoCave` does not report an unknown medium, for example a medium line with blanks after the
+  name. It adds an empty medium instead
+  ([FairGeoCave.cxx](/source/examples/common/passive/FairGeoCave.cxx/#L63-L69)).
+
+The cave of the examples is a box of 40 m in each direction, filled with air. The file
+[cave_vacuum.geo](/repo/examples/common/geometry/cave_vacuum.geo) has the same cave with vacuum.
+
+## Shapes
+
+The shape line takes one of these keywords. Another keyword gives the error
+`shape %s not implemented` ([FairGeoShapes.cxx](/source/fairroot/geobase/FairGeoShapes.cxx/#L79-L162)).
+FairRoot converts the points to the parameters that `TGeoManager::Volume()` expects for this shape
+name. For `TORUS` and `ASSEMBLY`, it calls `MakeTorus()` and `MakeVolumeAssembly()`
+([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L87-L102)). Lengths
+change from mm to cm, and full lengths become half lengths.
+
+| Keyword | Point lines | Values on the lines | ROOT parameters |
+| --- | --- | --- | --- |
+| `BOX` | 8 | The corners, `x y z`. Only points 3 and 5 (counted from 0) are used: they must be opposite corners. | Half lengths in x, y and z |
+| `TRAP` | 8 | The corners, `x y z`. Points 0 to 3 are one face, points 4 to 7 the opposite face in z. | The 11 parameters of `TGeoTrap` |
+| `TRD1` | 8 | The corners, as for `TRAP` | The 4 parameters of `TGeoTrd1` |
+| `TUBE` | 3 | 0: `x y z` of the start circle center. 1: `rmin rmax`. 2: `x y z` of the end circle center. | `rmin`, `rmax`, half length |
+| `TUBS` | 4 | As `TUBE`, then 3: `phi1 phi2` | `rmin`, `rmax`, half length, `phi1`, `phi2` |
+| `CONE` | 4 | 0: start center. 1: `rmin rmax` at the start. 2: end center. 3: `rmin rmax` at the end. | Half length, `rmin1`, `rmax1`, `rmin2`, `rmax2` |
+| `CONS` | 5 | As `CONE`, then 4: `phi1 phi2` | As `CONE`, then `phi1`, `phi2` |
+| `SPHE` | 3 | 0: `rmin rmax`. 1: `theta1 theta2`. 2: `phi1 phi2`. | The same six values, the radii in cm |
+| `ELTU` | 3 | 0: start center. 1: the semi-axes in x and y. 2: end center. | The semi-axes and the half length |
+| `PCON` | 2 + n | 0: the number n of z planes. 1: `phi dphi`. Then one line `z rmin rmax` for each plane. | `phi`, `dphi`, n, then `z rmin rmax` for each plane |
+| `PGON` | 2 + n | 0: n. 1: `phi dphi nsides`. Then one line `z rmin rmax` for each plane. | `phi`, `dphi`, `nsides`, n, then `z rmin rmax` for each plane |
+| `TORUS` | 5 | One value on each line: `R`, `Rmin`, `Rmax`, `Phi1`, `Dphi` | The same five values, the radii in cm |
+| `ASSEMBLY` | 0 | None | An assembly volume. The block still needs a medium line. |
+
+The classes [`FairGeoBrik`](/api/FairGeoBrik/), [`FairGeoTube`](/api/FairGeoTube/) and the other
+`FairGeo<Shape>` classes calculate the parameters in `calcVoluParam()`. For the tubes, the cones and
+`ELTU`, the code uses only the z values of the start and end centers
+([FairGeoTube.cxx](/source/fairroot/geobase/FairGeoTube.cxx/#L123-L147)). It ignores their x and y.
+To move or turn the shape, use the translation and the rotation.
+
+For `TRAP` and `TRD1`, the axes in the file are not the axes of the ROOT shape. FairRoot adds an
+internal rotation. For `TRAP`, x and y change sign
+([FairGeoTrap.cxx](/source/fairroot/geobase/FairGeoTrap.cxx/#L45-L56)). For `TRD1`, x changes sign,
+and y and z change places ([FairGeoTrd1.cxx](/source/fairroot/geobase/FairGeoTrd1.cxx/#L41-L54)).
+
+A `TUBS` from the Rutherford example:
+
+<Snippet file="examples/common/geometry/rutherford.geo" start="rutherford1" end="-80. 260." title="examples/common/geometry/rutherford.geo" />
+
+A `TUBE` from the propagator example, with an empty line before the translation:
+
+<Snippet file="examples/common/geometry/tutProp2.geo" start="Pixel5" end="1.  0.  0.  0.  1." title="examples/common/geometry/tutProp2.geo" />
+
+## Related pages
+
+- [Geometry and materials](/simulation/geometry/): how the modules read these files and build the
+  geometry.
+- [Write a detector](/simulation/detectors/): the sensitive volumes of a detector.
+- [Common parts of the examples](/examples/common/): the geometry files of the examples.

@@ -1,0 +1,498 @@
+---
+title: 'Glossary'
+description: 'The terms of FairRoot and of the experiment software around it, from alignment to YAML configuration: what each term means, its class, and the page that explains it.'
+sidebar:
+  order: 9
+tableOfContents:
+  minHeadingLevel: 2
+  maxHeadingLevel: 2
+code:
+  - fairroot/base/steer/FairRootManager.h
+  - fairroot/base/steer/FairRun.h
+  - fairroot/base/steer/FairTask.h
+  - fairroot/base/source/FairSource.h
+  - fairroot/base/sink/FairSink.h
+  - fairroot/parbase/FairRuntimeDb.h
+  - fairroot/parbase/FairParSet.h
+  - fairroot/parbase/FairContFact.h
+  - fairroot/base/sim/FairModule.h
+  - fairroot/base/sim/FairDetector.h
+  - fairroot/base/sim/FairPrimaryGenerator.h
+  - fairroot/base/event/FairMCPoint.h
+  - fairroot/base/event/FairHit.h
+  - fairroot/base/event/FairEventHeader.h
+  - fairroot/base/steer/FairWriteoutBuffer.h
+---
+
+This glossary explains the terms of FairRoot and of the experiment software around it. Each entry
+gives the meaning of the term, the class behind it and the page that explains it in detail. The
+other pages of this site use each term only with the meaning that it has here.
+
+## A
+
+### Alignment
+
+Alignment moves volumes of the geometry to their measured positions.
+[`FairRun::AddAlignmentMatrices()`](/api/FairRun/#AddAlignmentMatrices) takes a map from volume
+paths, or from names of alignable entries, to `TGeoHMatrix` objects. For a volume path, FairRoot
+multiplies the local matrix of the volume by the given matrix
+([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L10-L59)).
+See [Alignment and misalignment](/reconstruction/alignment/).
+
+### ASCII parameter file
+
+An ASCII parameter file is a text file that fills [parameter containers](#parameter-container).
+The section of each container starts at the line `[ContainerName]` and stops at a line that starts
+with `#` ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L135-L160)).
+Open the file with [`FairParAsciiFileIo`](/api/FairParAsciiFileIo/) and give it to the runtime
+database as an input. See [ASCII parameter file format](/reference/par-format/).
+
+## B
+
+### Branch
+
+A branch is a named object of the current event, for example a `TClonesArray` of MC points. The
+[I/O manager](#io-manager) holds the branches: the source fills the input branches, and a task adds
+a branch with [`FairRootManager::Register()`](/api/FairRootManager/#Register). Other tasks get the
+branch by its name with [`GetObject()`](/api/FairRootManager/#GetObject).
+See [Branches, sources and sinks](/concepts/io/).
+
+## C
+
+### Cave
+
+The cave is the top volume of the geometry, which holds all other volumes. In the examples,
+[`FairCave`](/source/examples/common/passive/FairCave.cxx/) reads it from a geometry file, for
+example [`cave.geo`](/repo/examples/common/geometry/cave.geo), a box of air. The reader marks the
+volume `cave` as the top node
+([FairGeoCave.cxx](/source/examples/common/passive/FairGeoCave.cxx/#L50-L54)).
+See [Geometry and materials](/simulation/geometry/).
+
+### cbmsim
+
+`cbmsim` is the default name of the event tree in the input and output files.
+[`FairRootManager::GetTreeName()`](/api/FairRootManager/#GetTreeName) returns it if you set no
+other name with `SetTreeName()` or in `$VMCWORKDIR/config/rootmanager.dat`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L961)). The default
+folder name is `cbmroot` in a simulation and `cbmout` in the other runs.
+See [Branches, sources and sinks](/concepts/io/).
+
+### Container factory
+
+A container factory makes the parameter containers of one library when the runtime database asks
+for them ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L199-L218)). It derives
+from [`FairContFact`](/api/FairContFact/), and the constructor with a name adds the factory to the
+runtime database ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)). The
+examples make one static factory object in each library, for example in
+[FairTutorialDet2ContFact.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx/#L15).
+See [Parameters and the runtime database](/concepts/parameters/).
+
+## D
+
+### Detector
+
+A detector is a [module](#module) with sensitive volumes. It derives from
+[`FairDetector`](/api/FairDetector/), and the MC application calls its
+[`ProcessHits()`](/api/FairDetector/#ProcessHits) for each step in one of its sensitive volumes
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L512-L534)). There, the
+detector usually makes [MC points](#mc-point). See [Write a detector](/simulation/detectors/).
+
+### Digi
+
+A digi is the data that the real detector gives, for example a channel number and a time. A
+digitizer task makes digis from [MC points](#mc-point). FairRoot has no base class for digis, but
+most digi classes of the examples derive from [`FairTimeStamp`](/api/FairTimeStamp/), for example
+[`PixelDigi`](/source/examples/MQ/pixelDetector/src/PixelDigi.h/#L22).
+See [From MC points to digis](/reconstruction/digitization/).
+
+## E
+
+### Event header
+
+An event header holds the [run ID](#run-id) and other data of one event.
+[`FairEventHeader`](/api/FairEventHeader/), in the branch `EventHeader.`, has the event time, the
+input file ID and the entry number. [`FairMCEventHeader`](/api/FairMCEventHeader/), in the branch
+`MCEventHeader.`, has the event ID, the primary vertex, the impact parameter and the number of
+primaries. See [Event headers and run IDs](/concepts/event-headers/).
+
+### Event mixing
+
+Event mixing makes one input stream from signal files and background files.
+[`FairMixedSource`](/api/FairMixedSource/) reads each event from one signal chain or from the
+background chain, by the ratio that you set with
+[`BGWindowWidthNo()`](/api/FairMixedSource/#BGWindowWidthNo) or
+[`BGWindowWidthTime()`](/api/FairMixedSource/#BGWindowWidthTime). The event header gets the input
+file ID, which is 0 for the background
+([FairMixedSource.cxx](/source/fairroot/base/source/FairMixedSource.cxx/#L347-L388)).
+See [Input sources, friends and event mixing](/reconstruction/sources/).
+
+## F
+
+### FairMQ device
+
+A FairMQ device is a process that gets and sends messages through the channels of the FairMQ
+library. FairRoot adds devices for it, for example the parameter server
+[`ParameterMQServer`](/api/ParameterMQServer/) and [`FairMQLmdSampler`](/api/FairMQLmdSampler/).
+With [FairRunFairMQDevice.h](/source/fairroot/fairmq/FairRunFairMQDevice.h/), the main program comes
+from FairMQ, and you write the functions `addCustomOptions()` and `fairGetDevice()`.
+See [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/) and the
+[FairMQ documentation](https://fairrootgroup.github.io/FairMQ/).
+
+### FairSoft
+
+FairSoft installs the external packages that FairRoot needs. If the environment variable `SIMPATH`
+points to a FairSoft installation, CMake adds it to the front of `CMAKE_PREFIX_PATH`
+([CMakeLists.txt](/repo/CMakeLists.txt#L71-L75)). See [Install FairRoot](/start/install/) and the
+[FairSoft repository](https://github.com/FairRootGroup/FairSoft).
+
+### Friend file
+
+A friend file adds branches to the events of the input files, for example the output of another
+step for the same events. Add it with [`FairFileSource::AddFriend()`](/api/FairFileSource/#AddFriend).
+The source puts friend files with the same branch list in one chain and makes this chain a friend
+of the input chain ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L312-L389)).
+See [Input sources, friends and event mixing](/reconstruction/sources/).
+
+## G
+
+### Geane
+
+Geane is the part of Geant3 that propagates track parameters and their errors through the
+geometry. The task [`FairGeane`](/api/FairGeane/) sets up Geant3 for Geane with the macro
+`Geane.C`, and [`FairGeanePro`](/api/FairGeanePro/) does the propagation. CMake builds both only if
+it finds Geant3 ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L22-L24)).
+See [Track parameters and propagation](/reconstruction/tracks/).
+
+### Generator
+
+A generator makes the particles of one event, for example
+[`FairBoxGenerator`](/api/FairBoxGenerator/). It derives from [`FairGenerator`](/api/FairGenerator/)
+and gives each particle to the [primary generator](#primary-generator) with `AddTrack()` in its
+[`ReadEvent()`](/api/FairGenerator/#ReadEvent). See [Primary generators](/simulation/generators/).
+
+### Geometry file
+
+A geometry file describes the volumes of one module, in the ASCII (`.geo`), ROOT or GDML format.
+[`FairModule::SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) takes an absolute path,
+or looks for the file in `$GEOMPATH` and then in `$VMCWORKDIR/geometry`
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L174-L215)).
+See [Geometry and media file format](/reference/geo-format/).
+
+## H
+
+### Hit
+
+A hit is a reconstructed position in a detector, made from [digis](#digi) or from MC points.
+[`FairHit`](/api/FairHit/) derives from [`FairTimeStamp`](/api/FairTimeStamp/) and has a position
+with errors, a detector ID and a reference index. `ProcessHits()` of a detector makes MC points, not
+hits. See [Data classes](/concepts/data-classes/).
+
+## I
+
+### I/O manager
+
+The I/O manager is the object of [`FairRootManager`](/api/FairRootManager/) that holds the branches
+of the current event. Each thread has its own I/O manager
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L66-L72)). It gets each
+event from the source and gives the persistent branches to the sink.
+See [Branches, sources and sinks](/concepts/io/).
+
+## L
+
+### Link
+
+A link points from one data object to another, for example from a digi to its MC point.
+[`FairLink`](/api/FairLink/) stores the file, entry, branch ID, index and weight of the target.
+Data objects store links only after [`FairRun::SetUseFairLinks(kTRUE)`](/api/FairRun/#SetUseFairLinks)
+([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L64-L75)).
+See [Links between data levels](/concepts/links/).
+
+### LMD
+
+LMD (GSI List Mode Data) is the file format of [MBS](#mbs) data. [`FairLmdSource`](/api/FairLmdSource/)
+reads LMD files with the MBS API, and [`FairMQLmdSampler`](/api/FairMQLmdSampler/) sends their
+subevents as FairMQ messages. See [Read MBS and LMD data](/online/mbs/).
+
+## M
+
+### Magnetic field
+
+A magnetic field class derives from [`FairField`](/api/FairField/), which derives from
+`TVirtualMagField`. It gives the field in kG at a position in cm
+([FairField.h](/source/fairroot/base/field/FairField.h/#L64-L65)). Give it to the simulation with
+[`FairRunSim::SetField()`](/api/FairRunSim/#SetField). See [Magnetic fields](/simulation/fields/).
+
+### MBS
+
+MBS (Multi Branch System) is the data acquisition system of GSI. [`FairLmdSource`](/api/FairLmdSource/),
+[`FairMbsStreamSource`](/api/FairMbsStreamSource/) and [`FairRemoteSource`](/api/FairRemoteSource/)
+read MBS data from files, from a stream server and from a remote event server. CMake builds them
+only with `BUILD_MBS=ON`, which is `OFF` by default ([CMakeLists.txt](/repo/CMakeLists.txt#L126)).
+See [Read MBS and LMD data](/online/mbs/).
+
+### MC application
+
+The MC application connects FairRoot to the transport engine.
+[`FairMCApplication`](/api/FairMCApplication/) derives from `TVirtualMCApplication`, and the engine
+calls it to build the geometry, get the primaries and handle each step in
+[`Stepping()`](/api/FairMCApplication/#Stepping). See [How a simulation runs](/simulation/overview/).
+
+### MC point
+
+An MC point is the true data of a particle in a sensitive volume, which the detector makes in
+`ProcessHits()`. [`FairMCPoint`](/api/FairMCPoint/) has the track ID, event ID, position, momentum,
+time, track length, energy loss and detector ID
+([FairMCPoint.h](/source/fairroot/base/event/FairMCPoint.h/#L83-L90)).
+See [Data classes](/concepts/data-classes/).
+
+### MC track
+
+An MC track is a particle of the [stack](#stack) that goes to the output. In the examples,
+[`FairStack`](/source/examples/common/mcstack/FairStack.cxx/) writes
+[`FairMCTrack`](/source/examples/common/mcstack/FairMCTrack.h/) objects to the branch `MCTrack`.
+It keeps all primaries and the secondaries that pass its cuts
+([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L424-L440)).
+See [The particle stack and MC tracks](/simulation/stack/).
+
+### Medium
+
+A medium is a material together with its parameters for the transport, for example the sensitivity
+flag and the maximum step. The media file, for example
+[`media.geo`](/repo/examples/common/geometry/media.geo), defines all media, and
+[`FairRunSim::SetMaterials()`](/api/FairRunSim/#SetMaterials) selects this file.
+[`FairGeoMedium`](/api/FairGeoMedium/) holds one medium. See [Geometry and materials](/simulation/geometry/).
+
+### Module
+
+A module is one part of the geometry, for example the cave, a magnet or a detector. It derives
+from [`FairModule`](/api/FairModule/), and you add it to the simulation with
+[`FairRunSim::AddModule()`](/api/FairRunSim/#AddModule). The examples keep their passive modules,
+which have no sensitive volumes, in [examples/common/passive](/repo/examples/common/passive/).
+See [Geometry and materials](/simulation/geometry/).
+
+## P
+
+### Parameter container
+
+A parameter container holds one set of parameters, for example the digitization parameters of a
+detector. It derives from [`FairParSet`](/api/FairParSet/), for example through
+[`FairParGenericSet`](/api/FairParGenericSet/). The runtime database fills it from its first input
+or, if that fails, from its second input
+([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L55-L76)).
+See [Parameters and the runtime database](/concepts/parameters/).
+
+### Persistent branch
+
+A persistent branch is a branch that the sink writes to the output. To make a branch persistent,
+set the last argument of [`FairRootManager::Register()`](/api/FairRootManager/#Register) to
+`kTRUE`. With `kFALSE`, the branch stays in memory only
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L177)).
+See [Output: sinks and persistence](/reconstruction/output/).
+
+### Primary
+
+A primary is a particle that a generator makes. [`FairPrimaryGenerator::AddTrack()`](/api/FairPrimaryGenerator/#AddTrack)
+puts it on the stack with the mother ID -1
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L371-L400)). The
+particles that the transport engine makes are secondaries.
+See [The particle stack and MC tracks](/simulation/stack/).
+
+### Primary generator
+
+The primary generator is the [`FairPrimaryGenerator`](/api/FairPrimaryGenerator/) object that holds
+the generators that you add with [`AddGenerator()`](/api/FairPrimaryGenerator/#AddGenerator). For
+each event, [`GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) makes the event vertex
+and calls `ReadEvent()` of each generator. Give it to the run with
+[`FairRunSim::SetGenerator()`](/api/FairRunSim/#SetGenerator).
+See [Primary generators](/simulation/generators/).
+
+### Propagator
+
+A propagator moves track parameters to another place, for example to a plane, to a volume or by a
+track length. [`FairPropagator`](/api/FairPropagator/) is the base class.
+[`FairGeanePro`](/api/FairGeanePro/) uses [Geane](#geane), and
+[`FairRKPropagator`](/api/FairRKPropagator/) uses the Runge-Kutta method in a `FairField`.
+See [Track parameters and propagation](/reconstruction/tracks/).
+
+## R
+
+### Run
+
+A run is the object that steers a job: [`FairRunSim`](/api/FairRunSim/) for a simulation,
+[`FairRunAna`](/api/FairRunAna/) for an analysis and [`FairRunOnline`](/api/FairRunOnline/) for
+online data. All derive from [`FairRun`](/api/FairRun/), and a thread can have only one run at a
+time ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L58)). See [Runs](/concepts/runs/).
+
+### Run ID
+
+The run ID is a number that selects the versions of the parameter containers in the runtime
+database ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L464-L484)). If you set no
+run ID, `FairRunSim` uses the current Unix time in seconds
+([`FairRunIdGenerator::generateId()`](/api/FairRunIdGenerator/#generateId)). `FairRunAna` reads the
+run ID from the [event header](#event-header) of its input.
+See [Event headers and run IDs](/concepts/event-headers/).
+
+### Runtime database
+
+The runtime database manages all parameter containers of a job.
+[`FairRuntimeDb::instance()`](/api/FairRuntimeDb/#instance) gives the one runtime database, and its
+[`getContainer()`](/api/FairRuntimeDb/#getContainer) gets a container from the container factories.
+The runtime database reads the containers from its first and second input and writes them to its
+output. See [Parameters and the runtime database](/concepts/parameters/).
+
+## S
+
+### Sensitive volume
+
+A sensitive volume is a volume of a detector for which the MC application calls `ProcessHits()`.
+For ROOT and GDML geometry files, [`IsSensitive()`](/api/FairModule/#IsSensitive) of the detector
+selects these volumes ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L567-L570)). In an
+ASCII geometry, a volume is sensitive if its medium has the sensitivity flag and the module is
+active ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)). With multithreaded
+Geant4, `FairDetector::Initialize()` also asks `IsSensitive()` for each volume of the geometry, for
+all file formats ([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L71-L97)).
+See [Geometry and materials](/simulation/geometry/).
+
+### Sink
+
+A sink writes the [persistent branches](#persistent-branch) and other objects to the output. It
+derives from [`FairSink`](/api/FairSink/), for example [`FairRootFileSink`](/api/FairRootFileSink/),
+which writes a ROOT file with the event tree, by default `cbmsim`. Give it to the run with
+[`FairRun::SetSink()`](/api/FairRun/#SetSink). See [Output: sinks and persistence](/reconstruction/output/).
+
+### Source
+
+A source reads one event into the input branches for each call of its `ReadEvent()`. It derives
+from [`FairSource`](/api/FairSource/), for example [`FairFileSource`](/api/FairFileSource/) for ROOT
+files and [`FairMixedSource`](/api/FairMixedSource/) for [event mixing](#event-mixing). Give it to
+the run with [`FairRun::SetSource()`](/api/FairRun/#SetSource).
+See [Input sources, friends and event mixing](/reconstruction/sources/).
+
+### Stack
+
+The stack holds the particles of the current event for the transport engine. It derives from
+[`FairGenericStack`](/api/FairGenericStack/), which derives from `TVirtualMCStack`. The examples
+use [`FairStack`](/source/examples/common/mcstack/FairStack.h/), which also selects the
+[MC tracks](#mc-track) for the output. See [The particle stack and MC tracks](/simulation/stack/).
+
+## T
+
+### Task
+
+A task is one step of the data processing, for example a digitizer or a hit producer. It derives
+from [`FairTask`](/api/FairTask/), a `TTask`, and the run calls its `Init()` at the start and its
+`Exec()` for each event. If `Init()` returns `kERROR`, the task becomes inactive
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)). See [Tasks](/concepts/tasks/).
+
+### TClonesArray
+
+`TClonesArray` is the ROOT container class that holds the objects of many branches, for example
+MC points, digis and hits. [`FairRootManager::Register()`](/api/FairRootManager/#Register-3) with a
+class name makes the `TClonesArray` for you
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L209-L221)).
+See [Branches, sources and sinks](/concepts/io/).
+
+### Time-based
+
+Time-based processing handles a continuous stream of data instead of separate events. The
+digitizer gives each digi a [time stamp](#time-stamp), and the reconstruction reads the digis by
+time with [`FairRootManager::GetData()`](/api/FairRootManager/#GetData). Call
+[`FairRunAna::RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) before `Init()` to use
+this mode. See [Time-based simulation and reconstruction](/reconstruction/time-based/).
+
+### Time stamp
+
+A time stamp is the time of a digi or a hit, with its error.
+[`FairTimeStamp`](/api/FairTimeStamp/) stores both, and its header gives ns as the unit
+([FairTimeStamp.h](/source/fairroot/base/event/FairTimeStamp.h/#L80-L81)). The time of an MC point
+and the event times of `FairFileSource` are in ns too
+([FairFileSource.h](/source/fairroot/base/source/FairFileSource.h/#L85-L88)).
+See [Time-based simulation and reconstruction](/reconstruction/time-based/).
+
+### Track parameters
+
+Track parameters describe a track at one point: its position, its direction and its charge over
+momentum, with a covariance matrix. [`FairTrackParam`](/api/FairTrackParam/) stores x, y,
+tx = dx/dz, ty = dy/dz and q/p at a z position
+([FairTrackParam.h](/source/fairroot/base/event/FairTrackParam.h/#L86-L101)). The propagators use
+[`FairTrackParP`](/api/FairTrackParP/) (parabola in the SD system) and
+[`FairTrackParH`](/api/FairTrackParH/) (helix in the SC system).
+See [Track parameters and propagation](/reconstruction/tracks/).
+
+### Transport engine
+
+The transport engine moves the particles through the geometry and simulates their interactions,
+for example Geant3 or Geant4. Select it with the name of the run, for example
+`run->SetName("TGeant4")` ([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L79)).
+The simulation configuration then makes the engine, by default with the macro `g3Config.C` or
+`g4Config.C`. See [Transport engines and their configuration](/simulation/engines/).
+
+## U
+
+### Unpacker
+
+An unpacker decodes the raw data of one kind of MBS subevent into branches. It derives from
+[`FairUnpack`](/api/FairUnpack/), and you add it to the source with
+[`FairOnlineSource::AddUnpacker()`](/api/FairOnlineSource/#AddUnpacker). The MBS source calls its
+[`DoUnpack()`](/api/FairUnpack/#DoUnpack) for each subevent with the same type, subtype,
+processor ID and control. The subcrate must also match, unless the subcrate of the unpacker is
+negative ([FairMbsSource.cxx](/source/fairroot/online/source/FairMbsSource.cxx/#L20-L59)).
+See [Read MBS and LMD data](/online/mbs/).
+
+## V
+
+### VMC
+
+VMC (Virtual Monte Carlo) is the interface that lets one application use different transport
+engines through `TVirtualMC`. FairRoot implements its interfaces in
+[`FairMCApplication`](/api/FairMCApplication/) (`TVirtualMCApplication`),
+[`FairGenericStack`](/api/FairGenericStack/) (`TVirtualMCStack`) and
+[`FairField`](/api/FairField/) (`TVirtualMagField`).
+See [Transport engines and their configuration](/simulation/engines/) and the
+[VMC project](https://vmc-project.github.io/).
+
+### VMCWORKDIR
+
+`VMCWORKDIR` is the environment variable that points to the folder of the examples. The
+`config.sh` of the build folder sets it to the `examples` folder of the source tree
+([CMakeLists.txt](/repo/CMakeLists.txt#L66)). The installed `FairRootConfig.sh` sets it to
+`share/fairbase/examples` in the installation ([CMakeLists.txt](/repo/CMakeLists.txt#L318-L344)).
+FairRoot looks there for geometry files, engine configurations and `config/rootmanager.dat`.
+See [Environment variables](/reference/environment/).
+
+## W
+
+### Writeout buffer
+
+A writeout buffer keeps data objects between events and writes each one to its branch when the
+event time passes its active time. The buffer class derives from
+[`FairWriteoutBuffer`](/api/FairWriteoutBuffer/), a task fills it with
+[`FillNewData()`](/api/FairWriteoutBuffer/#FillNewData), and
+[`FairRootManager::RegisterWriteoutBuffer()`](/api/FairRootManager/#RegisterWriteoutBuffer) adds
+it to the I/O manager. The constructor with a branch name turns the buffering on
+([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L22-L34)). After
+`ActivateBuffering(kFALSE)`, `FillNewData()` writes the data at once
+([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L138-L152)).
+See [Time-based simulation and reconstruction](/reconstruction/time-based/).
+
+## Y
+
+### YAML configuration
+
+The YAML configuration makes the transport engine from a YAML file instead of a ROOT macro, for
+Geant3 and Geant4 only. Give an object of a class derived from
+[`FairYamlVMCConfig`](/api/FairYamlVMCConfig/) to
+[`FairRunSim::SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig); without it, the run
+uses the macro configuration ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L308)).
+The default files are `g3Config.yaml` and `g4Config.yaml` in `$CONFIG_DIR` or in
+`$VMCWORKDIR/gconfig` ([FairYamlVMCConfig.cxx](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L242-L285)).
+See [Transport engines and their configuration](/simulation/engines/) and
+[Configuration files](/reference/config-files/).
+
+## Related pages
+
+- [Architecture](/concepts/architecture/): how the main objects of FairRoot work together.
+- [Libraries and headers](/reference/libraries/): the library that holds each class.
+- [Hooks and their call order](/reference/hooks/): when the run calls each virtual function.
+- [Environment variables](/reference/environment/): the variables that FairRoot reads.
+- [Deprecated APIs](/reference/deprecations/): the old names and their replacements.

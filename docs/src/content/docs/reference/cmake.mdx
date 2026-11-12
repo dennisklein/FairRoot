@@ -1,0 +1,576 @@
+---
+title: 'CMake reference'
+description: 'The build options and variables of FairRoot, the exported targets and the CMake package, and the CMake modules, functions, find modules and scripts that the installation gives to projects.'
+sidebar:
+  order: 1
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+This page lists the CMake interface of FairRoot 19.0.0. The first sections are about the build of
+FairRoot: options, variables and dependencies. The other sections are about an installed FairRoot:
+the targets, the CMake package, and the modules and scripts for projects.
+[Install FairRoot](/start/install/) and [Use FairRoot in a CMake project](/start/cmake/) show how to
+use them.
+
+## Build options
+
+The top-level `CMakeLists.txt` declares these options
+([CMakeLists.txt](/repo/CMakeLists.txt#L120-L131)). `BUILD_TESTING` comes from the CMake module
+`CTest` ([CMakeLists.txt](/repo/CMakeLists.txt#L22)).
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `BUILD_TESTING` | `ON` | Adds the folder `tests`, Catch2 from `third_party/Catch2_v3.5.4` and the Boost component `filesystem`. Keep it `ON`: the tests of `FairRoot::Tools` need Catch2, so the configuration fails with `OFF`. |
+| `BUILD_EXAMPLES` | `ON` | Adds the folder `examples`: the example libraries, programs, macros and their tests. Adds the Boost components `program_options` and `serialization`. The installation then also gets the example libraries and headers, and the example programs, macros and data in `share/fairbase/examples`. |
+| `BUILD_BASEMQ` | `ON` | Builds `FairRoot::FairMQ`, `FairRoot::BaseMQ`, `FairRoot::ParMQ` and the program `parmq-server`. Needs FairMQ 1.4.0 and the Boost components `filesystem`, `serialization` and `program_options`. |
+| `BUILD_ONLINE` | `ON` | Builds `FairRoot::Online` with [`FairRunOnline`](/api/FairRunOnline/). |
+| `BUILD_MBS` | `OFF` | Deprecated. Builds `FairRoot::MbsAPI`, and adds [`FairMbsSource`](/api/FairMbsSource/), [`FairLmdSource`](/api/FairLmdSource/) and the other MBS sources to `FairRoot::Online`. Sets `BUILD_ONLINE` to `ON`. With `BUILD_EXAMPLES`, it adds the example `advanced/MbsTutorial`, and `MQ/Lmd` if CMake found FairMQ and Boost. |
+| `BUILD_PROOF_SUPPORT` | `OFF` | Deprecated. Adds [`FairRunAnaProof`](/api/FairRunAnaProof/) and [`FairAnaSelector`](/api/FairAnaSelector/) to `FairRoot::Base`, which then links `ROOT::Proof`. With ROOT 6.32 or newer, CMake stops with an error. |
+| `BUILD_EVENT_BUILDER` | `OFF` | Deprecated. Adds [`FairEventBuilder`](/api/FairEventBuilder/) and [`FairEventBuilderManager`](/api/FairEventBuilderManager/) to `FairRoot::Base`. |
+| `ENABLE_GEANT3_TESTING` | `OFF` | If CMake found Geant3, the example tests also run with `TGeant3`. Without it, they run with `TGeant4` only. |
+
+FairRoot 19.0.0 deprecated the MbsAPI, the Proof classes and the event builder, and turned their
+options off by default ([CHANGELOG.md](/repo/CHANGELOG.md#L91-L98)). FairRoot 18.8.0 turned off the
+Geant3 tests by default, because they can fail at random
+([CHANGELOG.md](/repo/CHANGELOG.md#L263-L266)). The source files that the deprecated options add are
+in [base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L74-L86) and
+[online/CMakeLists.txt](/repo/fairroot/online/CMakeLists.txt#L18-L29).
+
+## Variables
+
+These CMake variables change the build. If you do not set one, the build uses the default of the table.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `CMAKE_INSTALL_PREFIX` | `/usr/local` | The installation folder. It must not be the build folder ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L183-L188)). |
+| `CMAKE_BUILD_TYPE` | `RelWithDebInfo` | The build type. See [Build types](#build-types). |
+| `CMAKE_CXX_STANDARD` | From ROOT, at least 17 | See [C++ standard](#c-standard). |
+| `BUILD_SHARED_LIBS` | `ON` | The default library type ([CMakeLists.txt](/repo/CMakeLists.txt#L58-L64)). |
+| `CMAKE_INSTALL_MESSAGE` | `LAZY` | `cmake --install` shows only the files that it installs or updates. |
+| `CMAKE_CXX_CLANG_TIDY` | Not set | If set, FairRoot adds `--extra-arg=-std=c++<N>`, so that clang-tidy uses the same C++ standard ([CMakeLists.txt](/repo/CMakeLists.txt#L158-L162)). |
+| `Boost_NO_SYSTEM_PATHS` | `TRUE` | The FindBoost module of CMake does not search the system folders ([CMakeLists.txt](/repo/CMakeLists.txt#L211-L214)). |
+| `Boost_NO_BOOST_CMAKE` | Not set | If true, FairRoot removes `Boost_INCLUDE_DIR` and `Boost_LIBRARY_DIRS` from the cache before it searches Boost ([CMakeLists.txt](/repo/CMakeLists.txt#L215-L223)). |
+| `DISABLE_COLOR` | Not set | `ON` turns off the colors in the output of CMake. FairCMakeModules reads it, and the CI sets it. |
+| `FULL_CONFIG_FILE` | `true` | `WRITE_CONFIG_FILE()` reads it. See [WRITE_CONFIG_FILE()](#write_config_file). |
+| `BUILD_SIM` | Not set | Not an option. If true, ROOT must have the components `pythia6` and `pythia8` ([CMakeLists.txt](/repo/CMakeLists.txt#L139-L148)). |
+| `<NAME>_ROOT` | Not set | The prefix of one dependency, with the package name in upper case, for example `FAIRLOGGER_ROOT`. `find_package2()` also reads it from the environment. |
+
+These environment variables change the configuration:
+
+| Variable | Effect |
+| --- | --- |
+| `SIMPATH` | The prefix of FairSoft. CMake puts it in front of `CMAKE_PREFIX_PATH`, and the scripts get `$SIMPATH/lib` in `LD_LIBRARY_PATH` ([CMakeLists.txt](/repo/CMakeLists.txt#L71-L75)). `FindPythia8.cmake` and `FindHEPMC.cmake` search below it. |
+| `FAIRSOFT_ROOT` | If `CMAKE_CXX_STANDARD` is not set and the target `ROOT::Core` does not exist, `Check_Compiler()` searches `fairsoft-config` in `$SIMPATH/bin` and `$FAIRSOFT_ROOT/bin`. See [C++ standard](#c-standard). |
+| `<NAME>_ROOT` | As the CMake variable above. |
+
+FairRoot also sets these values, and you cannot change them with a variable:
+
+- `CMAKE_EXPORT_COMPILE_COMMANDS` is `ON`, so the build folder gets `compile_commands.json`
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L17-L18)).
+- All libraries go to `lib` in the build folder (`LIBRARY_OUTPUT_PATH`,
+  [CMakeLists.txt](/repo/CMakeLists.txt#L104)).
+- If the library folder of the prefix is not a system folder, the installed libraries and programs
+  get a run path. It is `$ORIGIN/../<libdir>` on Linux and `@loader_path/../<libdir>` on macOS.
+  CMake also adds the folders of the linked libraries outside the build
+  (`CMAKE_INSTALL_RPATH_USE_LINK_PATH`, [CMakeLists.txt](/repo/CMakeLists.txt#L29-L40)).
+- On Linux, the linker gets `--enable-new-dtags` and `-z defs`. Thus a library with an undefined
+  symbol does not link ([CMakeLists.txt](/repo/CMakeLists.txt#L42-L48)). If the linker flags are not
+  empty at the first configuration, for example from `LDFLAGS`, they then contain a `;`. With Ninja,
+  each link then fails.
+- Each library has the CMake property `VERSION` with the version of FairRoot
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L250-L252)).
+
+### Build types
+
+`Check_Compiler()` sets `RelWithDebInfo` if you give no build type. It also defines the compiler
+flags of each build type ([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L63-L175)):
+
+| Build type | Linux, GCC | macOS, GCC or Clang |
+| --- | --- | --- |
+| `RelWithDebInfo` | `-Wshadow -Wall -O2 -g` | `-O2 -g -Wshadow` |
+| `Nightly` | `-Wshadow -Wall -O0 -g` | `-O2 -g -Wshadow -Wall -Wextra` |
+| `Test` | `-Wshadow -Wall -O2 -g` | Not defined |
+| `Release` | `-Wshadow -Wall -O2` | `-O2 -Wshadow` |
+| `Debug` | `-Wshadow -Wall -g` | `-g -Wshadow -fno-inline` |
+| `DebugFull` | `-Wshadow -Wall -g3 -fno-inline` and more flags | `-g3 -fno-inline` and more flags |
+| `Profile` | `-Wshadow -Wall -g3 -fno-inline -ftest-coverage -fprofile-arcs -Wextra -Wunused-variable` | `-g3 -fno-inline -ftest-coverage -fprofile-arcs -Wall -Wextra` |
+| `Array_Check` | `-Wshadow -Wall -g3 -fno-inline -ftest-coverage -fprofile-arcs -fstack-protector` | Not defined |
+
+On Linux with Clang, only `Profile` gets its own flags: `--coverage -g3`. The other build types keep
+the flags of CMake. With the Intel compiler on Linux, the macro defines `RelWithDebInfo`, `Release`,
+`Debug` and `DebugFull`. On macOS, a compiler other than GCC or Clang stops CMake with
+`This compiler is not known.`
+
+### C++ standard
+
+`Check_Compiler()` selects the C++ standard in this order
+([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L18-L60)):
+
+1. The value of `CMAKE_CXX_STANDARD`, if you set it.
+2. If the target `ROOT::Core` exists: the highest `cxx_std_<N>` in its interface compile features.
+   If it has no `cxx_std_<N>`, the configuration fails with `list GET given empty list`.
+3. If the target `ROOT::Core` does not exist: `-std=c++<N>` from the output of
+   `fairsoft-config --cxxflags`. In the FairRoot build, `ROOT::Core` always exists at this point.
+4. At least `FairRoot_CXX_STANDARD`, in a project that found FairRoot.
+5. At least `PROJECT_MIN_CXX_STANDARD`, which FairRoot sets to 17
+   ([CMakeLists.txt](/repo/CMakeLists.txt#L10)).
+
+Steps 4 and 5 can raise the standard of the steps before, also a standard that you set. Then
+`fairroot_check_root_cxxstd_compatibility()` compares the result with ROOT.
+
+## Dependencies
+
+The top-level `CMakeLists.txt` finds its dependencies in this order
+([CMakeLists.txt](/repo/CMakeLists.txt#L78-L299)). The qualifier `PUBLIC` puts a package that CMake
+found into the CMake package of FairRoot. `PRIVATE` does not.
+
+| Package | Call | Version | Required |
+| --- | --- | --- | --- |
+| FairCMakeModules | `find_package` | 0.2 | Yes |
+| ROOT | `find_package2(PUBLIC …)` | 6.18.00 | Yes, with the component `RIO`. The components `opengl`, `gdml` and `vmc` are optional. |
+| VMC | `find_package2(PUBLIC …)` | — | Yes, if ROOT has no component `vmc`. Else CMake does not search it. |
+| Pythia6, Pythia8 | `find_package2(PUBLIC …)` | — | No |
+| Protobuf | `find_package2(PUBLIC … CONFIG)`, then with the find module | — | No |
+| Flatbuffers | `find_package2(PUBLIC …)` | — | No |
+| Geant3, Geant4, VGM, Geant4VMC | `find_package2(PUBLIC …)` | — | No |
+| IWYU, GSL | `find_package2(PUBLIC …)` | — | No |
+| FairMQ | `find_package2(PUBLIC …)` | 1.4.0 | Yes, if `BUILD_BASEMQ` is on. Else CMake does not search it. |
+| DDS | `find_package2(PUBLIC …)` | — | No |
+| FairLogger | `find_package2(PUBLIC …)` | 1.2.0 | Yes. The code uses `LOGP` with `{}` fields, which needs FairLogger 1.8.0 or newer, see [Logging](/tools/logging/#the-library-and-the-class). |
+| fmt | `find_package2(PRIVATE …)` | — | Yes |
+| Boost | `find_package2(PUBLIC …)` | 1.67 | Yes, if `BUILD_BASEMQ`, `BUILD_EXAMPLES` or `BUILD_TESTING` is on. Else CMake does not search it. |
+| yaml-cpp | `find_package2(PUBLIC …)` | — | No |
+| ClangFormat | `find_package2(PRIVATE …)` | — | No |
+
+- The VMC target is in the variable `VMCLIB`: `ROOT::VMC` or `VMCLibrary`
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L166-L171)).
+- For yaml-cpp versions that have only the target `yaml-cpp`, FairRoot adds the alias
+  `yaml-cpp::yaml-cpp` ([CMakeLists.txt](/repo/CMakeLists.txt#L269-L278)).
+- The find module of CMake can find Protobuf 4.22 or newer without the abseil target. Then the
+  configuration stops with `set given invalid arguments for CACHE mode`
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L179-L188)).
+
+At the end, `find_package2_implicit_dependencies()` searches the dependencies of the packages that
+CMake found ([CMakeLists.txt](/repo/CMakeLists.txt#L314)). The configuration summary lists each
+package that CMake found, with its version, the required version and its prefix
+([FairRootSummary.cmake](/repo/cmake/private/FairRootSummary.cmake#L40-L151)).
+
+## Exported targets
+
+The installation exports one target for each FairRoot library, with the namespace `FairRoot::`
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L22-L27)). In the build tree of
+FairRoot, the same names are aliases ([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L35-L42)).
+
+- Always built: `FairRoot::Tools`, `FairRoot::Alignment`, `FairRoot::GeoBase`,
+  `FairRoot::ParBase`, `FairRoot::Base`, `FairRoot::Generators`, `FairRoot::TrackBase`,
+  `FairRoot::DataMatch` and `FairRoot::MCStepLogger`.
+- Built only if CMake finds a package or if an option is on: `FairRoot::Geane`,
+  `FairRoot::FastSim`, `FairRoot::MCConfigurator`, `FairRoot::EventDisplay`, `FairRoot::MbsAPI`,
+  `FairRoot::Online`, `FairRoot::FairMQ`, `FairRoot::BaseMQ` and `FairRoot::ParMQ`
+  ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L12-L54)).
+
+[Libraries and headers](/reference/libraries/#overview) gives the library file, the source folder
+and the build condition of each target, and
+[ROOT dictionaries](/reference/libraries/#root-dictionaries) lists the targets with a dictionary.
+The targets have these properties:
+
+- The interface compile feature `cxx_std_<N>`, with the C++ standard of the FairRoot build. A target
+  that links it compiles with at least this standard
+  ([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L19-L28)).
+- The include folder of the installation in `INTERFACE_INCLUDE_DIRECTORIES`. All headers install
+  into this one folder.
+- The libraries install into `CMAKE_INSTALL_LIBDIR`
+  ([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L48-L55)). The library file has
+  the extension `.so` on Linux and `.dylib` on macOS. On Linux, the file name contains the version,
+  for example `libBase.so.19.0.0`, with the link `libBase.so`.
+- `FairRoot::FairMQ` and `FairRoot::BaseMQ` are interface targets without a library file.
+
+The program `parmq-server` installs into `bin`, but it is not exported. The libraries of the
+examples are not exported either. [Libraries and headers](/reference/libraries/) describes each
+library and its headers.
+
+:::tip
+Link the targets, not the library files. The release notes of 18.8.0 announce other library file
+names for a later release ([CHANGELOG.md](/repo/CHANGELOG.md#L260-L262)).
+:::
+
+## The CMake package
+
+The installation has the CMake package in `<prefix>/<libdir>/cmake/FairRoot-19.0.0/`
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L12-L46)). The folder contains
+`FairRootConfig.cmake`, `FairRootConfigVersion.cmake` and the export files `FairRootTargets*.cmake`.
+The version file uses `AnyNewerVersion`: it accepts the installed version if it is the same as or
+newer than the requested version.
+
+<Snippet file="cmake/private/FairRootConfig.cmake.in" start="@PACKAGE_INIT@" end="include(@PACKAGE_PACKAGE_INSTALL_DESTINATION@" lang="cmake" title="cmake/private/FairRootConfig.cmake.in" />
+
+| Variable | Value |
+| --- | --- |
+| `FairRoot_PREFIX` | The install prefix. `set_and_check()` stops CMake if the folder does not exist. |
+| `FairRoot_BINDIR` | The folder `bin` of the installation |
+| `FairRoot_CMAKE_MODULES_DIR` | The folder `share/fairbase/cmake/modules` of the installation |
+| `FairRoot_GIT_VERSION` | The output of `git describe` at the build, without the first `v`. Empty without git or git data, or if the build had FairCMakeModules older than 1.0. |
+| `FairRoot_CXX_STANDARD` | The C++ standard of the build |
+| `FairRoot_VERSION` | `19.0.0`, from the version file |
+| `FairRoot_PACKAGE_DEPENDENCIES` | The `PUBLIC` dependencies that the build found |
+| `FairRoot_<Package>_VERSION` | The minimum version that the build asked for, for example `FairRoot_ROOT_VERSION` |
+| `FairRoot_<Package>_COMPONENTS`, `FairRoot_<Package>_OPTIONAL_COMPONENTS` | The components that the build asked for |
+
+The `PACKAGE_DEPENDENCIES` block contains the dependency variables only if the build had
+FairCMakeModules 1.0 or newer. With an older version, it contains the line `# Not supported`
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L13-L18)). The block only sets
+variables: it does not search the dependencies. If you find FairRoot with `find_package2()`, the
+next `find_package2()` calls add these requirements. `find_package2_implicit_dependencies()` then
+searches the dependencies that you did not find yourself.
+
+### FindFairRoot.cmake
+
+`FindFairRoot.cmake` in the module folder finds the same package from the prefix in `FAIRROOTPATH`
+([FindFairRoot.cmake](/repo/cmake/modules/FindFairRoot.cmake#L13-L73)). It reads the CMake variable
+`FAIRROOTPATH` first, and else the environment variable. Without both, it prints
+`INFO: FAIRROOTPATH not set, CMAKE_PREFIX_PATH should have the needed entries`. Then it calls
+`find_package(FairRoot CONFIG)` and sets these variables:
+
+| Variable | Value |
+| --- | --- |
+| `FAIRROOTPATH` | `FairRoot_PREFIX` |
+| `FAIRROOT_INCLUDE_DIR` | The folder that contains `FairRun.h`, normally `<FAIRROOTPATH>/include` |
+| `FAIRROOT_LIBRARY_DIR` | The folder that contains `libBase.so` or `libBase.dylib`, normally `<FAIRROOTPATH>/lib` or `<FAIRROOTPATH>/lib64` |
+| `FAIRROOT_CMAKEMOD_DIR` | Cache variable: `FairRoot_CMAKE_MODULES_DIR` |
+| `FAIRROOT_FOUND` | `TRUE` or `FALSE` |
+
+It also prints the version, the git version, the C++ standard, the prefix and these folders.
+
+## CMake modules
+
+The installation puts these modules into `<prefix>/share/fairbase/cmake/modules`
+([cmake/CMakeLists.txt](/repo/cmake/CMakeLists.txt#L9-L14)). The folder `cmake/private` of the
+source is not installed. Add the folder to `CMAKE_MODULE_PATH`, then include a module by its name:
+
+| Module | Contents |
+| --- | --- |
+| [FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake) | `fairroot_target_root_dictionary()` |
+| [FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake) | `fairroot_check_root_cxxstd_compatibility()`, `SetBasicVariables()` and helper macros |
+| [WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake) | `WRITE_CONFIG_FILE()`, `CONVERT_LIST_TO_STRING()` |
+| [ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake) | `FAIRROOT_GENERATE_DICTIONARY()`, `GENERATE_LIBRARY()`, `GENERATE_EXECUTABLE()`, `GENERATE_ROOT_TEST_SCRIPT()`, `Format()` |
+| [CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake) | `Check_Compiler()` |
+| [CheckFortran.cmake](/repo/cmake/modules/CheckFortran.cmake) | No function. When you include it, it sets `Fortran_UseLib` from the name of the Fortran compiler. |
+| `Find*.cmake` | See [Find modules](#find-modules). |
+
+### fairroot_target_root_dictionary()
+
+```cmake
+fairroot_target_root_dictionary(<target>
+  HEADERS <header>...
+  LINKDEF <linkdef>
+  [EXTRA_INCLUDE_DIRS <folder>...]
+  [BASENAME <name>])
+```
+
+Adds a ROOT dictionary to a library target
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L44-L183)).
+
+| Argument | Meaning |
+| --- | --- |
+| `<target>` | Required. A target that exists. |
+| `HEADERS` | Required. The headers of the classes, relative to the current `CMakeLists.txt`. |
+| `LINKDEF` | Required. The LinkDef file, relative to the current `CMakeLists.txt`. |
+| `EXTRA_INCLUDE_DIRS` | Optional. More include folders for `rootcling`. |
+| `BASENAME` | Ignored. CMake prints `BASENAME parameter is deprecated. Will be ignored`. |
+
+The function adds this command to the build:
+
+<Snippet file="cmake/modules/FairRootTargetRootDictionary.cmake" start="add_custom_command(" end="DEPENDS ${headers})" title="cmake/modules/FairRootTargetRootDictionary.cmake" />
+
+- `<name>` is the `OUTPUT_NAME` of the target at the call, or else the target name.
+- The dictionary source `G__<name>.cxx` goes into the current build folder. The function adds it to
+  the target as a private source.
+- `G__<name>_rdict.pcm` and `lib<name>.rootmap` go into `${CMAKE_BINARY_DIR}/lib`. The function
+  reads the `LIBRARY_OUTPUT_DIRECTORY` of the target, but does not use it.
+- `rootcling` gets the include folders and the compile definitions of the target, the extra
+  include folders, and `-excludePath ${CMAKE_BINARY_DIR}`. It runs with the library folder of
+  ROOT in `LD_LIBRARY_PATH`, and with `SDKROOT` on macOS when `CMAKE_OSX_SYSROOT` is set.
+- If `ROOT::RIO` is not in the `INTERFACE_LINK_LIBRARIES` of the target, the function links it as
+  `PUBLIC`.
+- The function adds the current source folder to the private include folders of the target.
+- `install()` puts the rootmap and pcm files into `CMAKE_INSTALL_LIBDIR`. Include
+  `GNUInstallDirs` before the call: without it, CMake stops with `install FILES given no DESTINATION!`.
+
+The function stops CMake in these cases:
+
+| Case | Message |
+| --- | --- |
+| An unknown argument | `Unexpected unparsed arguments: …` |
+| No `LINKDEF` or no `HEADERS` | `Missing required argument: LINKDEF` or `… HEADERS` |
+| An absolute path | `add_root_dictionary only accepts relative paths, but thefollowing path is absolute : <path>` |
+| A file that does not exist | `add_root_dictionary was given an inexistant input include <path>` |
+
+### fairroot_check_root_cxxstd_compatibility()
+
+```cmake
+fairroot_check_root_cxxstd_compatibility()
+```
+
+Compares `CMAKE_CXX_STANDARD` with ROOT
+([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L286-L304)). The function takes no
+arguments and does not stop the configuration:
+
+1. If `CMAKE_CXX_STANDARD` is not set, it returns.
+2. If `ROOT_cxx<N>_FOUND` is true, it returns.
+3. If the target `ROOT::Core` does not exist, it prints the warning
+   `ROOT::Core target not found, can't check CXX standard`.
+4. If `cxx_std_<N>` is in the interface compile features of `ROOT::Core`, it returns.
+5. Else it prints the warning `CXX Standard <N> not found in compile features of ROOT: <features>`.
+
+### WRITE_CONFIG_FILE()
+
+```cmake
+WRITE_CONFIG_FILE(<filename>)
+```
+
+Writes a shell script that sets the environment for ROOT macros, into the current build folder
+([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L8-L187)). It is a macro, so it
+works in the scope of the caller.
+
+- A `<filename>` that contains `.csh` gives a csh script. Other names give an sh script.
+- A `<filename>` that contains `install` gives a script for the installation: the libraries in
+  `<prefix>/<libdir>` and `check_system.sh` in `CMAKE_INSTALL_FULL_LIBEXECDIR`. Other names give a
+  script for the build folder: the libraries in `${CMAKE_BINARY_DIR}/lib` and `check_system.sh` in
+  `CMAKE_BINARY_DIR`.
+- The macro also writes `check_system.sh` and `check_system.csh` into the current build folder. On
+  macOS, it takes the templates `check_system_mac.*`. It does not install any file.
+- If the CMake variable `FAIRROOTPATH` is set, the macro takes its templates from
+  `${FAIRROOTPATH}/share/fairbase/cmake/scripts`. Else it takes them from `cmake/scripts` in
+  `PROJECT_SOURCE_DIR`.
+
+The macro reads these variables:
+
+| Variable | Use |
+| --- | --- |
+| `LD_LIBRARY_PATH` | A list of library folders for `LD_LIBRARY_PATH`, or `DYLD_LIBRARY_PATH` on macOS. The macro puts the library folder of the script in front, and adds the library folders of Pythia6, Geant3 and Geant4VMC. |
+| `ROOT_INCLUDE_PATH` | A list of include folders for `ROOT_INCLUDE_PATH` |
+| `VMCWORKDIR`, `SIMPATH`, `FAIRROOTPATH` | Exported with the same names |
+| `FULL_CONFIG_FILE` | `true` (the default) or `false`. The sh script runs the value as a command, so `ON` and `OFF` do not work. With `false`, the script leaves out the inner `if` block of the template. |
+| `PYTHONPATH`, `PATH` | Lists of more folders. The script sets `PYTHONPATH` to its list, and puts its `PATH` list in front of `PATH`. |
+| The variables of ROOT, Geant3, Geant4, Geant4VMC, Pythia6 and Pythia8 | For example `ROOT_BINDIR`, `Geant3_SYSTEM_DIR`, `Geant4_DATASETS` and `PYTHIA8DATA` |
+
+The script sets the variables only if `check_system.sh` reports the same system as at the build.
+[The scripts that CMake writes](/reference/environment/#the-scripts-that-cmake-writes) shows the sh
+template and explains each variable that the script sets.
+
+The macro changes variables of the caller. It removes `${CMAKE_BINARY_DIR}/lib` from
+`LD_LIBRARY_PATH`. It turns `ROOT_INCLUDE_PATH`, `ROOT_LIBRARY_DIR`, `ROOT_LIBRARIES`,
+`Geant4_INCLUDE_DIRS`, `Geant3_INCLUDE_DIRS` and other lists into strings with colons. It adds
+folders to the lists `PYTHONPATH` and `PATH`, and sets `FAIRLIBDIR`, `G3SYS`, `USE_VGM` and
+`FULL_CONFIG_FILE`. Call it at the end of the top-level `CMakeLists.txt`.
+
+`CONVERT_LIST_TO_STRING(<item>...)` is the helper macro: it joins its arguments with colons and
+writes the result into the variable `output`
+([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L190-L206)).
+
+### SetBasicVariables()
+
+```cmake
+SetBasicVariables()
+```
+
+Sets common variables for a project that found FairRoot with `FindFairRoot.cmake`
+([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L235-L265)). If `FairRoot_FOUND` is true,
+it sets:
+
+- `BASE_INCLUDE_DIRECTORIES`: `FAIRROOT_INCLUDE_DIR`, `VMC_INCLUDE_DIRS`, `ROOT_INCLUDE_DIRS`,
+  `FairLogger_INCDIR` and the include folder of `fmt::fmt`
+- `SYSTEM_INCLUDE_DIRECTORIES`: `Boost_INCLUDE_DIRS`
+- `ROOT_INCLUDE_PATH`: `FAIRROOT_INCLUDE_DIR`
+- `FAIRLIBDIR`: `FAIRROOT_LIBRARY_DIR`
+
+Then it calls `include_directories()` for the two include lists. If `FairRoot_FOUND` is false, it
+only sets `FAIRLIBDIR` to `${CMAKE_BINARY_DIR}/lib`. In both cases, it puts `FAIRLIBDIR` in front of
+`LD_LIBRARY_PATH`.
+
+### GENERATE_LIBRARY()
+
+```cmake
+GENERATE_LIBRARY()
+```
+
+Makes a shared library, with a dictionary if `LINKDEF` is set
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L165-L247)). The macro takes no arguments.
+It reads these variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `LIBRARY_NAME` | The name of the target and the library |
+| `SRCS` | The source files |
+| `HEADERS` | The headers for the dictionary. Default: `SRCS` with `.h` in place of `.cxx`. |
+| `LINKDEF` | The LinkDef file. If it is set, the macro calls `FAIRROOT_GENERATE_DICTIONARY()`. |
+| `DICTIONARY` | The dictionary source. Default: `G__<LIBRARY_NAME>Dict.cxx` in the current build folder. |
+| `NO_DICT_SRCS` | More source files |
+| `DEPENDENCIES` | The libraries to link. If the extension of an item ends in `a`, for example `.a`, the macro links the file name without the folder and the extension. |
+| `INCLUDE_DIRECTORIES`, `SYSTEM_INCLUDE_DIRECTORIES`, `DEFINITIONS` | The include folders and definitions for the dictionary |
+| `PROJECT_LIBRARY_PROPERTIES` | Properties of the target, for example `VERSION`. `FAIRROOT_LIBRARY_PROPERTIES` is the old name. |
+
+The macro installs the headers into `include` and the library into `lib`, without an export. At the
+end, it clears `LIBRARY_NAME`, `DICTIONARY`, `LINKDEF`, `SRCS`, `HEADERS`, `NO_DICT_SRCS` and
+`DEPENDENCIES`. The dictionary source gets the compile flag `-Wno-old-style-cast`. If CMake found
+include-what-you-use, the macro also adds a rule that checks the sources.
+
+### FAIRROOT_GENERATE_DICTIONARY()
+
+```cmake
+FAIRROOT_GENERATE_DICTIONARY()
+```
+
+Makes a dictionary with `rootcint` ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L46-L119)).
+`GENERATE_LIBRARY()` calls it. The macro reads `LINKDEF`, `DICTIONARY`, `LIBRARY_NAME`,
+`INCLUDE_DIRECTORIES`, `SYSTEM_INCLUDE_DIRECTORIES`, `HDRS`, `DEFINITIONS` and
+`LIBRARY_OUTPUT_PATH`.
+
+- With an argument, it stops with `FAIRROOT_GENERATE_DICTIONARY has no args`.
+- If the CMake variable `FAIRROOTPATH` is not set, it stops with `Do not call from inside FairRoot`.
+  It takes its template from `${FAIRROOTPATH}/share/fairbase/cmake/scripts`.
+- It writes the script `generate_dictionary_<name>.sh` into the current build folder. `<name>` is
+  the name of the dictionary file without its extension.
+- The script runs `rootcint` with the library folder of ROOT in the library path.
+- It writes `lib<LIBRARY_NAME>.rootmap` into `LIBRARY_OUTPUT_PATH`, and copies
+  `G__<LIBRARY_NAME>Dict_rdict.pcm` there. It installs both files into `lib`.
+
+`ROOTMacros.cmake` searches `rootcint` in `ROOT_BINDIR` when you include it. Include it after the
+search for ROOT ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L39-L43)).
+
+### GENERATE_ROOT_TEST_SCRIPT()
+
+```cmake
+GENERATE_ROOT_TEST_SCRIPT(<macro>)
+```
+
+Writes a script that runs a ROOT macro, for a CTest test
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L122-L162)). `<macro>` is the full path of
+the macro below `PROJECT_SOURCE_DIR`.
+
+- The script `<macro name>.sh` goes into the matching folder below `PROJECT_BINARY_DIR`. The macro
+  also makes the folder `data` there.
+- The script sets `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `PATH`, `ROOT_INCLUDE_PATH`,
+  `FAIRROOTPATH`, `VMCWORKDIR`, `Geant4VMC_MACRO_DIR`, `USE_VGM`, `BOOST`, `G3SYS`, `PYTHIA8DATA`
+  and the Geant4 data variables. It takes the values from the CMake variables at the call. If the
+  folder of Geant4 has the file `env.sh`, the script loads it with the shell command `.`
+  ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in#L10-L28)). FairRoot reads
+  `GEANT4VMC_MACRO_DIR`, not `Geant4VMC_MACRO_DIR`, see
+  [GEANT4VMC_MACRO_DIR](/reference/environment/#geant4vmc_macro_dir-the-geant4-vmc-macros).
+- The script joins its arguments with commas. It changes to its folder and runs the program in
+  `ROOT_EXECUTABLE` with `-q -b`, the macro and these arguments.
+
+The template is `root_macro.sh.in`, from `FAIRROOTPATH` if it is set, and else from `cmake/scripts`
+of the project. [Tests](/tools/testing/) shows how the examples use it.
+
+### GENERATE_EXECUTABLE()
+
+```cmake
+GENERATE_EXECUTABLE()
+```
+
+Makes a program from the variables `EXE_NAME`, `SRCS` and `DEPENDENCIES`, and installs it into
+`BIN_DESTINATION` or `bin` ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L250-L272)).
+At the end, it clears `EXE_NAME`, `SRCS` and `DEPENDENCIES`. No CMake file of the repository uses
+it.
+
+### Check_Compiler()
+
+```cmake
+Check_Compiler()
+```
+
+Sets the default build type, the C++ standard and the compiler flags of the build types
+([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L8-L186)). See
+[Build types](#build-types) and [C++ standard](#c-standard). To use the standard of ROOT, call it
+after the search for ROOT.
+
+### Helper macros of FairMacros.cmake
+
+| Macro | Effect |
+| --- | --- |
+| `fair_change_extensions_if_exists(<ext1> <ext2> FILES <file>... OUTVAR <var>)` | Changes the extension of each file and keeps the files that exist in the current source folder. The FairRoot libraries and the examples use it to get the headers of their sources. |
+| `CHANGE_FILE_EXTENSION(*.<ext1> *.<ext2> <var> "<list>")` | Changes the extension of each file, without a check. The extensions must start with `*`. |
+| `CHECK_OUT_OF_SOURCE_BUILD()` | Stops CMake if the build folder is the source folder. It also removes the folder `Testing` from the source folder. |
+| `CHECK_INSTALL_DIRECTORY()` | Stops CMake if the install prefix is the build folder |
+| `SUBDIRLIST(<var> <folder>)` | Lists the subfolders of a folder |
+| `UNIQUE(<var> "<list>")` | Removes the duplicates from a list |
+| `INTERSECTION(<var> "<list1>" "<list2>")` | The items that are in both lists |
+| `REMOVE_FROM_LIST(<var> "<list1>" "<list2>")` | The items of the first list that are not in the second list |
+| `CLEAN_PATH_LIST(<path> <keywords> <var>)` | Splits a colon list, and removes the items that match one of the keywords and the duplicates |
+| `Write_Geant4Data_Variables_sh()`, `Write_Geant4Data_Variables_csh()` | Write the export lines of the Geant4 data sets into `Geant4Data_Variables_sh` or `Geant4Data_Variables_csh` |
+| `generate_package_components()` | Calls `join()`, which no module defines. Do not use it. |
+
+## Find modules
+
+The module folder also contains find modules. `find_package()` uses them when the folder is in
+`CMAKE_MODULE_PATH`.
+
+| Module | What it does |
+| --- | --- |
+| [FindFairRoot.cmake](/repo/cmake/modules/FindFairRoot.cmake) | See [FindFairRoot.cmake](#findfairrootcmake). |
+| [FindGeant3.cmake](/repo/cmake/modules/FindGeant3.cmake) | Loads the CMake package of Geant3. Adds the include folders to the target `geant321` if it has none. Sets `Geant3_LIBRARY_DIR` and `Geant3_SYSTEM_DIR`, the folder `share/geant3` with the folder `data`. |
+| [FindGeant4.cmake](/repo/cmake/modules/FindGeant4.cmake) | Loads the CMake package of Geant4. Before Geant4 10.6, it adds the include folders to the Geant4 targets, and links `CLHEP::CLHEP` to `G4global` for a system CLHEP. |
+| [FindGeant4VMC.cmake](/repo/cmake/modules/FindGeant4VMC.cmake) | Loads the CMake package of Geant4VMC. Adds the include folders to the target `geant4vmc` if it has none. Sets `Geant4VMC_LIBRARY_DIR`, `Geant4VMC_SHARE_DIR`, and `Geant4VMC_MACRO_DIR`, the folder with `g4libs.C`. |
+| [FindPythia6.cmake](/repo/cmake/modules/FindPythia6.cmake) | Finds the library `Pythia6` or `pythia6`, with the hints `PYTHIA6_ROOT` and `Pythia6_LIBRARY_DIR`. Sets `Pythia6_LIBRARY`, `Pythia6_LIBRARY_DIR` and `PYTHIA6_LIBRARY_DIR`, and makes the imported target `Pythia6`. |
+| [FindPythia8.cmake](/repo/cmake/modules/FindPythia8.cmake) | Searches `PYTHIA8_DIR` (CMake or environment variable), `SIMPATH`, `SIMPATH/generators`, `/usr` and `/opt/pythia8`. Sets `PYTHIA8_INCLUDE_DIR`, `PYTHIA8_INCLUDE_DIRS`, `PYTHIA8_LIBRARY`, `PYTHIA8_LIBRARIES`, `PYTHIA8_LIB_DIR`, `PYTHIA8DATA` and `Pythia8_VERSION`. It needs the header, the library and `PYTHIA8DATA`. |
+| [FindHEPMC.cmake](/repo/cmake/modules/FindHEPMC.cmake) | Searches `HEPMC_DIR` and `SIMPATH`. Sets `HEPMC_INCLUDE_DIR` and `HEPMC_LIB_DIR`, and adds the library folder to the CMake variable `LD_LIBRARY_PATH`. |
+| [FindGSL.cmake](/repo/cmake/modules/FindGSL.cmake) | Runs `gsl-config`. Sets `GSL_INCLUDE_DIRS`, `GSL_LIBRARIES`, `GSL_LIBRARY_DIRS`, `GSL_DEFINITIONS` and `GSL_CFLAGS`. |
+| [FindIWYU.cmake](/repo/cmake/modules/FindIWYU.cmake) | Finds `include-what-you-use` in `PATH`. Sets `IWYU_BINARY`, `IWYU_FOUND` and `IWYU_VERSION`, and defines the macro `CHECK_HEADERS()`. |
+| [FindClangFormat.cmake](/repo/cmake/modules/FindClangFormat.cmake) | Finds `clang-format` and `git-clang-format`. Sets `CLANG_FORMAT_BIN`, `GIT_CLANG_FORMAT_BIN` and `ClangFormat_VERSION`. |
+
+## Script templates
+
+The installation puts the script templates into `<prefix>/share/fairbase/cmake/scripts`
+([cmake/scripts](/repo/cmake/scripts/)):
+
+| Template | Used by |
+| --- | --- |
+| `config.sh.in`, `config.csh.in` | `WRITE_CONFIG_FILE()` |
+| `check_system.sh.in`, `check_system.csh.in`, `check_system_mac.sh.in`, `check_system_mac.csh.in` | `WRITE_CONFIG_FILE()` |
+| `root_macro.sh.in` | `GENERATE_ROOT_TEST_SCRIPT()` |
+| `generate_dictionary_root.sh.in` | `FAIRROOT_GENERATE_DICTIONARY()` |
+| `fairroot-config.in` | The build of FairRoot, for `bin/fairroot-config` |
+| `set_env.sh.in`, `run_binary.sh.in`, `CMakeLists.txt_roc` | No CMake file of the repository |
+
+The build of FairRoot installs `config.sh_install` as `bin/FairRootConfig.sh`, `config.csh_install`
+as `bin/FairRootConfig.csh`, and the check scripts into `libexec`
+([CMakeLists.txt](/repo/CMakeLists.txt#L318-L344)). The program `fairroot-config` takes exactly one
+of the options `--version`, `--major_version`, `--minor_version`, `--patch_version`, `--cc`, `--cxx`,
+`--fairsoft_path` and `--help` ([fairroot-config.in](/repo/cmake/scripts/fairroot-config.in)).
+
+## Functions of the FairRoot build
+
+The folder `cmake/private` has functions for the build of FairRoot only. The installation does not
+contain them.
+
+| Function | Effect |
+| --- | --- |
+| `fairroot_library_settings(<target>)` | Adds the alias `FairRoot::<target>` and the compile feature `cxx_std_<N>`. For a target that is not an interface library, it also sets the properties in `PROJECT_LIBRARY_PROPERTIES`. |
+| `fairroot_compile_features(<target>)` | Adds the interface compile feature `cxx_std_<N>` with `CMAKE_CXX_STANDARD` |
+| `fairroot_install_exported(TARGETS <target>...)` | Installs targets into the export set `FairRootTargets` |
+| `fairroot_add_catch2_test_suite(<suite> SOURCES <file>... [DEPENDENCIES <target>...] [ENABLE_LD_LIBRARY_PATH_WORKAROUND])` | Makes the test program `test_<suite>` with `Catch2::Catch2WithMain` and adds its tests with the prefix `<suite>::` |
+| `fairroot_discover_catch2_tests(<target> [SUITE <suite>] [ENABLE_LD_LIBRARY_PATH_WORKAROUND])` | Adds the Catch2 tests of a program to CTest |
+| `install_cmake_package()` | Writes and installs the CMake package |
+| `fairroot_summary_header()` and the other summary functions | Print the configuration summary |
+| `get_codemeta_version()` | Reads the version from `codemeta.json`. If it differs from the project version, CMake prints an author warning. |
+| The macros of `Testlib.cmake` | Helpers for the CTest scripts `FairRoot_build_test.cmake`, `FairRoot_format_test.cmake` and `FairRoot_profile_test.cmake` |
+
+The test workaround adds the CMake variable `LD_LIBRARY_PATH` and the environment variable
+`LD_LIBRARY_PATH` to the test discovery. It needs CMake 3.22. With an older CMake, the suite gets no
+tests ([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L58-L114)).
+
+## Custom targets
+
+| Target | When | Effect |
+| --- | --- | --- |
+| `FormatCheck` | CMake found clang-format and git-clang-format | Runs `check-format.sh` in the source folder ([CMakeLists.txt](/repo/CMakeLists.txt#L299-L308)) |
+| `checkHEADERS` | CMake found include-what-you-use | Runs the header checks of `CHECK_HEADERS()` ([CMakeLists.txt](/repo/CMakeLists.txt#L295-L297)). Only `GENERATE_LIBRARY()` adds such checks, and the build of FairRoot does not call it, so the target checks nothing there. |
+
+## Related pages
+
+- [Install FairRoot](/start/install/): build, test and install FairRoot.
+- [Use FairRoot in a CMake project](/start/cmake/): a complete project that uses these functions.
+- [Libraries and headers](/reference/libraries/): the libraries, their headers and the installed files.
+- [Environment variables](/reference/environment/): the variables of `config.sh` and `FairRootConfig.sh`.

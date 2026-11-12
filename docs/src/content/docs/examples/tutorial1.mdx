@@ -1,0 +1,276 @@
+---
+title: 'Tutorial 1: a simple detector'
+description: 'Two silicon planes, a box generator and Geant4 or Geant3: the smallest complete simulation in FairRoot, with its detector class, MC point class, macros and tests.'
+sidebar:
+  order: 2
+code:
+  [
+    examples/simulation/Tutorial1/src/FairTutorialDet1.h,
+    examples/simulation/Tutorial1/src/FairTutorialDet1.cxx,
+    examples/simulation/Tutorial1/src/FairTutorialDet1Point.h,
+    examples/simulation/Tutorial1/src/FairTutorialDet1Geo.cxx,
+    examples/simulation/Tutorial1/src/FairTutorialDet1ContFact.cxx,
+    examples/simulation/Tutorial1/src/FairSimConfig.cxx,
+    examples/simulation/Tutorial1/src/runTutorial1.cxx,
+    examples/simulation/Tutorial1/macros/run_tutorial1.C,
+    examples/simulation/Tutorial1/macros/run_tutorial1_mesh.C,
+    examples/simulation/Tutorial1/macros/run_tutorial1_binary.C,
+  ]
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+Tutorial 1 simulates a detector of two thin silicon planes in a cave of vacuum. A box generator sends
+pions along the z axis, and Geant4 or Geant3 transports them. It is the smallest complete simulation
+in FairRoot. It has one detector class for the planes, one MC point class, and a set of macros. Each
+macro changes one part of the setup.
+
+## What the example shows
+
+- A detector that reads its volumes from an ASCII geometry file and makes MC points in its sensitive
+  volumes.
+- An MC point class derived from `FairMCPoint`.
+- A simulation macro for Geant3 and Geant4, with and without
+  [worker threads](/simulation/geant4-mt/), that checks its own output.
+- Variants of the macro: Pythia decays, UrQMD input, dose meshes and fast simulation.
+- The same simulation as a compiled program with command line options.
+
+For a step-by-step run of the main macro, see [Your first simulation](/start/first-simulation/).
+
+## The files
+
+<FileTree>
+- examples/simulation/Tutorial1/
+  - src/
+    - FairTutorialDet1.cxx the detector
+    - FairTutorialDet1Point.cxx the MC point
+    - FairTutorialDet1Geo.cxx the geometry set of the ASCII file
+    - FairTutorialDet1GeoPar.cxx the geometry parameter container
+    - FairTutorialDet1ContFact.cxx the container factory
+    - FairFastSimExample.cxx a fast simulation detector, and `FairFastSimExample2.cxx`
+    - FairSimConfig.cxx the command line options of `tut1`
+    - runTutorial1.cxx the `main()` of `tut1`
+    - Tutorial1LinkDef.h the classes of the ROOT dictionary
+    - CMakeLists.txt the library `ExSimulation1` and the program `tut1`
+  - macros/
+    - run_tutorial1.C the main simulation macro
+    - …
+    - CMakeLists.txt the scripts of the macros and the tests
+</FileTree>
+
+Each class in `src/` has a header file with the same name, for example `FairTutorialDet1.h`. The
+example also uses these common parts of the examples (see
+[Common parts of the examples](/examples/common/)):
+
+- The geometry files in `examples/common/geometry/`.
+- The engine configuration in `examples/common/gconfig/`.
+- The stack `FairStack` and the cave `FairCave`.
+
+The library `ExSimulation1` links `FairRoot::FastSim` and `Boost::program_options`
+([src/CMakeLists.txt](/repo/examples/simulation/Tutorial1/src/CMakeLists.txt#L33-L54)). Thus CMake
+adds Tutorial 1 only if both targets exist.
+
+## The detector
+
+### The geometry
+
+The detector reads its volumes from `double_sector.geo`. This is the first of its two volumes:
+
+<Snippet file="examples/common/geometry/double_sector.geo" lines="1-15" />
+
+Each volume has a name, the mother volume, the shape, the medium, the corner points of the shape, the
+position and the rotation matrix. The lengths are in mm. `tutdet1` is a box of silicon,
+800 mm × 800 mm × 0.4 mm, at z = 300 mm. `tutdet2` is the same box at z = 302 mm. The comment line
+before `tutdet2` says z = 300 mm, but the position line says 302 mm. For the format, see
+[Geometry and media file format](/reference/geo-format/).
+
+`ConstructGeometry()` reads the file:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="void FairTutorialDet1::ConstructGeometry()" title="FairTutorialDet1.cxx" />
+
+`FairTutorialDet1Geo` is the geometry set of the file. Its name `tutdet` is the start of the volume
+names, and 10 is the maximum number of modules
+([FairTutorialDet1Geo.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1Geo.cxx/#L10-L12)).
+The unit test `ExSimulation1::FairTutorialDet1Geo` checks these names
+([test_FairTutorialDet1Geo.cxx](/repo/tests/examples/simulation/Tutorial1/test_FairTutorialDet1Geo.cxx)).
+`ConstructASCIIGeometry()` builds the volumes and keeps the sensitive and the passive volumes in the
+parameter container `FairTutorialDet1GeoPar`. The container factory makes this container
+([FairTutorialDet1ContFact.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1ContFact.cxx/#L18-L45)).
+See [Parameters and the runtime database](/concepts/parameters/).
+
+In an ASCII geometry, a volume is sensitive if its medium has the sensitivity flag and the detector
+is active ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)). `run_tutorial1.C`
+makes the detector active with `kTRUE`. The flag is the first number in the second line of the
+medium ([FairGeoMedium.cxx](/source/fairroot/geobase/FairGeoMedium.cxx/#L233)). In `media.geo`,
+`silicon` has the value 1:
+
+<Snippet file="examples/common/geometry/media.geo" lines="14-16" />
+
+`IsSensitive()` gives the same result from the volume name. In multithreaded mode,
+`FairDetector::Initialize()` uses it to find the sensitive volumes, also on the worker threads
+([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L93-L97)). See
+[Write a detector](/simulation/detectors/).
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="Bool_t FairTutorialDet1::IsSensitive" title="FairTutorialDet1.cxx" />
+
+### ProcessHits()
+
+The MC application calls `ProcessHits()` for each step in a sensitive volume of the detector:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="Bool_t FairTutorialDet1::ProcessHits(FairVolume* vol)" title="FairTutorialDet1.cxx" />
+
+At the first step in a plane, the detector sets the energy loss to 0. It keeps the time, the track
+length, the position and the momentum. At each step, it adds the energy loss of the step. At the last
+step in the plane, it makes an MC point if the energy loss is not 0. Then it tells the stack that the
+track has a point in the detector `kTutDet`. The stack uses this count to select the MC tracks that
+it stores, see [The particle stack and MC tracks](/simulation/stack/). For the functions of
+`TVirtualMC`, see [Write a detector](/simulation/detectors/).
+
+### The output branch
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="void FairTutorialDet1::Register()" title="FairTutorialDet1.cxx" />
+
+`Register()` makes the branch `TutorialDetPoint` in the folder `TutorialDet`. The last argument
+`kTRUE` writes the branch to the file. The comment above the call is wrong: the code registers
+`TutorialDetPoint`, not `FairTutorialDet1Point`, and gives `kTRUE`.
+
+At the end of the event, the stack gets the collection from `GetCollection(0)` and corrects the
+track index of each MC point ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L269-L295)).
+Then the MC application fills the tree, and `EndOfEvent()` clears the collection
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L646-L671)).
+
+## The MC point
+
+`FairTutorialDet1Point` derives from [`FairMCPoint`](/api/FairMCPoint/) and adds only `Print()`. All
+values come from `FairMCPoint` ([FairMCPoint.h](/source/fairroot/base/event/FairMCPoint.h/#L83-L90)):
+
+| Member | Value in Tutorial 1 |
+| --- | --- |
+| `fTrackID` | The index of the MC track in the branch `MCTrack` |
+| `fDetectorID` | The volume ID of the transport engine, from `vol->getMCid()` |
+| `fX`, `fY`, `fZ` | The position where the track enters the plane, in cm |
+| `fPx`, `fPy`, `fPz` | The momentum where the track enters the plane, in GeV |
+| `fTime` | The time since the start of the event, at the entrance, in ns |
+| `fLength` | The track length at the entrance, in cm |
+| `fELoss` | The sum of the energy loss of all steps in the plane, in GeV |
+| `fEventId` | Always 0. The detector does not give an event ID to the constructor ([FairMCPoint.h](/source/fairroot/base/event/FairMCPoint.h/#L37-L44)). |
+
+## The macros
+
+| Macro | Arguments and defaults | What it shows | Test |
+| --- | --- | --- | --- |
+| `run_tutorial1.C` | `nEvents = 10`, `mcEngine = "TGeant3"`, `isMT = true`, `loadPostInitConfig = false` | The main simulation. It checks its output at the end. | Three tests, see [Run the example](#run-the-example) |
+| `run_tutorial1_pythia6.C` | `nEvents = 10`, `mcEngine = "TGeant3"` | Pythia 6 as the external decayer, with `DecayConfig.C` | If CMake found Pythia 6 |
+| `run_tutorial1_pythia8.C` | `nEvents = 10`, `mcEngine = "TGeant3"` | Pythia 8 as the external decayer, with `DecayConfigPythia8.C` | If CMake found Pythia 8 |
+| `run_tutorial1_urqmd.C` | `nEvents = 2`, `mcEngine = "TGeant3"` | `FairUrqmdGenerator` reads the events from `examples/common/input/urqmd.ftn14` | Yes |
+| `run_tutorial1_mesh.C` | `nEvents = 10`, `mcEngine = "TGeant3"` | Dose and fluence on two meshes, written to `radGridResults.root` | Yes |
+| `run_tutorial1_fastsim.C` | `nEvents = 10`, `mcEngine = "TGeant3"`, `isMT = false` | Two fast simulation detectors, at z = 20 cm and z = 50 cm | No |
+| `run_tutorial1_binary.C` | None | The simulation as a function for the program `tut1` | No |
+| `eventDisplay.C` | None | The MC tracks of an output file in the event display | No |
+
+All simulation macros set `GEOMPATH` and `CONFIG_DIR` in the same way. CMake installs the first five macros of
+the table into `<prefix>/share/fairbase/examples/simulation/Tutorial1/`
+([macros/CMakeLists.txt](/repo/examples/simulation/Tutorial1/macros/CMakeLists.txt#L72-L74)).
+
+- **Pythia decays:** the macros give the full path of the decay macro to
+  [`SetPythiaDecayer()`](/api/FairRunSim/#SetPythiaDecayer-2). See
+  [Transport engines and their configuration](/simulation/engines/).
+- **Dose meshes:** the box generator covers 0 to 55 degrees, uniform in cos θ. One mesh covers the
+  planes, and one the origin. With the grid on, `FinishRun()` writes the histogram file but does not
+  call `Write()` of the output ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L368-L370)).
+  See [Radiation length and dose maps](/simulation/radiation/).
+- **Fast simulation:** the macro also stores the trajectories. See
+  [Fast simulation](/simulation/fast-simulation/).
+- **Event display:** `eventDisplay.C` reads `tutorial1_TGeant3_pions.mc_p2.000_t0_n10.root`. This is
+  the file name of `run_tutorial1_fastsim.C` with Geant3 and 10 events, not of `run_tutorial1.C`.
+  See [Event display](/reconstruction/event-display/).
+
+## Run the example
+
+Build and install FairRoot, then run the tests of Tutorial 1 in the build folder:
+
+```sh
+cd build
+ctest -R 'ex_sim_tutorial1|ExSimulation1' --output-on-failure
+```
+
+The test of the multithreaded mode gives all four arguments of the macro:
+
+<Snippet file="examples/simulation/Tutorial1/macros/CMakeLists.txt" start="add_test(NAME ex_sim_tutorial1_Geant4MT" end="/^\)$/" />
+
+| Test | Command | Passes if |
+| --- | --- | --- |
+| `ex_sim_tutorial1_TGeant4` | `run_tutorial1.sh 10 "TGeant4"` | The output has `Macro finished successfully`. |
+| `ex_sim_tutorial1_Geant4MT` | `run_tutorial1.sh 20 "TGeant4" true false` | The output has `Simulation successful.` |
+| `ex_sim_tutorial1_PostInitConfig` | `run_tutorial1.sh 1 "TGeant4" false true` | The output has `Loading Geant4 PostInit Config.` |
+| `ex_sim_tutorial1_mesh_TGeant4` | `run_tutorial1_mesh.sh 10 "TGeant4"` | The output has `Macro finished successfully`. |
+| `ex_sim_tutorial1_urqmd_TGeant4` | `run_tutorial1_urqmd.sh 2 "TGeant4"` | The output has `Macro finished successfully`. |
+| `ex_sim_tutorial1_pythia6_TGeant4`, `ex_sim_tutorial1_pythia8_TGeant4` | `run_tutorial1_pythia6.sh` or `run_tutorial1_pythia8.sh` with `10 "TGeant4"` | The output has `Macro finished successfully`. |
+| `ExSimulation1::FairTutorialDet1Geo` | The Catch2 program `test_ExSimulation1` | The checks of the volume names pass. |
+
+Each macro test has a time limit of 60 s. With Geant3 and `-DENABLE_GEANT3_TESTING=ON`, CMake adds a
+`TGeant3` variant of each test with `TGeant4` in its name. With a pass expression, CTest ignores the
+exit code of the macro, see [Tests](/tools/testing/). CTest gives `"TGeant4"` to the script with its
+double quotes. In a shell, write `'"TGeant4"'`, see [Your first simulation](/start/first-simulation/).
+
+### The program tut1
+
+`tut1` calls `run_tutorial1_main()` of `run_tutorial1_binary.C` as compiled code. The build puts it
+into `examples/simulation/Tutorial1/src/` of the build folder. CMake installs it into
+`<prefix>/share/fairbase/examples/simulation/Tutorial1/bin/`
+([src/CMakeLists.txt](/repo/examples/simulation/Tutorial1/src/CMakeLists.txt#L65-L70)). No test runs
+it.
+
+```sh
+source <build>/config.sh
+<build>/examples/simulation/Tutorial1/src/tut1 --engine TGeant4 --nevents 10
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--nevents` | `1` | The number of events |
+| `--engine` | `TGeant3` | `TGeant3` or `TGeant4` |
+| `--multi-threaded` | Off | Geant4 with worker threads |
+| `--output-file` | `sim.root` | The data file |
+| `--parameter-file` | `par.root` | The parameter file |
+| `--random-seed` | `0` | The seed of the `TRandom3` |
+| `--help` | | Prints the options |
+
+The options and defaults are in [FairSimConfig.cxx](/source/examples/simulation/Tutorial1/src/FairSimConfig.cxx/#L21-L35)
+and [FairSimConfig.h](/source/examples/simulation/Tutorial1/src/FairSimConfig.h/#L34-L40). With an
+unknown engine, `tut1` logs an error and ends with the exit code 0
+([runTutorial1.cxx](/source/examples/simulation/Tutorial1/src/runTutorial1.cxx/#L16-L20)).
+
+:::caution
+`run_tutorial1_binary.C` makes the modules and the generators as local objects. The run deletes its
+primary generator in its destructor ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L109)),
+which is not correct for a local object. In your own code, make the modules and the generators with
+`new`, as `run_tutorial1.C` does.
+:::
+
+## What to look at in the output
+
+Run `run_tutorial1.C` with `isMT = false` to get one data file, or open the file of a worker thread.
+Then use these commands at the ROOT prompt:
+
+| Command | What it shows |
+| --- | --- |
+| `cbmsim->Draw("TutorialDetPoint.fZ")` | The entrance of the MC points into the two planes, near z = 30 cm |
+| `cbmsim->Draw("TutorialDetPoint.fELoss*1e6")` | The energy loss in a plane, in keV |
+| `cbmsim->Draw("TutorialDetPoint.fDetectorID")` | Two volume IDs, one for each plane |
+| `cbmsim->Draw("MCTrack.fPdgCode")` | The PDG codes of all MC tracks: the primary pions and their secondaries |
+| `cbmsim->Scan("TutorialDetPoint.fTrackID:TutorialDetPoint.fZ")` | For each MC point, the index of its MC track |
+
+The macro itself checks the output for three branches and 46 leaves
+([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L199-L206)). A
+change of the data classes changes the number of leaves.
+
+## Related pages
+
+- [Your first simulation](/start/first-simulation/): run `run_tutorial1.C` block by block.
+- [Write a detector](/simulation/detectors/): the parts of a detector class in detail.
+- [Common parts of the examples](/examples/common/): the cave, the stack and the engine
+  configuration.
+- [Write a simulation macro](/simulation/run-macro/): all steps and options of the macro.
+- [Examples](/examples/overview/): the other examples and how to build them.

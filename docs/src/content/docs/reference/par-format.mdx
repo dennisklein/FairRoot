@@ -1,0 +1,283 @@
+---
+title: 'ASCII parameter file format'
+description: 'The text format of parameter files: one block for each container, with typed values and arrays. FairParAsciiFileIo reads and writes it for FairParGenericSet containers.'
+sidebar:
+  order: 5
+code: [fairroot/parbase/FairGenericParAsciiFileIo.cxx, fairroot/parbase/FairDetParAsciiFileIo.cxx, fairroot/parbase/FairParAsciiFileIo.cxx, fairroot/parbase/FairParamList.h, fairroot/parbase/FairParamList.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+An ASCII parameter file holds the values of one or more parameter containers as text. Each container has a block
+with its name, and each parameter has a line with a name, a type and a value.
+[`FairParAsciiFileIo`](/api/FairParAsciiFileIo/) opens the file, and
+[`FairGenericParAsciiFileIo`](/api/FairGenericParAsciiFileIo/) reads and writes the blocks.
+
+Only containers that derive from [`FairParGenericSet`](/api/FairParGenericSet/) can use this format
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L43-L69)). See
+[Parameters and the runtime database](/concepts/parameters/) for the containers and the inputs.
+
+## Examples
+
+The digitization parameters of the pixel detector example have only single values:
+
+<Snippet file="examples/MQ/pixelDetector/param/pixel_digi.par" lines="1-18" lang="text" title="examples/MQ/pixelDetector/param/pixel_digi.par" />
+
+The container `PixelDigiPar` reads each value by its name in `getParams()`
+([PixelDigiPar.cxx](/source/examples/MQ/pixelDetector/src/PixelDigiPar.cxx/#L60-L91)). The block name
+`PixelDigiParameters` is the container name that the factory gives
+([PixelContFact.cxx](/source/examples/MQ/pixelDetector/src/PixelContFact.cxx/#L33)).
+
+The file of Tutorial 2 has one single value and two arrays. The beginning of the file:
+
+<Snippet file="examples/simulation/Tutorial2/parameters/tutdet.digi.par" start="/^#+$/" end="2.0    3.0     3.000" lang="text" title="examples/simulation/Tutorial2/parameters/tutdet.digi.par" />
+
+The float array has 764 lines of values. Its last line has no backslash, and a line of `#` characters ends the
+block:
+
+<Snippet file="examples/simulation/Tutorial2/parameters/tutdet.digi.par" start="131.0    3.0" end="/^#+$/" lang="text" />
+
+## Blocks
+
+A block holds the parameters of one container:
+
+- **Start.** A block starts with a line that starts with `[<name>]`. `<name>` is the container name, as
+  `GetName()` returns it. The reader goes back to the start of the file and uses the first line with this text
+  ([FairDetParAsciiFileIo.cxx](/source/fairroot/parbase/FairDetParAsciiFileIo.cxx/#L45-L70)).
+- **End.** The block ends at the next line that starts with `#`, or at the end of the file
+  ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L156-L158)).
+- **Comments.** In a block, the reader skips lines that start with `/` and empty lines. The reader does not read
+  the lines outside the blocks, so they can hold free text.
+- **Order.** The order of the blocks is free. If two blocks have the same name, the reader uses the first one.
+
+A container with a context other than its default context has the name `<name>_<context>`. Its block must have
+this name too.
+
+:::caution
+End each block with a line that starts with `#`. Without this line, the reader continues into the next block. It
+then stops with an error at the `[<name>]` line, because this line has no colon.
+:::
+
+## Parameter lines
+
+Each parameter has a line of this form:
+
+```text
+<parameter name>:<type> <value>
+```
+
+- **Name.** All characters before the first colon are the name
+  ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L160-L171)). Thus
+  start the name in the first column, and put no space before the colon. A name can contain spaces, but no colon.
+- **Type.** The first word after the colon. Spaces after the colon are optional.
+- **Value.** The rest of the line after the type. A backslash `\` in this part starts an array or a multi-line
+  text.
+
+The reader adds each parameter to a [`FairParamList`](/api/FairParamList/). Then it calls `getParams()` of the
+container, which takes the values out of the list by name.
+
+### Types
+
+| Type in the file | Read with | Accepted values |
+| --- | --- | --- |
+| `Int_t` | `sscanf()` with `%i` | Integers. A leading `0x` means hexadecimal, a leading `0` means octal, as in C. |
+| `Float_t` | `sscanf()` with `%f` | Floating-point numbers, also with an exponent such as `1.5e-3`. |
+| `Double_t` | `sscanf()` with `%lf` | As `Float_t`, with double precision. |
+| `Char_t` | `sscanf()` with `%c` | In an array, the first character of each word. A single value is the character after the type and one space, so put exactly one space before it. |
+| `Text_t` | Text | The rest of the line, see [Text](#text). |
+
+The reader stops at any other type with the error `Parameter <name> with unsupported type <type>`
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L227-L250)). Thus a block
+cannot hold `Bool_t`, `UInt_t` or objects. The container then fails to read from this input.
+
+The type in the file must agree with the `fill()` call in `getParams()`. For example,
+[`fill(name, Double_t*)`](/api/FairParamList/#fill-6) finds only a parameter of type `Double_t`. For another type,
+it logs `Could not find parameter <name>` and returns `kFALSE`
+([FairParamList.cxx](/source/fairroot/parbase/FairParamList.cxx/#L792-L816)).
+
+### Single values
+
+If the line has no backslash, the reader takes one value from the rest of the line
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L83-L88)). It ignores
+more values on the same line.
+
+### Arrays
+
+A backslash at the end of the type line starts an array. The values follow on the next lines
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L89-L112)):
+
+- Separate the values with spaces or tabs. Keep each line shorter than 8000 characters. The reader reads each line
+  into a buffer of this size, and a longer line makes it loop forever
+  ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L151-L157)).
+- End each line of the array, except the last line, with a space and a backslash. The reader removes the
+  character before the backslash ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L93-L96)).
+  Without the space, the last value of the line loses its last character.
+- The array ends after the first line without a backslash.
+- The reader ignores values on the type line itself.
+- Lines that start with `/` are comments, also in an array.
+- Do not end the last line of an array with a backslash. A `#` line after it then ends the array, but the reader
+  does not see the end of the block. It reads on after the `#` line, which usually gives the error
+  `Missing backslash`.
+- Do not put an empty line into an array. An empty line ends the array, and the next value line then gives an
+  error.
+
+The reader does not check the values. A word that is not a number gives no error. The reader stores the value of the
+word before it again, or `0` for the first word
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L104-L110)). Thus check the
+values in `getParams()`.
+
+The size of an array is free. [`fill()`](/api/FairParamList/#fill-10) into a `TArrayI`, `TArrayF`, `TArrayD` or
+`TArrayC` resizes the array to the number of values
+([FairParamList.cxx](/source/fairroot/parbase/FairParamList.cxx/#L818-L903)). `fill()` into a C array with a size
+argument needs exactly this number of values. Otherwise it logs `Different array sizes for parameter <name>`.
+
+### Text
+
+A `Text_t` parameter holds text
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L203-L226)):
+
+- Without a backslash, the text is the rest of the line.
+- With a backslash on the type line, the text starts on the next line. The reader ignores text on the type line.
+  Each line that ends with a backslash continues on the next line. The reader puts a line break in place of the
+  backslash.
+- The reader removes the spaces at the start of the text. It does not add an empty text to the list.
+
+[`fill(name, Text_t*, length)`](/api/FairParamList/#fill) copies the text into a `char` buffer. The `length` of the
+buffer must be at least the text length plus 2. Otherwise the function logs `char array too small`
+([FairParamList.cxx](/source/fairroot/parbase/FairParamList.cxx/#L640-L661)).
+
+### Author and description
+
+The lines `author:` and `description:` have no type. Their text goes to
+[`setAuthor()`](/api/FairParSet/#setAuthor) and [`setDescription()`](/api/FairParSet/#setDescription) of the
+container ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L172-L197)). A
+backslash at the end of the line continues the text on the next line.
+
+## Read a file
+
+<Steps>
+
+1. Make a `FairParAsciiFileIo` object.
+2. Open the file with `open(<file name>, "in")`.
+3. Set the object as the first or the second input of the runtime database.
+
+</Steps>
+
+The pixel detector example reads its digitization parameters as the second input:
+
+<Snippet file="examples/MQ/pixelDetector/macros/run_digi.C" start="FairRuntimeDb* rtdb = fRun->GetRuntimeDb();" end="rtdb->setSecondInput(parIo1);" />
+
+[`open()`](/api/FairParAsciiFileIo/#open) accepts only the modes `"in"` and `"out"`. For another mode, it prints a
+message and returns `kFALSE`. If it cannot open the file, it calls `Fatal()` of ROOT, which stops the program
+([FairParAsciiFileIo.cxx](/source/fairroot/parbase/FairParAsciiFileIo.cxx/#L47-L73)).
+
+The reader reads a block each time the runtime database initializes the container. A file has no versions: a
+container that the file fills gets the input version 1
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L261-L270)).
+
+### Messages
+
+| Message | Cause |
+| --- | --- |
+| `<name> initialized from Ascii file` | The container was read. |
+| `Missing backslash for parameter <name>` | A line in the block has no colon. Usually, an array line before it has no backslash. `<name>` is the parameter before this line. A line with only spaces, a missing `#` line and a backslash on the last line of an array also give this message. |
+| `Parameter <name> with unsupported type <type>` | The type is not one of the five types in the table above. |
+| `Could not find parameter <name>` | The block has no parameter with this name and type, or the text is empty. |
+| `Different array sizes for parameter <name>` | `getParams()` uses a C array, and the file has a different number of values. |
+| `char array too small` | The buffer for a text is too small. |
+| `<class>(<name>)::init(io) failed for second input` | The block is missing or has an error, or `getParams()` returned `kFALSE`. The message names the input. |
+
+### Several files
+
+[`open(TList*, "in")`](/api/FairParAsciiFileIo/#open-2) joins the files of a list into one file and opens it. It
+writes the file `all_<process ID>.par` into the working directory with `cat`
+([FairParAsciiFileIo.cxx](/source/fairroot/parbase/FairParAsciiFileIo.cxx/#L75-L113)). If a file of the list does
+not exist, it logs `Parameter file <path> does not exist.` with the level `fatal`. This line stops the program
+only if FairLogger has a fatal handler, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+Without a handler, the program continues, and the joined file has only the files that exist.
+
+The first block with a name wins, so put the file with the preferred values first in the list. Tutorial 4 makes
+a list with one file:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start="TList* parFileList = new TList();" end="parFileList->Add(tutDetDigiFile);" />
+
+Later, the macro opens the list with `parIn->open(parFileList, "in")`
+([run_tutorial4.C](/source/examples/simulation/Tutorial4/macros/run_tutorial4.C/#L125)).
+
+## Write a file
+
+To write a text file, open a `FairParAsciiFileIo` with the mode `"out"`. Make it the output of the runtime database.
+The mode `"out"` removes the old content of the file. This sketch uses the real functions:
+
+```cpp
+FairParAsciiFileIo* parOut = new FairParAsciiFileIo();
+parOut->open("my_parameters.par", "out");
+rtdb->setOutput(parOut);
+rtdb->saveOutput();
+```
+
+[`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes each container that has changed. For each container, the
+writer calls `putParams()` and writes a block with this layout
+([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L273-L332)):
+
+```text
+##############################################################################
+# Class:   <container name>
+# Context: <context>
+##############################################################################
+[<container name>]
+author:      <author>
+description: <description>
+//----------------------------------------------------------------------------
+<name of a single value>:  <type>  <value>
+<name of an array>:  <type> \
+  <value 1> <value 2> ... <value 10>  \
+  <value 11> ...
+<name of a text>:  Text_t \
+  <text>
+##############################################################################
+```
+
+The block in the Tutorial 4 file below has the same header lines:
+
+<Snippet file="examples/simulation/Tutorial4/parameters/example.par" start="/^#+$/" end="0.737682 0.227649" lang="text" title="examples/simulation/Tutorial4/parameters/example.par" />
+
+Note these points about the writer:
+
+- It writes the `author:` and `description:` lines only if the container has this text.
+- It writes ten array values on each line.
+- It writes the parameters in the order of the hash table of `FairParamList`, not in the order of `putParams()`.
+- It writes numbers with the default precision of a C++ stream, six significant digits. Use a ROOT file to keep
+  all digits.
+- For `UChar_t` arrays and objects, it logs `Type <type> of parameter <name> not supported by ASCII I/O` and
+  skips the parameter.
+
+:::caution
+Do not add `Bool_t` or `UInt_t` values with `add()` for a text output. The writer accepts these types, but it
+writes no value and no line end ([FairGenericParAsciiFileIo.cxx](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L300-L316)).
+The reader rejects these types too. Store such values as `Int_t`.
+:::
+
+## FairParamList functions and file types
+
+| Value in the container | Add with | Type in the file | Read with |
+| --- | --- | --- | --- |
+| `Int_t` | [`add(name, Int_t)`](/api/FairParamList/#add-3) | `Int_t` | [`fill(name, Int_t*)`](/api/FairParamList/#fill-2) |
+| `Float_t` | [`add(name, Float_t)`](/api/FairParamList/#add-6) | `Float_t` | [`fill(name, Float_t*)`](/api/FairParamList/#fill-5) |
+| `Double_t` | [`add(name, Double_t)`](/api/FairParamList/#add-7) | `Double_t` | [`fill(name, Double_t*)`](/api/FairParamList/#fill-6) |
+| `TArrayI` | [`add(name, TArrayI&)`](/api/FairParamList/#add-8) | `Int_t` array | [`fill(name, TArrayI*)`](/api/FairParamList/#fill-8) |
+| `TArrayF` | [`add(name, TArrayF&)`](/api/FairParamList/#add-10) | `Float_t` array | [`fill(name, TArrayF*)`](/api/FairParamList/#fill-10) |
+| `TArrayD` | [`add(name, TArrayD&)`](/api/FairParamList/#add-11) | `Double_t` array | [`fill(name, TArrayD*)`](/api/FairParamList/#fill-11) |
+| `TArrayC` | [`add(name, TArrayC&)`](/api/FairParamList/#add-9) | `Char_t` array | [`fill(name, TArrayC*)`](/api/FairParamList/#fill-9) |
+| `Int_t[n]`, `Float_t[n]`, `Double_t[n]` | [`add(name, values, n)`](/api/FairParamList/#add-13) | Array of the same type | `fill(name, values, n)`, with exactly `n` values |
+| Text | [`add(name, Text_t*)`](/api/FairParamList/#add-2) | `Text_t` | [`fill(name, Text_t*, length)`](/api/FairParamList/#fill) |
+| `UInt_t` | Not for text files | `Int_t` | [`fill(name, UInt_t*)`](/api/FairParamList/#fill-4) reads only the type `Int_t` |
+| `Bool_t`, `UChar_t[n]`, objects | Not for text files | Not possible | Use a ROOT parameter file |
+
+## Related pages
+
+- [Parameters and the runtime database](/concepts/parameters/): containers, factories, inputs and the output.
+- [Tutorial 2: digitization and parameters](/examples/tutorial2/): reads `tutdet.digi.par` and stores it in a ROOT
+  file.
+- [Geometry and media file format](/reference/geo-format/): the text format of the geometry files.

@@ -1,0 +1,267 @@
+---
+title: 'Alignment and misalignment'
+description: 'Move detector volumes at run time with alignment matrices: FairRun::AddAlignmentMatrices(), when the simulation and the reconstruction apply them, the two lookup modes, and Tutorial 4.'
+sidebar:
+  order: 9
+code: [fairroot/alignment/FairAlignmentHandler.h, fairroot/alignment/FairAlignmentHandler.cxx, fairroot/base/steer/FairRun.h, fairroot/base/steer/FairRun.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/sim/FairModule.h, examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A real detector is never exactly at its design position. FairRoot keeps one ideal geometry and moves
+single volumes at run time with alignment matrices. The simulation uses them to make the data of a
+misaligned detector. The reconstruction uses them to put the volumes at their measured positions.
+
+The run collects the matrices. Its [`FairAlignmentHandler`](/api/FairAlignmentHandler/), from the
+library [`FairRoot::Alignment`](/reference/libraries/#fairrootalignment), applies them to the ROOT
+geometry `gGeoManager` ([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L247-L251)). The
+handler changes only the geometry in memory. Your geometry files stay ideal.
+
+## Misalignment and alignment
+
+A volume is misaligned when its real position differs from its design position. A `TGeoHMatrix`
+with a rotation and a translation describes the difference. FairRoot applies the matrix in the
+coordinate system of the volume. An identity matrix does not move the volume.
+
+The same function adds the matrices in all cases. The purpose of the run tells you which matrices to
+add:
+
+| Purpose | Simulation | Reconstruction |
+| --- | --- | --- |
+| Study the effect of a misalignment | Add the misalignment matrices. | Add no matrices. The geometry stays ideal, as in an experiment before its alignment. |
+| Check a set of alignment constants | Add the misalignment matrices. | Add the alignment matrices that you found, for example with a track-based alignment. |
+| Mimic a misalignment without a new simulation | Add no matrices. | Add the misalignment matrices with `invertMatrices = true`. |
+
+In the last case, the reconstruction converts local positions with the inverse matrices. The global
+positions then get the same offsets as in the first case. The acceptance stays the one of the ideal
+detector. [Tutorial 4](/examples/tutorial4/) shows the first case.
+
+Matrices change only the code that uses the geometry. A task that converts local positions to
+global positions with `gGeoManager` sees them. A task that copies global MC positions does not. Thus
+Tutorial 4 stores its MC points in the local coordinates of the planes.
+
+## Add matrices to the run
+
+[`FairRun::AddAlignmentMatrices()`](/api/FairRun/#AddAlignmentMatrices) gives a map to the handler of
+the run ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L251-L254)). The handler stores the
+matrices:
+
+<Snippet file="fairroot/alignment/FairAlignmentHandler.cxx" start="void FairAlignmentHandler::AddAlignmentMatrices" />
+
+- The key names the volume. It is the full path of a node, for example
+  `/cave_1/tutorial4_0/tut4_det_3`, or the symbolic name of an alignable entry. See
+  [Full paths or symbolic names](#full-paths-or-symbolic-names).
+- The value is the matrix. The handler multiplies the matrix of the node by it from the right, so the
+  matrix acts in the coordinate system of the volume. Lengths are in cm, the unit of the ROOT geometry.
+- With `invertMatrices = true`, the handler uses the inverse of each matrix. The default is `false`.
+- The handler keeps the matrices of all calls. For a key that it has already, it multiplies the
+  stored matrix by the new matrix from the right (`TGeoHMatrix::operator*=`).
+- No function removes matrices. The run applies them once. Matrices that you add later have no
+  effect.
+
+## When the simulation applies the matrices
+
+A module adds its matrices in [`RegisterAlignmentMatrices()`](/api/FairModule/#RegisterAlignmentMatrices).
+The macro can also call `AddAlignmentMatrices()` before `FairRunSim::Init()`. Inside `Init()`, the
+run applies the matrices before the transport starts:
+
+<Steps>
+
+1. `FairRunSim::Init()` gives the task list to the MC application. The MC application calls
+   `SetParContainers()` of each module. Then the runtime database initializes the containers
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1215)).
+
+2. Near the end of `Init()`, the transport engine calls
+   [`ConstructGeometry()`](/api/FairMCApplication/#ConstructGeometry) of the MC application. For each
+   module, it calls `InitParContainers()` and `ConstructGeometry()`. Then it closes the geometry.
+
+3. The MC application calls `RegisterAlignmentMatrices()` of each module
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L814-L821)). The
+   default implementation does nothing.
+
+4. The transport engine calls [`MisalignGeometry()`](/api/FairMCApplication/#MisalignGeometry).
+   Geant3 with TGeo and Geant4 VMC call this hook once, after `ConstructGeometry()` (VMC behavior).
+
+5. The MC application calls `AlignGeometry()` of the run, and the handler moves the volumes. The
+   transport then uses the moved volumes.
+
+6. After the last event, [`FinishRun()`](/api/FairMCApplication/#FinishRun) calls
+   `UndoGeometryModifications()`, but not in multithreaded mode
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L376-L378)).
+
+</Steps>
+
+The hook of step 4 is short:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="Bool_t FairMCApplication::MisalignGeometry()" />
+
+`AlignGeometry()` is protected. `FairMCApplication` is a friend of `FairRun`, so it can call it
+([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L41-L43)). See
+[How a simulation runs](/simulation/overview/) for all hooks of the MC application.
+
+### The geometry in the output files
+
+`UndoGeometryModifications()` gives each physical node its original matrix again. Then it clears the
+list of physical nodes ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1274-L1304)).
+Without multithreading, the volumes are thus at their ideal positions after `Run()`.
+
+[`FairGeoParSet`](/api/FairGeoParSet/) points to `gGeoManager`
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L197-L201)). A `saveOutput()` after
+`Run()` thus writes the ideal geometry to the parameter file. A file from
+[`CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) holds the geometry at the time of the
+call. Two comment lines in the macro of Tutorial 4 show the two places:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start="// run.CreateGeometryFile(geoFile); //misaligned geometry" end="// run.CreateGeometryFile(geoFile); // original geometry" title="run_tutorial4.C" />
+
+### Add the matrices in a module
+
+Override `RegisterAlignmentMatrices()` in your module. The MC application calls it after
+`InitParContainers()` and `ConstructGeometry()`, so the parameters and the volumes exist. The detector
+of Tutorial 4 makes one matrix for each of its planes from a parameter container:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="void FairTutorialDet4::RegisterAlignmentMatrices()" />
+
+- `TGeoCombiTrans(dx, dy, dz, rot)` is a rotation followed by the translation (dx, dy, dz).
+- `TGeoRotation("rot", phi, theta, psi)` takes Euler angles in degrees (ROOT behavior). The detector
+  passes its parameters `RotationX`, `RotationY` and `RotationZ` as these three angles. Thus
+  `RotationX` is not a rotation about the x axis.
+- The paths start with `/cave_1/tutorial4_0/`, the node of the detector in the simulation geometry.
+
+A smaller function is enough for your own module. This sketch moves one sensor by 0.5 mm along its
+local x axis:
+
+```cpp title="MyDetector.cxx"
+void MyDetector::RegisterAlignmentMatrices()   // declared with override in MyDetector.h
+{
+    TGeoHMatrix shift;
+    shift.SetDx(0.05);   // cm
+
+    std::map<std::string, TGeoHMatrix> matrices;
+    matrices["/cave_1/mydet_0/sensor_2"] = shift;
+    FairRun::Instance()->AddAlignmentMatrices(matrices);
+}
+```
+
+## When the reconstruction applies the matrices
+
+[`FairRunAna::Init()`](/api/FairRunAna/#Init) first gets the geometry. It reads the file of
+[`SetGeomFile()`](/api/FairRunAna/#SetGeomFile), or else it requests the container `FairGeoParSet`
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L145-L151)). The runtime database reads
+this container from the parameter input when it initializes the parameter containers. Then `Init()`
+makes the magnetic field. Last, it aligns the geometry and calls `Init()` of the tasks:
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="// Align the geometry when it is" end="fTask->InitTask();" title="FairRunAna.cxx" />
+
+Thus each task sees the aligned geometry in its `Init()`. Add the matrices before `Init()`:
+
+```cpp title="run_reco.C"
+auto run = std::make_unique<FairRunAna>();
+// Source, sink, runtime database and tasks as usual.
+std::map<std::string, TGeoHMatrix> alignment = ReadAlignment();   // your own function
+run->AddAlignmentMatrices(alignment);
+run->Init();   // aligns the geometry, then calls Init() of the tasks
+run->Run();
+```
+
+- Only `FairRunAna` applies the matrices in the reconstruction. [`FairRunAnaProof`](/api/FairRunAnaProof/)
+  and [`FairRunOnline`](/api/FairRunOnline/) have their own `Init()` without this step.
+- `FairRunAna` aligns the geometry once. [`Reinit()`](/api/FairRunAna/#Reinit) for a new run ID only
+  initializes the parameter containers again
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L586-L592)).
+- With matrices, the run needs a geometry. `AlignGeometry()` then uses `gGeoManager` without a check
+  ([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L12-L16)).
+
+### Store the matrices
+
+FairRoot has no file format for alignment matrices. The library `Alignment` has a ROOT dictionary for
+`std::map<std::string, TGeoHMatrix>` ([LinkDef.h](/source/fairroot/alignment/LinkDef.h/#L14-L16)).
+Thus you can write the map to a ROOT file with the ROOT functions:
+
+```cpp
+std::unique_ptr<TFile> out{TFile::Open("alignment.root", "RECREATE")};
+out->WriteObject(&matrices, "alignment");
+out->Close();
+
+std::unique_ptr<TFile> in{TFile::Open("alignment.root")};
+auto stored = in->Get<std::map<std::string, TGeoHMatrix>>("alignment");
+```
+
+## Full paths or symbolic names
+
+`AlignGeometry()` selects the lookup mode once, for all keys
+([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L10-L32)):
+
+| Geometry | Keys | What the handler does for each key |
+| --- | --- | --- |
+| No alignable entry: `gGeoManager->GetNAlignable()` returns 0 | Full paths of nodes | It goes to the path with `cd()` and multiplies the local matrix of the node by the alignment matrix. It makes a physical node for the path and aligns it with the result. |
+| At least one alignable entry | Symbolic names from `TGeoManager::SetAlignableEntry()` | It finds the entry and makes its physical node. It multiplies the matrix of the physical node by the alignment matrix and aligns the node with the result. It skips a key without an entry and logs nothing. |
+
+The full-path mode:
+
+<Snippet file="fairroot/alignment/FairAlignmentHandler.cxx" start="void FairAlignmentHandler::AlignGeometryByFullPath()" />
+
+`Create_Tutorial4_Geometry.C` makes the entries `Tutorial4/det00` to `Tutorial4/det39`
+([Create_Tutorial4_Geometry.C](/source/examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C/#L147-L169)).
+They are in the `TGeoManager` of the file `tutorial4_geomanager.root`. The simulation reads
+`tutorial4.root`, and `ConstructRootGeometry()` copies only volumes. Thus the simulation of Tutorial 4
+has no alignable entry and uses full paths.
+
+:::caution[Symbolic names and nested volumes]
+In the mode with symbolic names, the handler starts from `TGeoPhysicalNode::GetMatrix()`. This is the
+global matrix of the node. `Align()` takes a matrix relative to the mother volume (ROOT behavior).
+Thus the two modes give the same result only if the global matrix of the mother volume is the
+identity ([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L76-L87)).
+:::
+
+## After the alignment
+
+The handler recomputes the bounding boxes of the assembly volumes. Where ROOT needs it, it also builds
+the voxels again. A comment in the code calls this a temporary fix for the ROOT issue
+[12242](https://github.com/root-project/root/issues/12242). Last, the handler refreshes the physical
+nodes ([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L22-L28)).
+
+The handler does not check the moved volumes for overlaps. It calls `Align()` without its check
+option, which is off by default (ROOT behavior). Two moved volumes can thus overlap. Check a
+misaligned geometry yourself, for example with `gGeoManager->CheckOverlaps()` after `Init()`.
+
+The handler and the MC application write these log lines with the severity `info`:
+
+| Log line | When |
+| --- | --- |
+| `adding inverting matrices...` | At each `AddAlignmentMatrices()` call, also when `invertMatrices` is `false`. |
+| `aligning the geometry...`, then `aligning in total <n> volumes.` | `AlignGeometry()` starts. With no matrices, it writes no log line. |
+| `aligning using full path.` or `aligning using symlinks` | The lookup mode. |
+| `alignments applied!` | The end of the full-path mode. The other mode has no such line. |
+| `Refreshing geometry...`, then `alignment finished!` | The end of `AlignGeometry()`. |
+| `Undo all misalignment` | `UndoGeometryModifications()` at the end of a simulation, if physical nodes exist. |
+
+## The deprecated ModifyGeometry()
+
+[`FairModule::ModifyGeometry()`](/api/FairModule/#ModifyGeometry) is deprecated since before v18.8.
+The removal is planned for v20 ([FairModule.h](/source/fairroot/base/sim/FairModule.h/#L75-L83)). No
+FairRoot code calls it, so an override in your module has no effect. Use
+`RegisterAlignmentMatrices()` instead.
+
+## Problems that can occur
+
+- **The volumes do not move.** The run applied the matrices before you added them, or your run is
+  `FairRunOnline` or `FairRunAnaProof`. Or the geometry has an alignable entry, and your keys are full
+  paths: the handler then skips them without a message.
+- **The program crashes in `AlignGeometryByFullPath()`.** A key is not a valid path. ROOT logs an
+  error and makes no physical node, and the handler uses the null pointer
+  ([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L42-L56)). Check
+  each key with `gGeoManager->CheckPath()` before you add it.
+- **The hits do not move in the reconstruction.** The hit task copies global MC positions. Store
+  local positions in the simulation and convert them with the geometry.
+- **The rotation is not the expected one.** `TGeoRotation(name, phi, theta, psi)` takes Euler angles
+  in degrees, not rotations about x, y and z.
+
+## Related pages
+
+- [Tutorial 4: geometry and misalignment](/examples/tutorial4/): the example with simulation,
+  reconstruction and the input for Millepede-II.
+- [Geometry and materials](/simulation/geometry/): how the modules build the geometry from files.
+- [How a simulation runs](/simulation/overview/): all hooks of the MC application in their order.
+- [Write a reconstruction macro](/reconstruction/run-macro/): the steps of `FairRunAna::Init()`.
+- [Deprecated APIs](/reference/deprecations/): `ModifyGeometry()` and other old functions.

@@ -1,0 +1,312 @@
+---
+title: 'Runs'
+description: 'The run object steers a job: it owns the tasks, the source, the sink and the event header. FairRunSim simulates, FairRunAna processes ROOT files, FairRunOnline processes live data.'
+sidebar:
+  order: 2
+code: [fairroot/base/steer/FairRun.h, fairroot/base/steer/FairRun.cxx, fairroot/base/steer/FairRunSim.h, fairroot/base/steer/FairRunSim.cxx, fairroot/base/steer/FairRunAna.h, fairroot/base/steer/FairRunAna.cxx, fairroot/online/steer/FairRunOnline.h, fairroot/online/steer/FairRunOnline.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A run object steers one job. It holds the tasks, the source, the sink, the runtime database and the
+event header, and it drives the event loop. Your macro makes one run, configures it, and then calls
+`Init()` and `Run()`.
+
+All run classes derive from [`FairRun`](/api/FairRun/). Each derived class fits one kind of job, and
+each one fills `Init()` and `Run()` in its own way.
+
+## Which run for which job
+
+| Job | Run class | Library | Where the events come from |
+| --- | --- | --- | --- |
+| Simulate events with a transport engine | [`FairRunSim`](/api/FairRunSim/) | `FairRoot::Base` | The primary generator. The transport engine runs the event loop. |
+| Digitize, reconstruct or analyze ROOT files | [`FairRunAna`](/api/FairRunAna/) | `FairRoot::Base` | A source, for example `FairFileSource` or `FairMixedSource` |
+| Unpack and process data from a DAQ system | [`FairRunOnline`](/api/FairRunOnline/) | `FairRoot::Online` | An online source, for example `FairLmdSource` |
+
+`FairRunAnaProof` is deprecated, see [FairRunAnaProof](#fairrunanaproof-deprecated).
+
+## The run in a macro
+
+A macro uses a run in the same order for all jobs:
+
+<Steps>
+
+1. Make the run object. Only one run can exist at a time, see
+   [The run is a singleton](#the-run-is-a-singleton).
+
+2. Give the run a sink. Give `FairRunAna` a source.
+
+3. Configure the job: the modules and the primary generator of a simulation, the parameter inputs,
+   and the tasks.
+
+4. Call `Init()`. The run gets the run ID, initializes the parameter containers and calls `Init()`
+   of the tasks.
+
+5. Call `Run()`. The run processes the events and calls `Finish()` of the tasks at the end.
+
+</Steps>
+
+This reconstruction macro of Tutorial 3 shows the steps with `FairRunAna`:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_reco.C" start="FairRunAna* fRun = new FairRunAna();" end="fRun->Run();" title="run_reco.C" />
+
+The pages [Write a simulation macro](/simulation/run-macro/) and
+[Write a reconstruction macro](/reconstruction/run-macro/) explain the macros in detail.
+
+## What a run holds
+
+| Part | Set it with | Owner |
+| --- | --- | --- |
+| Tasks | [`AddTask()`](/api/FairRun/#AddTask) | The run. Its destructor deletes the main task `FairTaskList` ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L93-L97)). |
+| Sink | [`SetSink()`](/api/FairRun/#SetSink) | The run |
+| Source | [`SetSource()`](/api/FairRun/#SetSource) | The run |
+| Event header | [`SetEventHeader()`](/api/FairRun/#SetEventHeader). Without it, `GetEventHeader()` makes a `FairEventHeader`. | The run |
+| Runtime database | [`GetRuntimeDb()`](/api/FairRun/#GetRuntimeDb) returns the singleton `FairRuntimeDb` | The master run deletes it ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L99-L102)) |
+| Run ID | [`SetRunId()`](/api/FairRun/#SetRunId), [`GetRunId()`](/api/FairRun/#GetRunId) | — |
+| File header | Internal. [`AddTask()`](/api/FairRun/#AddTask-2) adds the class name of each task and subtask, and `Init()` adds the run ID. | Internal |
+
+`AddTask()`, `SetSink()` and `SetEventHeader()` have a `std::unique_ptr` overload and a raw pointer
+overload. Both overloads give the object to the run. The `std::unique_ptr` overload shows this in your
+code:
+
+<Snippet file="fairroot/base/steer/FairRun.h" start="void AddTask(std::unique_ptr" end="virtual void AddTask(FairTask* t);" />
+
+`SetSource()` has only the raw pointer form, and it also takes ownership
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L256-L260)). The raw pointer form of
+`SetEventHeader()` is deprecated. Thus:
+
+- Make the objects with `new` or `std::make_unique`, not on the stack.
+- Give each object to the run only once, and do not delete it yourself.
+- A second `SetSource()`, `SetSink()` or `SetEventHeader()` deletes the object of the first call.
+
+The magnetic field is different. `FairRunSim` does not delete its field
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L104-L106)). `FairRunAna` and
+`FairRunOnline` delete the field in their destructor
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L93-L96)).
+
+To see all parts of a run, call [`ls()`](/api/FairRun/#ls). It prints the I/O manager, the runtime
+database, the source, the sink, the event header, the tasks and the link manager.
+
+## The run is a singleton
+
+[`FairRun::Instance()`](/api/FairRun/#Instance) returns the current run. `FairRunSim::Instance()`,
+`FairRunAna::Instance()` and `FairRunOnline::Instance()` return the same object as the derived type.
+Modules and tasks use these functions to get the runtime database:
+
+<Snippet file="templates/NewDetector_root_containers/NewDetector.cxx" start="void NewDetector::Initialize()" title="NewDetector.cxx (template)" />
+
+Only one run can exist at a time. The constructor of `FairRun` calls ROOT's `Fatal()` with the
+message `Singleton instance already exists.` if another run exists
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L60)). The destructor clears the instance
+pointer, so that the check passes again for a new run.
+
+The instance pointers of `FairRun` and `FairRunSim` have the qualifier `TMCThreadLocal`. With Geant4
+in multithreaded mode, `FairMCApplication::CloneForWorker()` makes one more `FairRunSim` for each
+worker thread, with `isMaster = kFALSE`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). A run that is
+not the master does not delete the runtime database.
+
+## FairRunSim: simulation
+
+`FairRunSim` builds the geometry, the MC application and the transport engine in `Init()`. In
+`Run()`, the transport engine runs the event loop. Tutorial 1 makes its run like this:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="auto run = std::make_unique" end="FairRuntimeDb* rtdb = run->GetRuntimeDb();" title="run_tutorial1.C" />
+
+The main setters, all before `Init()`:
+
+| Setter | What it sets |
+| --- | --- |
+| `SetName()` | The transport engine, for example `TGeant3` or `TGeant4`. The engine configuration reads this name. |
+| [`SetMaterials()`](/api/FairRunSim/#SetMaterials) | The media file. The run takes it from the folder `$GEOMPATH`, or from `$VMCWORKDIR/geometry/` if `GEOMPATH` is not set ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L344-L361)). |
+| [`AddModule()`](/api/FairRunSim/#AddModule) | A module or a detector. The run deletes the modules. It gives each module an ID in the order of the calls. |
+| [`SetGenerator()`](/api/FairRunSim/#SetGenerator) | The primary generator. The run deletes it. |
+| [`SetField()`](/api/FairRunSim/#SetField) | The magnetic field. The run does not delete it. |
+| [`SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig) | The configuration of the engine. Without it, the run uses a `FairGenericVMCConfig`, which runs configuration macros. |
+| [`SetSimSetup()`](/api/FairRunSim/#SetSimSetup) | Your function. The run calls it instead of the configuration object. |
+| [`SetIsMT()`](/api/FairRunSim/#SetIsMT) | The multithreaded mode of Geant4. After `Run()`, [`WasMT()`](/api/FairRunSim/#WasMT) tells if the engine used it. |
+| [`SetUserConfig()`](/api/FairRunSim/#SetUserConfig), [`SetUserCuts()`](/api/FairRunSim/#SetUserCuts) | The names of the engine configuration file and the cuts file. The defaults are empty and `SetCuts.C`. |
+| [`SetStoreTraj()`](/api/FairRunSim/#SetStoreTraj) | Store the trajectories of the particles for the event display. |
+| [`SetRadLenRegister()`](/api/FairRunSim/#SetRadLenRegister) | Record the radiation length. See [Radiation length and dose maps](/simulation/radiation/). |
+| [`SetMCEventHeader()`](/api/FairRunSim/#SetMCEventHeader) | Your MC event header. The run deletes it. |
+
+### What Init() does
+
+[`FairRunSim::Init()`](/api/FairRunSim/#Init) does these steps
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L154-L258)):
+
+1. It initializes the sink and reads the media file.
+2. It makes the `FairMCApplication` with the modules and the primary generator.
+3. It makes a run ID if you did not set one, and adds the run to the runtime database. See
+   [Event headers and run IDs](/concepts/event-headers/).
+4. It gives the task list to the MC application. The MC application calls `SetParContainers()` of
+   the tasks and the modules, and initializes the parameter containers for the run ID.
+5. It fills the parameter containers `FairBaseParSet` and `FairGeoParSet`.
+6. It initializes the magnetic field and fills its parameter container.
+7. It marks `FairBaseParSet` and `FairGeoParSet` as changed for the run ID. Thus they go to the
+   parameter output.
+8. It configures the transport engine. The configuration makes the engine and the stack. Then
+   `FairMCApplication::InitMC()` calls `Init()` and `BuildPhysics()` of the engine, and then `Init()`
+   of the tasks.
+9. It writes the file header to the sink.
+
+### What Run() does
+
+`Run(nEvents)` gives the number of events to the MC application. The second argument is not used:
+
+<Snippet file="fairroot/base/steer/FairRunSim.cxx" start="void FairRunSim::Run(Int_t NEvents, Int_t)" />
+
+The transport engine processes the events and calls the MC application. At the end of each event,
+the MC application runs the tasks, and then fills the sink
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L652-L665)). At the end of
+the run, it calls `FinishRun()` of the detectors and `Finish()` of the tasks, and writes the output.
+Then `FairRunSim` closes the sink. [How a simulation runs](/simulation/overview/) gives all steps.
+
+## FairRunAna: reconstruction and analysis
+
+`FairRunAna` reads the events from a source, runs the tasks on each event and fills the sink. It
+needs no transport engine.
+
+### What Init() does
+
+[`FairRunAna::Init()`](/api/FairRunAna/#Init) does these steps
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L252)):
+
+1. It initializes the source and the sink. A second call of `Init()` logs a fatal error and stops
+   the macro.
+2. It gets the geometry: from the file of [`SetGeomFile()`](/api/FairRunAna/#SetGeomFile), else from
+   the parameter container `FairGeoParSet`.
+3. It gets the run ID from the first entry of the source. Without a source, it makes a new run ID.
+   It registers the event header.
+4. It calls `SetParContainers()` of the tasks, and initializes the parameter containers for the run
+   ID.
+5. It makes the magnetic field with the field factory, if you did not call
+   [`SetField()`](/api/FairRunAna/#SetField).
+6. It aligns the geometry, and calls `Init()` of the tasks.
+7. It writes the folder structure, the list of branches and the file header to the sink.
+
+Call `SetGeomFile()` and [`RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) before
+`Init()`. After `Init()`, `SetGeomFile()` logs a fatal error and stops the macro.
+`RunWithTimeStamps()` logs a warning and ends the program
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L594-L602)).
+
+### The entry loop of Run()
+
+[`Run(NStart, NStop)`](/api/FairRunAna/#Run) selects the entries from its two arguments
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L269-L296)). For a `FairFileSource`:
+
+| Call | Entries that the run processes |
+| --- | --- |
+| `Run()` or `Run(0, 0)` | All entries |
+| `Run(n)` | The entries 0 to n−1, or all entries if the input has fewer |
+| `Run(a, b)` with b > 0 | The entries a to b−1. The loop also ends at the end of the input. |
+| `Run(a, -1)` | The entries from a to the end of the input |
+
+The loop ends at the first entry that the source cannot read, with a warning. A source that does not
+know its number of entries returns -1 from `CheckMaxEventNo()`, like the base class `FairSource`.
+Then the loop starts at `NStart`, ignores `NStop` and runs until `ReadEvent()` fails.
+
+For each entry, the run does these steps:
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="for (int i = Ev_start; i < Ev_end || MaxAllowed == -1; i++) {" />
+
+1. It stops the loop if you pressed Ctrl+C, see [Stop the loop with Ctrl+C](#stop-the-loop-with-ctrlc).
+2. It reads the entry from the source.
+3. It fills the event header, and checks if the run ID changed. A new run ID re-initializes the
+   parameter containers and calls `ReInit()` of the tasks, see
+   [Event headers and run IDs](/concepts/event-headers/).
+4. It calls `Exec()` of the tasks, then fills the sink, then calls `FinishEvent()` of the tasks.
+
+After the loop, the run calls `Finish()` of the tasks and writes the output
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L339-L345)). `Run()` does not close
+the sink.
+
+:::caution[Run() without a source]
+Without a source, `Run(NStart, NStop)` calls `DummyRun(NStart, NStop)`. It runs the tasks for the
+numbers from `NStart` to `NStop`−1 ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L536-L546)).
+Thus `Run()` and `Run(10)` run no event there. Use `Run(0, 10)`.
+:::
+
+:::caution[Give Run() an Int_t]
+`Run(Long64_t)` is a deprecated overload. It processes one entry only, like `RunSingleEntry()`. A
+`Long64_t` argument, for example the return value of `TChain::GetEntries()`, selects this overload.
+Cast the argument to `Int_t`.
+:::
+
+### Stop the loop with Ctrl+C
+
+At each entry, `Run()` installs its own handler for `SIGINT`
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L302-L311)). Ctrl+C logs
+`*********** CTRL C PRESSED *************` and sets a flag. The run completes the current event.
+Before the next entry, it logs `FairRunAna::Run() Event loop was interrupted by the user!` and leaves
+the loop. Then it calls `Finish()` of the tasks and writes the output as usual.
+
+The run does not restore the previous handler after the loop. A further Ctrl+C only logs the message
+and sets the flag again. `FairRunOnline` also installs a handler that sets a flag, but without a log
+message. It stops after the current event.
+
+### Skip the output of an event
+
+A task can call [`MarkFill(kFALSE)`](/api/FairRun/#MarkFill) in its `Exec()`. Then the run does not
+fill the sink for the current event, and it sets the flag back to `kTRUE`
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L617-L624)). `FairRunOnline` does the
+same.
+
+### Other ways to run
+
+| Function | What it does |
+| --- | --- |
+| [`RunSingleEntry(entry)`](/api/FairRunAna/#RunSingleEntry) | It processes one entry, calls `Finish()` of the tasks, and writes the output. The event display uses it. Each call runs `Finish()` again. |
+| [`RunMQ(entry)`](/api/FairRunAna/#RunMQ) | Like `RunSingleEntry()`, but without output. The FairMQ sampler of Tutorial 3 uses it. |
+| [`TerminateRun()`](/api/FairRunAna/#TerminateRun) | It ends a run that `RunMQ()` drove: it calls `Finish()` of the tasks, writes the output and closes the sink. |
+| `RunWithTimeStamps()`, then `Run()` | Time-based processing with the time-stamp buffers. See [Time-based simulation and reconstruction](/reconstruction/time-based/). |
+| [`Run(Double_t delta_t)`](/api/FairRunAna/#Run-2) | It processes no event in the current code: `FairRootManager::ReadNextEvent()` always returns `false` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L479-L484)). |
+| `RunOnLmdFiles()`, `RunOnTBData()` | They do not read from the source. They call the tasks in a loop. `RunOnLmdFiles()` stops at `NStop`, or one loop after a task calls `StopProcessingLMD()`. `RunOnTBData()` stops after `FairRootManager::SetFinishRun()`. No example uses them. |
+| `RunEventReco()` | Deprecated, together with `FairEventBuilder`. |
+
+### Parameters that change during the run
+
+The input can contain events of more than one run ID. When the run ID changes, `FairRunAna` reads the
+parameters for the new run ID and calls `ReInit()` of the tasks. With
+[`SetContainerStatic(kTRUE)`](/api/FairRunAna/#SetContainerStatic), the run keeps the parameters of
+the first run ID. [Event headers and run IDs](/concepts/event-headers/#when-the-run-id-changes) shows
+the code.
+
+## FairRunOnline: live data
+
+`FairRunOnline` processes events from an online source, for example an MBS stream or LMD files. Give
+the source to the constructor. The MBS tutorial makes its run like this:
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="FairRunOnline* run = new FairRunOnline(source);" end="run->SetAutoFinish(kFALSE);" title="unpack_mbs.C" />
+
+The differences from `FairRunAna`:
+
+- `Run(a, b)` calls `ReadEvent(i)` for i from a to b−1. An online source, such as `FairLmdSource`,
+  ignores i and reads the next event. It returns -1 from `CheckMaxEventNo()`, so `Run(0, 0)` and
+  `Run(n, 0)` process no event. A negative `a` processes events until the source returns 1 from
+  `ReadEvent()`, or until Ctrl+C
+  ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L236-L305)).
+- `Run(a, b)` calls [`Finish()`](/api/FairRunOnline/#Finish) at the end. After
+  [`SetAutoFinish(kFALSE)`](/api/FairRunOnline/#SetAutoFinish), call `Finish()` yourself. It calls
+  `Finish()` of the tasks, writes the output, and closes the source and the sink.
+- [`ActivateHttpServer()`](/api/FairRunOnline/#ActivateHttpServer) starts a ROOT HTTP server for
+  histograms. The defaults are port 8080 and an update every 10000 events.
+
+[Process live data with FairRunOnline](/online/run-online/) explains the online run.
+
+## FairRunAnaProof (deprecated)
+
+`FairRunAnaProof` runs a `FairRunAna` job on PROOF. CMake builds it only with
+`-DBUILD_PROOF_SUPPORT=ON`, and the default is `OFF`. With ROOT 6.32 or newer, CMake stops with an
+error, because ROOT removed PROOF ([CMakeLists.txt](/repo/CMakeLists.txt#L151-L153)). Use `FairRunAna`
+for new code.
+
+## Related pages
+
+- [Tasks](/concepts/tasks/): the hooks that the run calls.
+- [Event headers and run IDs](/concepts/event-headers/): how each run gets its run ID.
+- [Write a simulation macro](/simulation/run-macro/): a complete `FairRunSim` macro.
+- [Write a reconstruction macro](/reconstruction/run-macro/): a complete `FairRunAna` macro.
+- [Process live data with FairRunOnline](/online/run-online/): the online run.
+- [Branches, sources and sinks](/concepts/io/): what the source and the sink do.

@@ -1,0 +1,209 @@
+---
+title: 'Match reconstructed data to MC truth'
+description: 'Find the MC tracks behind each reconstructed object with links, and compute purity and efficiency. Also the deprecated datamatch library, its model and its known problems.'
+sidebar:
+  order: 8
+code:
+  - fairroot/base/event/FairMultiLinkedData.cxx
+  - fairroot/datamatch/FairMCMatch.h
+  - fairroot/datamatch/FairMCMatch.cxx
+  - fairroot/datamatch/FairMCMatchCreatorTask.cxx
+  - fairroot/datamatch/FairMCMatchLoaderTask.cxx
+  - fairroot/datamatch/FairMCMatchSelectorTask.cxx
+  - fairroot/datamatch/FairMCDataCrawler.cxx
+  - fairroot/datamatch/FairMCStage.h
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+To measure a reconstruction, compare each reconstructed object with the MC tracks that made it. In FairRoot, the links of the data objects carry this information through all data levels. The older datamatch library builds tables from the links, but it is deprecated, and in the current code its tables stay empty.
+
+## Choose a method
+
+| | Links | Datamatch library |
+| --- | --- | --- |
+| Library | `FairRoot::Base` | `FairRoot::DataMatch` |
+| Status | Current | Deprecated since 18.8.0, to be removed |
+| What you write | An analysis task that calls `GetSortedMCTracks()` | A task class that names the stages |
+| Result | For each object, its MC tracks with weights | Tables from a start branch to a stop branch |
+| Use in the repository | Tutorial 3 turns links on in its simulation, digitization and reconstruction macros | None |
+
+Use the links. The datamatch sections below are for code that still uses the library.
+
+## Match with links
+
+With history on, each new object copies the links of the objects that it comes from. Thus an object at the end of the chain links to the MC tracks behind it. See [Links between data levels](/concepts/links/) for the rules.
+
+<Steps>
+
+1. Turn links on in the simulation macro. `FairStack` then links each MC point to its MC track.
+
+   ```cpp
+   run.SetUseFairLinks(kTRUE);
+   ```
+
+2. Turn links on in each digitization and reconstruction macro in the same way.
+
+3. In each task, add a link from each new object to each input object that it uses. Keep the default history.
+
+4. Make sure that each input branch is a `TClonesArray`. History gets the target object from it.
+
+5. In the analysis task, call `GetSortedMCTracks()` on each reconstructed object.
+
+</Steps>
+
+<Snippet file="fairroot/base/event/FairMultiLinkedData.cxx" start="FairMultiLinkedData::GetSortedMCTracks()" title="FairMultiLinkedData.cxx" />
+
+The function takes the links to the `MCTrack` branch and sorts them by weight, largest first. The index of a link is the position of the MC track in the `MCTrack` array of the event. With weight 1 on each link, the weight of an MC track link is the number of paths to that MC track.
+
+### An analysis task
+
+This sketch finds the main MC track of each hit and its share of the weight:
+
+```cpp title="MyMatchTask.cxx"
+InitStatus MyMatchTask::Init()
+{
+    auto ioman = FairRootManager::Instance();
+    fHits = static_cast<TClonesArray*>(ioman->GetObject("FairTestDetectorHit"));
+    fMCTracks = static_cast<TClonesArray*>(ioman->GetObject("MCTrack"));
+    return (fHits && fMCTracks) ? kSUCCESS : kERROR;
+}
+
+void MyMatchTask::Exec(Option_t*)
+{
+    for (int i = 0; i < fHits->GetEntriesFast(); ++i) {
+        auto hit = static_cast<FairHit*>(fHits->At(i));
+        std::vector<FairLink> mcLinks = hit->GetSortedMCTracks();
+        if (mcLinks.empty()) {
+            continue;   // no MC track link
+        }
+        float sum = 0;
+        for (auto const& link : mcLinks) {
+            sum += link.GetWeight();
+        }
+        auto track = static_cast<FairMCTrack*>(fMCTracks->At(mcLinks.front().GetIndex()));
+        float purity = mcLinks.front().GetWeight() / sum;
+        // Fill your histograms with track and purity.
+    }
+}
+```
+
+`FairMCTrack` is the MC track class of the example stack ([FairMCTrack.h](/source/examples/common/mcstack/FairMCTrack.h/#L36)). Use the class of your stack. Two common measures:
+
+- **Purity** of an object: the weight of its first MC track, divided by the sum of all its MC track weights.
+- **Efficiency**: count an MC track as found when it is the first MC track of a reconstructed track. Divide the number of found MC tracks by the number of MC tracks that you want to find.
+
+### Keep only the MC track links
+
+If you need only the MC truth, keep only the MC track links. Change the link manager to include mode after `Init()` of each run after the simulation:
+
+```cpp title="run_reco.C"
+run.Init();
+FairLinkManager::Instance()->AddIncludeType(FairRootManager::Instance()->GetMCTrackBranchId());
+run.Run();
+```
+
+`InsertLink()` then drops all other links. `AddLink()` still copies the history of a dropped link ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L133-L140)). So each object keeps only its MC track links, with the summed weights.
+
+### Limits
+
+- History works only inside one event. A link to another entry gets no history ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L218-L219)). In time-based runs, copy the links of the input object with `AddInterfaceData()`, see [Entry numbers for time-based data](/concepts/links/#entry-numbers-for-time-based-data).
+- History gets the target object with `GetObject()`. A branch made with `RegisterAny()` gives no history.
+- History copies the weights of the target links as they are. It does not multiply them by the weight of the new link ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L245-L252)). A weight on the link to a digi thus does not reach the MC track links.
+- The link manager drops links to memory-only branches by default. These branches still pass on their history.
+- `GetSortedMCTracks()` also puts the links through the link manager of the current run ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L278-L303)). In include mode, put the `MCTrack` branch on the list, or the function returns no links.
+
+## The datamatch library
+
+:::caution[Deprecated]
+The datamatch library is deprecated since FairRoot 18.8.0. The changelog plans its removal without replacement, and asks users who need it to contact the developers ([CHANGELOG.md](/repo/CHANGELOG.md)).
+:::
+
+Each header of the library gives a compiler warning, unless you define `FAIR_SILENCE_DATAMATCH_DEPRECATION`:
+
+<Snippet file="fairroot/datamatch/FairMCMatch.h" start="#ifndef FAIR_SILENCE_DATAMATCH_DEPRECATION" end="#endif" title="FairMCMatch.h" />
+
+The library is the CMake target `FairRoot::DataMatch`, with the library file name `FairDataMatch` ([CMakeLists.txt](/repo/fairroot/datamatch/CMakeLists.txt)). No example and no test in the repository uses it.
+
+### The model
+
+The library copies the links of an event into stages. A stage is the table of one branch, with one entry for each object of the branch.
+
+| Class | What it holds |
+| --- | --- |
+| [`FairMCMatch`](/api/FairMCMatch/) | All stages of the event, in a map from branch ID to stage, and the queries |
+| [`FairMCStage`](/api/FairMCStage/) | One stage: the entries, the branch name, a file name, a weight (1 by default) and the flags `fLoaded` and `fFill` |
+| [`FairMCEntry`](/api/FairMCEntry/) | The links of one object: a `FairMultiLinkedData`, with the source stage and the position |
+| [`FairMCObject`](/api/FairMCObject/) | The base class of stage and result: a vector of entries and a stage ID |
+| [`FairMCResult`](/api/FairMCResult/) | The answer to a query: for each object of the start stage, the links to the stop stage |
+| [`FairMCList`](/api/FairMCList/) | A type, an entry and a list of indices. No other class of the library uses it. |
+
+The map of stages is a member of `FairMCMatch` ([FairMCMatch.h](/source/fairroot/datamatch/FairMCMatch.h/#L120-L124)). A new stage has the weight 1 and both flags false ([FairMCStage.cxx](/source/fairroot/datamatch/FairMCStage.cxx/#L28-L35)).
+
+[`GetMCInfo(start, stop)`](/api/FairMCMatch/#GetMCInfo) takes two branch IDs, and [the other overload](/api/FairMCMatch/#GetMCInfo-2) takes two branch names. If `start` is less than `stop`, it looks for the objects that link to the start objects. If not, it follows the links of the start objects ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L99-L110)). Thus the order of the IDs sets the direction. The backward search drops links to the branch with ID 0, unless it is the stop branch. The code calls this branch the ultimate stage ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L277-L283)).
+
+### The tasks
+
+| Task | `Init()` | `Exec()` |
+| --- | --- | --- |
+| [`FairMCMatchCreatorTask`](/api/FairMCMatchCreatorTask/) | Makes a `FairMCMatch` and calls `InitDataStages()`. Gets the branch of each stage. Registers `MCLink`, a persistent `TClonesArray` of `FairMCEntry`, and the memory branch `MCMatch`. | Clears the stages, copies the links of each object into its stage, and writes all entries to `MCLink` |
+| [`FairMCMatchLoaderTask`](/api/FairMCMatchLoaderTask/) | Makes a `FairMCMatch` and calls `InitDataStages()`. Gets `MCLink` and registers `MCMatch`. | Clears the stages, loads them from `MCLink`, and adds a stage for `MCTrack` |
+| [`FairMCMatchSelectorTask`](/api/FairMCMatchSelectorTask/) | Gets `MCMatch` and converts the start and stop names to IDs | Sets the stage weights, adds a stage for `MCTrack`, and prints `GetMCInfo(start, stop)` to `std::cout` |
+
+The source shows each step: [creator](/source/fairroot/datamatch/FairMCMatchCreatorTask.cxx/#L35-L131), [loader](/source/fairroot/datamatch/FairMCMatchLoaderTask.cxx/#L29-L117) and [selector](/source/fairroot/datamatch/FairMCMatchSelectorTask.cxx/#L60-L98). The tasks share the `FairMCMatch` through the memory branch `MCMatch`. Thus a selector needs a creator or a loader before it in the same run.
+
+The creator and the loader are abstract. Derive from one of them and implement `InitDataStages()`. In it, call [`InitStage()`](/api/FairMCMatch/#InitStage-2) of the protected member `fMCMatch` for each branch:
+
+```cpp title="MyMCMatchCreatorTask.h"
+#include "FairMCMatch.h"
+#include "FairMCMatchCreatorTask.h"
+
+class MyMCMatchCreatorTask : public FairMCMatchCreatorTask
+{
+  public:
+    void InitDataStages() override
+    {
+        fMCMatch->InitStage("FairTestDetectorPoint");
+        fMCMatch->InitStage("FairTestDetectorDigi");
+        fMCMatch->InitStage("FairTestDetectorHit");
+    }
+
+    ClassDefOverride(MyMCMatchCreatorTask, 1);
+};
+```
+
+`InitStage(branchName)` makes a stage only for a branch that `CheckBranch()` reports as 1. Such a branch comes from the input file ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L67-L80)). For another branch, it prints `-W- FairMCMatch::InitStage: Branch name <name> not persistant!` and makes no stage. The overload `InitStage(type, fileName, branchName)` makes a stage for any branch ID ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L54-L65)).
+
+### FairMCDataCrawler
+
+[`FairMCDataCrawler`](/api/FairMCDataCrawler/) follows the links without tables. It reads each target object with `GetCloneOfLinkData()` and goes on until it reaches the stop branch ([FairMCDataCrawler.cxx](/source/fairroot/datamatch/FairMCDataCrawler.cxx/#L131-L249)). The class is abstract: implement `InitDataObjects()`, and call `GetObject()` there for each branch that the crawler reads. Its `Init()` calls `InitDataObjects()`, so call `Init()` in the `Init()` of your task.
+
+[`GetInfo(links, stopStage)`](/api/FairMCDataCrawler/#GetInfo) returns the links that the crawler found. By default, the result also has the links on the way and the end points outside the stop branch. `SetStoreIntermediate(kFALSE)` and `SetStoreAllEndpoints(kFALSE)` remove them ([FairMCDataCrawler.cxx](/source/fairroot/datamatch/FairMCDataCrawler.cxx/#L22-L29)).
+
+### Known problems
+
+These problems are in the current code. The first one alone keeps the tasks from giving results.
+
+- **The stages disappear in each event.** `ClearMCList()` clears the entries and then removes all stages from the map, without deleting them:
+
+  <Snippet file="fairroot/datamatch/FairMCMatch.cxx" start="void FairMCMatch::ClearMCList()" title="FairMCMatch.cxx" />
+
+  The creator and the loader call it at the start of each `Exec()`. After that, they find no stage, `MCLink` stays empty, and `GetMCInfo()` returns empty results:
+
+  <Snippet file="fairroot/datamatch/FairMCMatchCreatorTask.cxx" start="fMCLink->Delete();" end="fMCMatch->LoadInMCLists(fMCLink);" title="FairMCMatchCreatorTask.cxx" />
+
+- **Wrong cast of the data objects.** The creator casts each object of a stage to `FairMultiLinkedData*` ([FairMCMatchCreatorTask.cxx](/source/fairroot/datamatch/FairMCMatchCreatorTask.cxx/#L104)). The crawler does the same with each clone ([FairMCDataCrawler.cxx](/source/fairroot/datamatch/FairMCDataCrawler.cxx/#L121-L124)). The FairRoot data classes derive from `FairMultiLinkedData_Interface`, which does not derive from `FairMultiLinkedData`.
+- **Only input branches become stages.** See `InitStage()` above. In the header, the parameters of this overload have the names `fileName, branchName` ([FairMCMatch.h](/source/fairroot/datamatch/FairMCMatch.h/#L62)). In the source, they are `branchName, fileName` ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L67)).
+- **Null stages.** `GetMCStageType(Int_t)` and `GetEntry()` use `fList[type]`, which adds a null stage for an unknown type ([FairMCMatch.h](/source/fairroot/datamatch/FairMCMatch.h/#L98), [FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L337)). Loops over all stages then use the null pointer, for example `operator<<` and `FindLinksToStage()`. The selector calls `SetWeight()` on a null stage for each type from `SetWeightStage()` that has no stage ([FairMCMatchSelectorTask.cxx](/source/fairroot/datamatch/FairMCMatchSelectorTask.cxx/#L92-L98)).
+- **No stage for branch 0 by name.** `GetMCStageType(TString)` tests the branch ID with `> 0`, so it returns null for the branch with ID 0 ([FairMCMatch.h](/source/fairroot/datamatch/FairMCMatch.h/#L88-L96)).
+- **`DeleteLink()` does nothing.** Its body in `FairMultiLinkedData` is a comment ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L269-L276)). The forward search uses it to remove the start link from each result ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L143-L146)).
+- **Memory leaks.** The crawler never deletes the clones that `GetCloneOfLinkData()` returns. `RemoveStage()` removes a stage from the map without deleting it ([FairMCMatch.cxx](/source/fairroot/datamatch/FairMCMatch.cxx/#L82)).
+
+## Related pages
+
+- [Links between data levels](/concepts/links/): how links, history and the link manager work.
+- [Data classes](/concepts/data-classes/): the base classes that hold the links.
+- [The particle stack and MC tracks](/simulation/stack/): where the MC tracks and their indices come from.
+- [Tutorial 3](/examples/tutorial3/): the example that turns links on in its main macros.
+- [Deprecated APIs](/reference/deprecations/): other deprecated parts of FairRoot.

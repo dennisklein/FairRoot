@@ -1,0 +1,273 @@
+---
+title: 'Magnetic fields'
+description: 'A field class returns the magnetic field at a point. FairRunSim gives it to the transport engine and to the parameters, and the reconstruction gets it again from the macro or a field factory.'
+sidebar:
+  order: 8
+code: [fairroot/base/field/FairField.h, fairroot/base/field/FairField.cxx, fairroot/base/field/FairFieldFactory.h, fairroot/base/field/FairFieldFactory.cxx, fairroot/base/steer/FairRunSim.cxx, fairroot/base/steer/FairRunAna.cxx, examples/common/passive/FairConstField.cxx, examples/common/passive/FairConstFieldCreator.cxx, examples/common/passive/FairConstPar.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A field class derives from `FairField` and returns the magnetic field at a point. In a simulation,
+the run gives the field object to the transport engine, and the field can store its settings in a
+parameter container. In the reconstruction, the macro sets the field again, or a field factory makes
+it from these parameters.
+
+## The FairField interface
+
+`FairField` derives from `TVirtualMagField`, the field interface of the VMC
+([FairField.h](/source/fairroot/base/field/FairField.h/#L36)). The transport engine calls
+`Field()`. This function calls `GetFieldValue()`, and the default `GetFieldValue()` calls
+`GetBx()`, `GetBy()` and `GetBz()` ([FairField.cxx](/source/fairroot/base/field/FairField.cxx/#L38-L43)):
+
+<Snippet file="fairroot/base/field/FairField.h" start="/** Get magnetic field. For use of Geant3" end="void Field(const Double_t point[3], Double_t* B) override" title="FairField.h" />
+
+The position is in cm and the field is in kG (1 kG = 0.1 T). A field class overrides some of these
+virtual functions:
+
+| Function | Default in `FairField` | Override it |
+| --- | --- | --- |
+| [`GetBx()`](/api/FairField/#GetBx), [`GetBy()`](/api/FairField/#GetBy), [`GetBz()`](/api/FairField/#GetBz) | Log a warning and return 0 | Always, unless you override `GetFieldValue()` |
+| [`GetFieldValue()`](/api/FairField/#GetFieldValue) | Calls the three functions above | To calculate the three components together, for example from a map |
+| [`Init()`](/api/FairField/#Init) | Does nothing | To prepare the field, for example to read a map |
+| [`FillParContainer()`](/api/FairField/#FillParContainer) | Logs a warning | To store the settings in a parameter container |
+| `Print(Option_t*) const` | Does nothing | To log the settings |
+| [`GetBxyz()`](/api/FairField/#GetBxyz) | Logs a warning | Not necessary: no code in FairRoot calls it |
+
+The second argument of the constructor `FairField(name, title)` has no effect
+([FairField.cxx](/source/fairroot/base/field/FairField.cxx/#L21-L24)).
+
+### The field type
+
+The protected member `fType` holds the field type, and [`GetType()`](/api/FairField/#GetType)
+returns it. The constructors of `FairField` set 0. The comments in the header do not agree. The
+comment of `GetType()` gives 0 for a constant field, but the comment of `fType` gives 1
+([FairField.h](/source/fairroot/base/field/FairField.h/#L61-L62),
+[FairField.h](/source/fairroot/base/field/FairField.h/#L110-L111)).
+
+The code follows the second comment: [`IsConst()`](/api/FairField/#IsConst) tests for 1 and
+[`IsMap()`](/api/FairField/#IsMap) tests for 2 ([FairField.cxx](/source/fairroot/base/field/FairField.cxx/#L28-L36)).
+The constant field of the examples and its parameter container use 0. Thus `IsConst()` returns
+`kFALSE` for `FairConstField`.
+
+:::caution
+Do not use `IsConst()` and `IsMap()`. Compare `GetType()` with the values that your own field classes
+and field factory use.
+:::
+
+## Set the field in a simulation
+
+Create the field in the macro and give it to the run before `Init()`. Tutorial 3 uses the constant
+field of the examples:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start="FairConstField *fMagField = new FairConstField();" end="run.SetField(fMagField);" title="run_sim.C" />
+
+`FairConstField` returns the field of `SetField()` inside the region of `SetFieldRegion()`, and 0
+outside ([FairConstField.cxx](/source/examples/common/passive/FairConstField.cxx/#L117-L139)). The
+default constructor sets all limits of the region to 0.
+
+The run then does these steps:
+
+1. [`FairRunSim::SetField()`](/api/FairRunSim/#SetField) keeps the pointer
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L331-L334)).
+2. `Init()` calls `Init()` of the field and gives the field to the MC application. Then it calls
+   `FillParContainer()` of the field through `SetFieldContainer()`
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L231-L235),
+   [FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L260-L265)).
+3. `InitMC()` of the MC application gives the field to the transport engine with `SetMagField()`.
+   Then it calls `Init()` of the transport engine ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L263-L267)).
+4. With multithreaded Geant4, each worker thread calls `SetMagField()` with the same pointer
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L466-L471)).
+
+All worker threads use one field object. Thus `GetFieldValue()` and the functions that it calls must
+not change the object without protection. Without `SetField()`, the run gives a null pointer to the
+transport engine.
+
+The media file also has a field flag and a maximum field for each medium. FairRoot puts them into the
+ROOT media for the transport engine, see [Geometry and media file format](/reference/geo-format/).
+
+### Who deletes the field
+
+| Run | Deletes the field |
+| --- | --- |
+| `FairRunSim` | No. A comment says: not owner of the field ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L104-L106)). |
+| `FairRunAna` | Yes, in its destructor ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L96)) |
+| `FairRunOnline` | Yes, in its destructor ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L85)) |
+
+Do not delete a field that you gave to `FairRunAna` or `FairRunOnline`, and do not give one field
+object to two runs.
+
+## Store the field in the parameters
+
+`FairConstField::FillParContainer()` copies the settings into the parameter container `FairConstPar`
+and marks it as changed for the run ID:
+
+<Snippet file="examples/common/passive/FairConstField.cxx" start="void FairConstField::FillParContainer()" title="FairConstField.cxx" />
+
+The container factory of the library `ExPassive` knows the container `FairConstPar`
+([FairPassiveContFact.cxx](/source/examples/common/passive/FairPassiveContFact.cxx/#L37-L41)). The
+container writes the field type, the region and the three components. Their names are
+`Field Type`, `Field min x` to `Field max z`, and `Field Bx` to `Field Bz`
+([FairConstPar.cxx](/source/examples/common/passive/FairConstPar.cxx/#L37-L54)).
+
+The runtime database writes the container to its output. Tutorial 3 opens the output after
+`Init()`:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start="FairRuntimeDb* rtdb = run.GetRuntimeDb();" end="rtdb->saveOutput();" title="run_sim.C" />
+
+The runtime database is in [Parameters and the runtime database](/concepts/parameters/).
+
+## Get the field in the reconstruction
+
+`FairRunAna` gets its field in one of two ways: from the macro, or from a field factory.
+
+### Set the field in the macro
+
+The propagator example creates the same field as in its simulation and gives it to the run:
+
+<Snippet file="examples/advanced/propagator/macros/runProp.C" start="FairConstField* fMagField = new FairConstField();" end="fRun->SetField(fMagField);" title="runProp.C" />
+
+[`FairRunAna::SetField()`](/api/FairRunAna/#SetField) only keeps the pointer. `FairRunAna` does
+not call `Init()` of this field. If your field class needs `Init()`, call it in the macro.
+
+### Let a field factory make the field
+
+A field factory makes the field from the parameter container of the simulation.
+`FairRunAna::Init()` uses it in these steps ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L215-L238)):
+
+1. It gets the factory with [`FairFieldFactory::Instance()`](/api/FairFieldFactory/#Instance).
+2. It calls [`SetParm()`](/api/FairFieldFactory/#SetParm) of the factory. There, the factory
+   requests its parameter container from the runtime database.
+3. It calls `initContainers()` of the runtime database, which reads the parameter container.
+4. If the macro did not set a field, it calls [`createFairField()`](/api/FairFieldFactory/#createFairField).
+5. It aligns the geometry and calls `Init()` of the tasks. Thus the tasks can use the field in
+   their `Init()`.
+
+The constructor of `FairFieldFactory` makes the new object the instance
+([FairFieldFactory.cxx](/source/fairroot/base/field/FairFieldFactory.cxx/#L19-L37)). The example
+factory `FairConstFieldCreator` has a static object in its source file
+([FairConstFieldCreator.cxx](/source/examples/common/passive/FairConstFieldCreator.cxx/#L22)). Thus
+the factory exists as soon as the library `ExPassive` is loaded. Its `SetParm()` requests
+`FairConstPar`, and `createFairField()` makes the field from it:
+
+<Snippet file="examples/common/passive/FairConstFieldCreator.cxx" start="FairField *FairConstFieldCreator::createFairField()" title="FairConstFieldCreator.cxx" />
+
+`FairRunAnaProof` does steps 1 to 4 in the same way. Then it calls `Init()` of the tasks, but it does
+not align the geometry ([FairRunAnaProof.cxx](/source/fairroot/base/steer/FairRunAnaProof.cxx/#L188-L205)).
+`FairRunOnline` uses no factory: it calls `Init()` and `FillParContainer()` of the field of
+the macro ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L160-L163)).
+
+:::caution
+`Instance()` returns the factory that was constructed last. If two loaded libraries each have a
+factory object, `FairRunAna` uses only one of them. Also, `FairConstFieldCreator` knows only the
+field type 0. For other types, it logs a warning and returns no field.
+:::
+
+To write your own factory:
+
+<Steps>
+1. Derive a class from `FairFieldFactory`.
+2. In `SetParm()`, get your parameter container from the runtime database of the run.
+3. In `createFairField()`, make the field from the parameters. Call `Init()` of the field.
+4. Create one static object of the factory in a source file of your library.
+</Steps>
+
+## Use the field in tasks
+
+A task gets the field from the run with `FairRun::Instance()->GetField()`.
+[`FairRun::GetField()`](/api/FairRun/#GetField) is pure virtual. `FairRunSim`, `FairRunAna` and
+`FairRunOnline` return the field that they have. The track and propagation classes of FairRoot use the
+field in this way:
+
+- [`FairTrackPar::GetFieldValue()`](/api/FairTrackPar/#GetFieldValue) takes the field of
+  `FairRunAna`. Without a field, it returns 0 ([FairTrackPar.cxx](/source/fairroot/trackbase/FairTrackPar.cxx/#L108-L118)).
+- The constructor of [`FairRKPropagator`](/api/FairRKPropagator/#FairRKPropagator) gets the field.
+  Without a field, it logs the warning `FairRKPropagator: No magnetic field`
+  ([FairRKPropagator.cxx](/source/fairroot/trackbase/FairRKPropagator.cxx/#L27-L42)).
+- [`FairGeane::Init()`](/api/FairGeane/#Init) takes the field of `FairRunAna` and gives it to Geane
+  without a check for a null pointer ([FairGeane.cxx](/source/fairroot/geane/FairGeane.cxx/#L128-L130)).
+  Make sure that the run has a field: set it in the macro, or load a field factory.
+  `FairGeane::SetField()` has no effect.
+
+The propagators are in [Track parameters and propagation](/reconstruction/tracks/).
+
+## Write a field class
+
+<Steps>
+1. Derive a class from `FairField`. Set `fType` in the constructor.
+2. Implement `GetBx()`, `GetBy()` and `GetBz()`, or `GetFieldValue()`. Take the position in cm.
+   Return the field in kG.
+3. Implement `Init()` if the field needs preparation, for example to read a map.
+4. Implement `FillParContainer()` to store the settings in a parameter container.
+5. Add the parameter container to a container factory.
+6. If the reconstruction must make the field from the parameters, write a field factory.
+</Steps>
+
+This sketch is a solenoid with a uniform field inside a cylinder. It does not change the object in
+`GetFieldValue()`, so worker threads can share it:
+
+```cpp title="MySolenoidField.h"
+#include "FairField.h"
+
+#include <cmath>
+
+class MySolenoidField : public FairField
+{
+  public:
+    MySolenoidField(Double_t bz, Double_t radius, Double_t halfLength)
+        : FairField("MySolenoidField")
+        , fBz(bz)
+        , fRadius(radius)
+        , fHalfLength(halfLength)
+    {
+        fType = 0;   // the value that your field factory expects
+    }
+
+    // point in cm, bField in kG
+    void GetFieldValue(const Double_t point[3], Double_t* bField) override
+    {
+        bool inside = std::hypot(point[0], point[1]) < fRadius && std::abs(point[2]) < fHalfLength;
+        bField[0] = 0.;
+        bField[1] = 0.;
+        bField[2] = inside ? fBz : 0.;
+    }
+
+  private:
+    Double_t fBz;
+    Double_t fRadius;
+    Double_t fHalfLength;
+};
+```
+
+This class has no `FillParContainer()`. Thus `FairRunSim::Init()` logs the warning of the base class.
+
+## The field classes of the templates
+
+The project templates have the directory `field/` with `MyConstField`, `MyFieldPar` and
+`MyFieldCreator` ([templates/project_root_containers/field](/repo/templates/project_root_containers/field/)).
+The simulation macro of the template uses `MyConstField` like Tutorial 3 uses `FairConstField`
+([run_sim.C](/source/templates/project_root_containers/macro/run_sim.C/#L44-L50)). Before you use
+these classes, complete them:
+
+- `MyConstField` has no `FillParContainer()`. The parameter file then has no field settings.
+- No container factory of the template creates `MyFieldPar`. Thus `MyFieldCreator::SetParm()` gets
+  no container, and `createFairField()` makes no field
+  ([MyFieldCreator.cxx](/source/templates/project_root_containers/field/MyFieldCreator.cxx/#L36-L64)).
+- `MyConstField::Print()` has no argument. It does not override `FairField::Print(Option_t*)`, so
+  the call `Print("")` of the factory prints nothing.
+
+FairRoot and its templates have no class for a field map. `FairMapPar` and `MyFieldPar` have members
+for a map name, a position and a scale, but no class reads a map. See [Templates](/tools/templates/).
+
+## Related pages
+
+- [Write a simulation macro](/simulation/run-macro/): where `SetField()` goes in the macro.
+- [Write a reconstruction macro](/reconstruction/run-macro/): where `SetField()` goes in the
+  reconstruction macro.
+- [Track parameters and propagation](/reconstruction/tracks/): the propagators that use the field.
+- [Parameters and the runtime database](/concepts/parameters/): parameter containers and container
+  factories.
+- [Propagator](/examples/propagator/): the same field in the simulation and in the propagation.
+- [Geometry and media file format](/reference/geo-format/): the field flag and the maximum field of
+  the media.

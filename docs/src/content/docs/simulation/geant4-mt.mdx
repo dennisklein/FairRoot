@@ -1,0 +1,281 @@
+---
+title: 'Multithreaded Geant4'
+description: 'Run Geant4 on worker threads: how SetIsMT() reaches Geant4, what FairRoot clones for each worker, which clone functions your classes need, and how to read one output file per worker.'
+sidebar:
+  order: 9
+code: [fairroot/base/steer/FairRunSim.h, fairroot/base/steer/FairRunSim.cxx, fairroot/base/sim/FairMCApplication.h, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/sim/FairModule.h, fairroot/base/sim/FairDetector.cxx, fairroot/base/sim/FairGenerator.h, fairroot/base/sim/FairPrimaryGenerator.cxx, fairroot/base/sim/FairGenericStack.h, fairroot/base/sink/FairRootFileSink.cxx, fairroot/base/steer/FairRootManager.cxx, examples/simulation/Tutorial1/macros/run_tutorial1.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+Geant4 can transport the events of one run on several worker threads. FairRoot supports this mode
+through the multithreading interface of the [VMC](https://vmc-project.github.io/). Each worker
+thread gets its own copy of `FairMCApplication`, with clones of the modules, the stack, the primary
+generator and the sink.
+
+This has two results for you. First, each module, generator, stack and sink must be able to clone
+itself. Second, each worker writes its own output file, and you read these files as a chain.
+
+## Switch on MT mode
+
+Call [`SetIsMT(true)`](/api/FairRunSim/#SetIsMT) before `Init()`. Tutorial 1 gets the flag from a
+macro argument:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="Create simulation run" end="run->SetIsMT(isMT);" title="run_tutorial1.C" />
+
+`SetIsMT()` only stores the flag. The configuration that creates the transport engine reads it with
+[`IsMT()`](/api/FairRunSim/#IsMT) and gives it to Geant4 VMC:
+
+| Configuration | What it does with the flag |
+| --- | --- |
+| `g4Config.C`, loaded by [`FairGenericVMCConfig`](/api/FairGenericVMCConfig/) | Gives `IsMT()` as the last argument of the Geant4 run configuration. |
+| `g4Config.yaml`, read by [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/) | Starts from `IsMT()`. The key `Geant4_Multithreaded` replaces the value if the file has it ([code](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L185-L190)). |
+| Your own function, set with [`SetSimSetup()`](/api/FairRunSim/#SetSimSetup) | FairRoot loads no configuration file ([code](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L320)). Your function must read `IsMT()`. |
+| Geant3 configurations | Do not read the flag. |
+
+The example macro `g4Config.C` gives the flag to the run configuration:
+
+<Snippet file="examples/common/gconfig/g4Config.C" start="Bool_t mtMode = FairRunSim::Instance()->IsMT();" end="specialStacking, mtMode);" title="examples/common/gconfig/g4Config.C" />
+
+:::caution[The YAML file wins]
+The example file [`g4Config.yaml`](/repo/examples/common/gconfig/g4Config.yaml) sets
+`Geant4_Multithreaded: false`. With this file, `SetIsMT(true)` has no effect. Remove the key, or set
+it to `true`.
+:::
+
+FairRoot does not set the number of worker threads. The configurations in
+[`examples/common/gconfig/`](/repo/examples/common/gconfig/) do not set it either.
+
+After `Run()`, [`WasMT()`](/api/FairRunSim/#WasMT) tells if the transport engine used MT mode.
+`FairRunSim::Run()` copies the answer of `TVirtualMC::IsMT()`
+([code](/source/fairroot/base/steer/FairRunSim.cxx/#L322-L329)). Geant4 VMC switches MT mode off
+when Geant4 has no multithreading support, so `WasMT()` can be `false` after `SetIsMT(true)`. Use
+`WasMT()` to find the output files, see [Read the output](#read-the-output).
+
+## What happens on a worker
+
+Geant4 VMC calls these functions of [`FairMCApplication`](/api/FairMCApplication/) for each worker
+thread. All of them are part of the VMC interface `TVirtualMCApplication`.
+
+<Steps>
+
+1. [`CloneForWorker()`](/api/FairMCApplication/#CloneForWorker) runs on the new worker thread. It
+   makes a `FairRunSim` for the worker and a copy of the application. The copy constructor clones
+   the modules, the stack and the primary generator.
+
+2. [`InitOnWorker()`](/api/FairMCApplication/#InitOnWorker) initializes the worker sink and
+   registers the branches. It calls `Initialize()` and `Register()` of each active detector. Then it
+   gives the stack and the magnetic field to the transport engine of the thread. Last,
+   `InitFinalizer()` makes the output tree of the worker from the registered branches.
+
+3. [`InitGeometry()`](/api/FairMCApplication/#InitGeometry) fills the map of sensitive volumes of
+   the worker. The worker does not build the geometry again. It uses the geometry of the master.
+
+4. The worker transports its events. `FinishEvent()` fills the tree of the worker sink.
+
+5. [`FinishRunOnWorker()`](/api/FairMCApplication/#FinishRunOnWorker) calls `FinishRun()` and
+   closes the worker sink.
+
+</Steps>
+
+`CloneForWorker()` holds a mutex while it makes the worker run:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="TVirtualMCApplication* FairMCApplication::CloneForWorker() const" title="FairMCApplication.cxx" />
+
+### What each worker gets
+
+| Part | On the worker | Code |
+| --- | --- | --- |
+| Run | A new `FairRunSim(kFALSE)` with the name of the transport engine, a clone of the sink, a copy of the MC event header, the run ID and the trajectory flag | [`CloneForWorker()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449) |
+| `FairRootManager` | Its own instance, because `Instance()` returns a `thread_local` object | [`Instance()`](/source/fairroot/base/steer/FairRootManager.cxx/#L66-L72) |
+| Modules and detectors | The result of `CloneModule()` for each module. The worker makes its own list of active detectors. | [copy constructor](/source/fairroot/base/sim/FairMCApplication.cxx/#L168-L191) |
+| Stack | The result of `CloneStack()` | [copy constructor](/source/fairroot/base/sim/FairMCApplication.cxx/#L193-L194) |
+| Primary generator | The result of `ClonePrimaryGenerator()`, which calls `CloneGenerator()` for each generator | [`ClonePrimaryGenerator()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L404-L417) |
+| Magnetic field | The same object as the master | [copy constructor](/source/fairroot/base/sim/FairMCApplication.cxx/#L140) |
+| Tasks | None. The worker has no task list. | [copy constructor](/source/fairroot/base/sim/FairMCApplication.cxx/#L200-L203) |
+| Runtime database | The same object as the master | [`FairRun`](/source/fairroot/base/steer/FairRun.cxx/#L44) |
+
+`FairRun::Instance()`, `FairRunSim::Instance()`, `FairRootManager::Instance()` and
+`FairTrajFilter::Instance()` are thread-local. On a worker, they return the object of that worker.
+
+All workers use the same field object. Make sure that your field class can give values to several
+threads at the same time.
+
+## What your classes must implement
+
+The base classes stop the program when a clone function is missing. For example,
+[`FairModule::CloneModule()`](/source/fairroot/base/sim/FairModule.cxx/#L683-L687) calls
+`Fatal("CloneModule", "Has to be overriden in multi-threading applications.")`.
+
+| Base class | Implement | Default | Examples in the repository |
+| --- | --- | --- | --- |
+| [`FairModule`](/api/FairModule/), for all modules, also passive ones | [`CloneModule()`](/api/FairModule/#CloneModule) | `Fatal()` | `FairTutorialDet1`, `FairCave`, `FairPipe`, `FairMagnet`, `FairTarget` |
+| [`FairDetector`](/api/FairDetector/) | [`IsSensitive()`](/api/FairModule/#IsSensitive) | Calls the deprecated `CheckIfSensitive()`, which returns `false` | `FairTutorialDet1`, `FairFastSimExample` |
+| [`FairGenerator`](/api/FairGenerator/) | [`CloneGenerator()`](/api/FairGenerator/#CloneGenerator) | `Fatal()` | `FairBoxGenerator`, `FairIonGenerator`, `FairYPtGenerator` |
+| [`FairPrimaryGenerator`](/api/FairPrimaryGenerator/), if you derive from it | [`ClonePrimaryGenerator()`](/api/FairPrimaryGenerator/#ClonePrimaryGenerator) | Copies the base class and clones the generators | none |
+| [`FairGenericStack`](/api/FairGenericStack/) | [`CloneStack()`](/api/FairGenericStack/#CloneStack) | `Fatal()` | `FairStack`, `MyProjStack` of the templates |
+| [`FairSink`](/api/FairSink/) | [`CloneSink()`](/api/FairSink/#CloneSink) | Pure virtual | `FairRootFileSink`, `FairOnlineSink` of the MQ pixel example |
+
+The other generators in `fairroot/generators/`, for example `FairAsciiGenerator` and
+`FairUrqmdGenerator`, have no `CloneGenerator()`. You cannot use them in MT mode.
+
+### Detectors
+
+A detector clone needs its own collection for the MC points. `FairTutorialDet1` makes the
+collection in a default member initializer, so that each copy gets a new, empty array:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.h" start="container for data points" end="FairTutorialDet1(const FairTutorialDet1&);" title="FairTutorialDet1.h" />
+
+The copy constructor and `CloneModule()` then stay short:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="FairTutorialDet1::FairTutorialDet1(const FairTutorialDet1& rhs)" title="FairTutorialDet1.cxx" />
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="FairModule* FairTutorialDet1::CloneModule() const" title="FairTutorialDet1.cxx" />
+
+The copy constructor of `FairModule` copies the name, the geometry file name, the module ID and the
+active flag ([code](/source/fairroot/base/sim/FairModule.cxx/#L80-L106)). The lists of sensitive
+volumes in `FairModule` are `thread_local`, so a worker starts with empty lists. In MT mode,
+`FairDetector::Initialize()` calls `DefineSensitiveVolumes()`. This function asks `IsSensitive()`
+for each volume name of the geometry ([code](/source/fairroot/base/sim/FairDetector.cxx/#L71-L97)):
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="Bool_t FairTutorialDet1::IsSensitive(const std::string& name)" title="FairTutorialDet1.cxx" />
+
+:::caution
+If `IsSensitive()` does not accept a volume, the workers do not call `ProcessHits()` for it. This
+is also true for a volume that `ConstructGeometry()` gives to `AddSensitiveVolume()` on the master.
+:::
+
+### Generators and the stack
+
+`ClonePrimaryGenerator()` copies the settings of the primary generator. Then it calls
+`CloneGenerator()` for each generator in its list:
+
+<Snippet file="fairroot/base/sim/FairPrimaryGenerator.cxx" start="FairPrimaryGenerator *FairPrimaryGenerator::ClonePrimaryGenerator() const" title="FairPrimaryGenerator.cxx" />
+
+`FairBoxGenerator` returns a copy that its default copy constructor makes:
+
+<Snippet file="fairroot/generators/FairBoxGenerator.cxx" start="FairGenerator* FairBoxGenerator::CloneGenerator() const" title="FairBoxGenerator.cxx" />
+
+`FairStack::CloneStack()` makes a new, empty stack and copies only the storage settings:
+
+<Snippet file="examples/common/mcstack/FairStack.h" start="FairGenericStack* CloneStack() const override" title="FairStack.h" />
+
+Write your `CloneStack()` in the same way. The copy constructor of `FairGenericStack` copies the
+pointer to the detector list of the master and sets the iterator to zero
+([code](/source/fairroot/base/sim/FairGenericStack.cxx/#L61-L67)). It gives no start value to the
+indices of the [fast simulation](/simulation/fast-simulation/).
+
+## Read the output
+
+[`FairRootFileSink::CloneSink()`](/api/FairRootFileSink/#CloneSink) gives each worker its own file.
+It inserts `_t<N>` before `.root` in the file name. `N` is the ID of the `FairRootManager` of the
+worker:
+
+<Snippet file="fairroot/base/sink/FairRootFileSink.cxx" start="FairSink* FairRootFileSink::CloneSink()" title="FairRootFileSink.cxx" />
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="void FairRootManager::UpdateFileName(TString& fileName)" title="FairRootManager.cxx" />
+
+- One counter gives the IDs to all `FairRootManager` objects of the process
+  ([code](/source/fairroot/base/steer/FairRootManager.cxx/#L62-L94)). The run of the master makes
+  the first manager, so the workers get the IDs 1, 2 and so on.
+- The output file name must contain `.root`.
+- FairRoot does not merge the worker files.
+
+Tutorial 1 reads the files of two workers with a `TChain` when `WasMT()` is `true`. The default name
+of the tree is `cbmsim` ([code](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L944)):
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='TChain chain("cbmsim");' end="^    }$" title="run_tutorial1.C" />
+
+## Limits of MT mode
+
+The code shows these limits:
+
+- **No tasks on the workers.** The worker has no task list. Tasks that you add to the run do not
+  run for the events of the workers.
+- **No radiation managers.** The copy constructor does not make the managers of
+  [Radiation length and dose maps](/simulation/radiation/). They record nothing in MT mode.
+- **No run information per event.** `FinishEvent()` stores time and memory data only in sequential
+  mode ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L685-L689)).
+- **Event IDs can repeat.** Each worker has its own copy of the event counter of
+  `FairPrimaryGenerator` ([code](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L272-L276)).
+  The worker files can contain the same event IDs. Only with an online sink (`kONLINESINK`),
+  `FinishEvent()` sets the event ID from the event number of the transport engine
+  ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L640-L643)).
+- **The MC event header is a `FairMCEventHeader`.** `CloneForWorker()` copies the header of the
+  master into a new `FairMCEventHeader`. A class that you derive from it does not reach the workers.
+  See [Your own MC event header](/concepts/event-headers/#your-own-mc-event-header).
+- **No trajectories in the worker files.** With `SetStoreTraj(kTRUE)`, each worker makes its own
+  `FairTrajFilter`, with the default cuts, in `InitGeometry()`
+  ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L857-L862)).
+  At that time, `InitOnWorker()` has already made the output tree of the worker
+  ([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L936-L941),
+  [code](/source/fairroot/base/sink/FairRootFileSink.cxx/#L238-L249)). Thus the worker files have no
+  branch `GeoTracks`. Cuts that the macro sets on `FairTrajFilter::Instance()` change only the filter
+  of the master.
+- **No links on the workers.** `CloneForWorker()` does not copy the setting of
+  [`SetUseFairLinks()`](/api/FairRun/#SetUseFairLinks). The `FairRootManager` of each worker starts
+  with links off ([code](/source/fairroot/base/steer/FairRootManager.cxx/#L74-L92)). Thus the MC
+  points of the workers get no links to the MC tracks.
+- **One target only.** The copy constructor of `FairPrimaryGenerator` keeps the number of targets
+  but only the first target position
+  ([code](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L125-L144)). Do not use
+  `SetMultTarget()` in MT mode.
+- **No worker hooks for modules.** `FairModule` declares
+  [`BeginWorkerRun()`](/api/FairModule/#BeginWorkerRun) and
+  [`FinishWorkerRun()`](/api/FairModule/#FinishWorkerRun) "used in MT mode only", but FairRoot does
+  not call them. Use `Initialize()` and `FinishRun()` of the detector. The worker calls both.
+
+:::caution[Each worker logs a fatal message]
+The copy constructor of `FairMCApplication` does not set the state of the application, so a worker
+starts in [`kPreInit`](/api/FairMCApplicationState/#kPreInit). Geant4 VMC calls `InitGeometry()`
+also on the workers. In every state except `kInit`, `InitGeometry()` logs the fatal message
+`InitGeometry possible in kInit state only`
+([code](/source/fairroot/base/sim/FairMCApplication.cxx/#L835-L839)).
+
+A fatal message stops the program only after your code called `FairLogger::GetLogger()`, for
+example through `gLogger` (see [What a fatal line does](/tools/logging/#what-a-fatal-line-does)).
+`run_tutorial1.C` does not call it, so its workers log the message and continue. If your macro calls it before `Init()`, each worker throws
+`fair::FatalException` in `InitGeometry()`. Run the test below before you use MT mode for
+production.
+:::
+
+## Test MT mode
+
+The test `ex_sim_tutorial1_Geant4MT` runs Tutorial 1 with Geant4 in MT mode:
+
+<Snippet file="examples/simulation/Tutorial1/macros/CMakeLists.txt" start="add_test(NAME ex_sim_tutorial1_Geant4MT" end="^\)" title="examples/simulation/Tutorial1/macros/CMakeLists.txt" />
+
+<Steps>
+
+1. Build FairRoot with Geant4, Geant4 VMC and the examples. Tutorial 1 needs the library
+   `FairRoot::FastSim` and Boost `program_options`.
+
+2. In the build directory, run the test:
+
+   ```sh
+   ctest -R ex_sim_tutorial1_Geant4MT
+   ```
+
+3. Read the result. The test passes if the output contains `Simulation successful.` The macro
+   prints this line after it checks the events, MC tracks, MC points, branches and leaves in the
+   chain.
+
+</Steps>
+
+The default value of the macro argument `isMT` is `true`. Thus the test `ex_sim_tutorial1_TGeant4`
+also asks for MT mode.
+
+## Related pages
+
+- [Transport engines and their configuration](/simulation/engines/): `g4Config.C`, the YAML
+  files and `SetSimSetup()`.
+- [Write a detector](/simulation/detectors/): `ProcessHits()`, `IsSensitive()` and the MC point
+  collection.
+- [Primary generators](/simulation/generators/): the primary generator and its generators.
+- [The particle stack and MC tracks](/simulation/stack/): `FairStack` and its settings.
+- [Branches, sources and sinks](/concepts/io/): the sink and the output tree.
+- [Output: sinks and persistence](/reconstruction/output/#multithreaded-simulation): the files of
+  the worker threads.
+- [Hooks and their call order](/reference/hooks/#worker-threads-of-geant4): the calls on a worker
+  thread, in order.

@@ -1,0 +1,306 @@
+---
+title: 'Write a reconstruction macro'
+description: 'A reconstruction macro creates FairRunAna, sets the source, the sink and the parameter inputs, adds the tasks, and runs them over the events. What Init() and Run() do.'
+sidebar:
+  order: 1
+code:
+  [
+    fairroot/base/steer/FairRunAna.h,
+    fairroot/base/steer/FairRunAna.cxx,
+    fairroot/base/steer/FairRun.h,
+    fairroot/base/steer/FairRun.cxx,
+    examples/advanced/Tutorial3/macro/run_digi.C,
+    examples/simulation/Tutorial2/macros/create_digis.C,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A reconstruction macro reads the output of an earlier step, runs tasks on each event, and writes the
+results to a new file. The class [`FairRunAna`](/api/FairRunAna/) steers this work: it connects the
+source, the sink and the runtime database, initializes the tasks and runs the event loop.
+Digitization, hit finding, track finding and analysis all use this pattern.
+
+## A complete macro
+
+The macro `run_digi.C` of [Tutorial 3](/examples/tutorial3/) reads the MC points of a simulation
+and makes digis. First it builds the file names. The simulation macro `run_sim.C` of the same
+example wrote the input file and the parameter file:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="// Input file (MC events)" end="outFile = outFile + mcEngine" title="run_digi.C" />
+
+Then it configures the run, initializes it and runs it:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="FairRunAna run{};" end="run.Run();" title="run_digi.C" />
+
+The macro does these steps:
+
+<Steps>
+
+1. It creates the run object. Only one run object can exist at a time. If a run exists already,
+   the constructor of `FairRun` calls `Fatal()` ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L58)).
+2. It sets the source with [`SetSource()`](/api/FairRun/#SetSource). A
+   [`FairFileSource`](/api/FairFileSource/) reads the tree of a ROOT file. The run takes the
+   ownership of the source, so do not delete it.
+3. It sets the sink with [`SetSink()`](/api/FairRun/#SetSink). A
+   [`FairRootFileSink`](/api/FairRootFileSink/) writes the persistent branches to a ROOT file.
+4. It switches on the links between data levels and the run information. See
+   [Other settings of the run](#other-settings-of-the-run).
+5. It gets the runtime database with [`GetRuntimeDb()`](/api/FairRun/#GetRuntimeDb). It gives the
+   parameter file of the simulation to the runtime database as first input.
+6. It adds the task with [`AddTask()`](/api/FairRun/#AddTask-2). The run owns its tasks, as the
+   overload for `std::unique_ptr<FairTask>` shows ([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L59-L60)).
+7. It calls [`Init()`](/api/FairRunAna/#Init). See [What Init() does](#what-init-does).
+8. It calls [`Run()`](/api/FairRunAna/#Run). Without arguments, the run processes all entries of the
+   input. See [Run the events](#run-the-events).
+
+</Steps>
+
+The other lines of the macro set the logger, measure the time and the memory, and print
+`Macro finished successfully.` The tests look for this text.
+
+## Input, output and parameters
+
+### Source and sink
+
+The source gives the input data of each event. [`FairFileSource`](/api/FairFileSource/) reads a
+ROOT file. [`AddFile()`](/api/FairFileSource/#AddFile) adds files with the same tree to a chain, and
+[`AddFriend()`](/api/FairFileSource/#AddFriend) adds files with other branches of the same events.
+Other sources mix events, see [Input sources, friends and event mixing](/reconstruction/sources/).
+
+The sink takes the branches that the tasks register as persistent. The output file of a step holds
+these branches and the event header. Without a sink, `Init()` logs
+`The output sink is not set. No branches will be stored.`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L138-L146)). See
+[Output: sinks and persistence](/reconstruction/output/).
+
+### Parameter inputs
+
+The tasks get their parameters from the runtime database
+([`FairRuntimeDb`](/api/FairRuntimeDb/)). The runtime database reads them from one or two inputs.
+`create_digis.C` of [Tutorial 2](/examples/tutorial2/) uses the ROOT parameter file of the
+simulation as first input, and an ASCII file as second input:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start="FairRuntimeDb* rtdb = fRun->GetRuntimeDb();" end="rtdb->setSecondInput(parInput2);" title="create_digis.C" />
+
+- The ROOT file holds the parameter containers that the simulation wrote, for example the geometry.
+- The ASCII file `tutdet.digi.par` holds the container `FairTutorialDet2DigiPar` for the detector
+  response. The simulation does not write this container.
+- A container gets its values from the first input. Only if the first input does not have the
+  container, it uses the second input
+  ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L55-L76)). To replace a container of
+  the ROOT file with the values of an ASCII file, make the ASCII file the first input.
+- [`FairParRootFileIo::open()`](/api/FairParRootFileIo/#open) uses the ROOT mode `READ` by default.
+  `create_digis.C` uses `UPDATE`, because it writes a container into this file after `Init()`.
+- [`FairParAsciiFileIo::open()`](/api/FairParAsciiFileIo/#open) accepts the modes `in` and `out`,
+  and calls `Fatal()` if it cannot open the file.
+
+The format of the ASCII file is in [ASCII parameter file format](/reference/par-format/). How the
+containers get their values is in [Parameters and the runtime database](/concepts/parameters/).
+
+## What Init() does
+
+[`FairRunAna::Init()`](/api/FairRunAna/#Init) prepares the run before the first event. It does
+these steps in this order ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L252)):
+
+1. If `Init()` ran before, it stops with the log line `Error Init is already called before!`.
+2. It initializes the source and the sink. A `FairFileSource` builds its chain of input files and
+   reads the list of input branches.
+3. It reads the geometry from the file of `SetGeomFile()`. Without this file, it requests the
+   container `FairGeoParSet`, which holds the geometry of the simulation.
+4. It sets the run ID and calls `SetParContainers()` of all tasks. With an input file and the
+   container `FairBaseParSet`, the run ID comes from the first entry of the input. Otherwise,
+   `FairRunIdGenerator` makes a new run ID ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L181-L213)).
+5. It initializes all parameter containers for this run ID. This includes the containers that the
+   tasks requested in `SetParContainers()`.
+6. It creates the magnetic field with the field factory, if you did not call
+   [`SetField()`](/api/FairRunAna/#SetField).
+7. It aligns the geometry with the alignment matrices, if you added some.
+8. It calls `Init()` of each task, in the order of `AddTask()`. The subtasks of a task come right
+   after it.
+9. It writes the folder structure, the branch list and the file header to the output.
+
+Thus a task requests its parameter containers in `SetParContainers()`, and reads their values in
+`Init()` or later. In `SetParContainers()`, a new container is still empty.
+
+The return value of `Init()` of a task decides what happens to the task
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)):
+
+| Return value | Effect |
+| --- | --- |
+| `kSUCCESS` | The task is active. |
+| `kERROR` | The task becomes inactive. The run does not call `Exec()` and `Finish()` of this task. Its subtasks still get `Init()`, but no `Exec()` and no `Finish()`. |
+| `kFATAL` | The task logs `Initialization of Task <name> failed fatally` with the severity `fatal`. This stops the run only if the macro called `FairLogger::GetLogger()` before, as `run_digi.C` does. Otherwise the task stays active. |
+
+A task that does not find its input branch usually returns `kERROR`, and the run continues without
+it. Check the log after `Init()`. For the hooks of a task and the return values, see
+[Tasks](/concepts/tasks/#return-values-of-init-and-reinit). What a `fatal` line does is in
+[Logging](/tools/logging/#what-a-fatal-line-does).
+
+## Run the events
+
+[`Run(NStart, NStop)`](/api/FairRunAna/#Run) is the event loop. The arguments select the entries of
+the input. With a `FairFileSource`, the calls process these entries
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L269-L296),
+[FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L572-L582)):
+
+| Call | Entries | Notes |
+| --- | --- | --- |
+| `Run()` | All entries | The same as `Run(0, 0)`. Thus `Run(0)` also processes all entries. |
+| `Run(n)` | 0 to n−1 | If the input has fewer entries, the run processes all entries. |
+| `Run(a, b)` | a to b−1 | Entry b is not included. If the input ends before b, the loop stops there with a warning. |
+| `Run(a, -1)` | a to the last entry | The loop runs until the source cannot read the next entry. |
+
+For each entry, the run does these steps:
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="for (int i = Ev_start; i < Ev_end || MaxAllowed == -1; i++)" title="FairRunAna::Run()" />
+
+1. It checks for Ctrl-C (`SIGINT`). After Ctrl-C, the loop ends with
+   `FairRunAna::Run() Event loop was interrupted by the user!`.
+2. It reads the entry. If the source cannot read it, the loop ends with
+   `FairRunAna::Run() fRootManager->ReadEvent(<i>) returned <n>. Breaking the event loop`.
+3. It fills the event header and checks the run ID. If the run ID changes, the runtime database
+   initializes the containers for the new run ID, and the run calls `ReInit()` of the tasks
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L568-L584)).
+4. It calls `Exec()` of each active task, in the order of `AddTask()`. A subtask runs after the
+   task that holds it.
+5. It writes the event to the output tree. A task can stop this for the current event with
+   `FairRun::Instance()->MarkFill(kFALSE)` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L617-L624)).
+6. It calls `FinishEvent()` of the tasks.
+
+After the loop, also after Ctrl-C, the run calls `Finish()` of each task and writes the output
+tree ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L339-L345)).
+
+### Other ways to run
+
+| Function | What it does |
+| --- | --- |
+| [`RunSingleEntry(i)`](/api/FairRunAna/#RunSingleEntry) | Reads entry i and calls `Exec()` and `Finish()` of the tasks. Then it writes the output. It does not call `FinishEvent()`. The event display uses it to show one event. |
+| [`Run(Long64_t)`](/api/FairRunAna/#Run-3) | Deprecated. It calls `RunSingleEntry()`. |
+| [`Run(Double_t delta_t)`](/api/FairRunAna/#Run-2) | Meant for time slices. In the current code, [`FairRootManager::ReadNextEvent()`](/api/FairRootManager/#ReadNextEvent) always returns `false` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L479-L484)). Thus the loop processes no event. The call only calls `Finish()` and writes the output. |
+| [`RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps), then `Run()` | `Run()` reads the data in time-based mode and ignores its arguments. Call `RunWithTimeStamps()` before `Init()`. See [Time-based simulation and reconstruction](/reconstruction/time-based/). |
+| [`TerminateRun()`](/api/FairRunAna/#TerminateRun) | Calls `Finish()` of the tasks, writes the output and closes the sink. The FairMQ sampler of Tutorial 3 calls it at the end. Before, it processed the entries one by one with [`RunMQ()`](/api/FairRunAna/#RunMQ) and sent them. Do not call it after `Run()`, see [When the run calls the sink](/reconstruction/output/#when-the-run-calls-the-sink). |
+
+Without a source, `Run(a, b)` calls [`DummyRun(a, b)`](/api/FairRunAna/#DummyRun), which calls
+`Exec()` of the tasks b − a times without input data ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L536-L546)).
+Thus without a source, `Run(n)` calls no `Exec()`, because the second argument is 0.
+
+:::caution[The type of the argument selects the overload]
+`Run(10)` processes 10 entries. A `Long64_t` argument selects the deprecated `Run(Long64_t)`, which
+processes one entry. A `double` argument, for example `Run(10.)`, selects `Run(Double_t)`, which
+processes no entry. Give `Int_t` arguments, or call `RunSingleEntry()` for one entry.
+:::
+
+## Other settings of the run
+
+Call these functions before `Init()`, except `MarkFill()`:
+
+| Call | Effect |
+| --- | --- |
+| [`SetUseFairLinks(kTRUE)`](/api/FairRun/#SetUseFairLinks) | Data objects keep the links that tasks add with `AddLink()`. Without this call, `AddLink()` stores nothing. See [Links between data levels](/concepts/links/). |
+| [`SetGenerateRunInfo(kTRUE)`](/api/FairRun/#SetGenerateRunInfo) | The run stores the time and the memory after each event. At the end, it writes histograms to a separate file with the prefix `FairRunInfo_` ([FairRunInfo.cxx](/source/fairroot/base/event/FairRunInfo.cxx/#L150-L194)). |
+| [`SetField(field)`](/api/FairRunAna/#SetField) | The run uses this field. Without it, `Init()` asks the field factory, if there is one. See [Magnetic fields](/simulation/fields/). |
+| [`SetGeomFile(name)`](/api/FairRunAna/#SetGeomFile) | The run reads the geometry from this ROOT file. After `Init()`, the call stops the macro. |
+| [`SetContainerStatic(kTRUE)`](/api/FairRunAna/#SetContainerStatic) | The run does not initialize the parameters again when the run ID changes, and does not call `ReInit()`. |
+| [`SetEventHeaderPersistence(kFALSE)`](/api/FairRunAna/#SetEventHeaderPersistence) | The run does not write the event header to the output. By default it writes the header, if there is a sink. |
+| [`MarkFill(kFALSE)`](/api/FairRun/#MarkFill) | Call it from a task in `Exec()`. The run does not write the current event. For the next event, the default applies again. |
+
+`run_digi.C` also calls `FairLinkManager::Instance()->AddIncludeType(0)`. The link manager then
+keeps only the links to the branch with the ID 0. In the input of Tutorial 3, this is `GeoTracks`,
+see [From MC points to digis](/reconstruction/digitization/).
+
+## Chain several steps
+
+### One macro for each step
+
+Tutorial 3 splits the work into three macros. Each macro reads the output file of the step before:
+
+| Macro | Source | Output | Parameter file |
+| --- | --- | --- | --- |
+| `run_sim.C` | Primary generator | `data/testrun_<engine>.root` | Writes `data/testparams_<engine>.root` |
+| `run_digi.C` | `data/testrun_<engine>.root` | `data/testdigi_<engine>.root` | Reads `data/testparams_<engine>.root` |
+| `run_reco.C` | `data/testdigi_<engine>.root` | `data/testreco_<engine>.root` | Reads `data/testparams_<engine>.root` |
+
+All steps use the parameter file of the simulation. The reconstruction task reads only the digis,
+so `run_reco.C` needs only the digi file as source. If a step needs branches of several files, add
+the other files with `AddFriend()`. The event display macro of the
+[propagator example](/examples/propagator/) gets the hits and the tracks from two friend files.
+
+CTest runs the steps in this order with fixtures. Each test requires the fixture of the step before:
+
+<Snippet file="examples/advanced/Tutorial3/macro/CMakeLists.txt" start="add_test(NAME ex_tutorial3_digi_" end="/^\s*\)$/" />
+
+:::caution[Give the same transport engine to all macros]
+The defaults of the Tutorial 3 macros differ. `run_sim.C` and `run_digi.C` use `TGeant4`, but
+`run_reco.C` uses `TGeant3`. Without an argument, `run_reco.C` thus looks for
+`data/testdigi_TGeant3.root`.
+:::
+
+### Several tasks in one macro
+
+One run can also do several steps. `run_digi_reco_one.C` adds the digitizer and the hit producer to
+the same run:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi_reco_one.C" start="FairTestDetectorDigiTask* digiTask = new FairTestDetectorDigiTask();" end="fRun->AddTask(hitProducer);" title="run_digi_reco_one.C" />
+
+The digitizer registers the branch `FairTestDetectorDigi`. The hit producer gets this branch in its
+`Init()` with `FairRootManager::GetObject()`, from memory. The order of `AddTask()` is important:
+the run calls `Init()` and `Exec()` in this order, so the producer of a branch must come first. This
+macro reads the files of `run_sim_sep.C`, and the tests do not run it.
+
+## Run the macro
+
+The tests run each macro with a script that CMake generates in the build folder, for example
+`examples/advanced/Tutorial3/macro/run_digi.sh`. The script sets the environment, changes to its
+folder and calls ROOT ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). CMake also makes
+the subfolder `data/` there. To run the chain by hand, do the same steps in your build folder `<build>`:
+
+```sh
+source <build>/config.sh
+cd <build>/examples/advanced/Tutorial3/macro
+root -q -b "$VMCWORKDIR/advanced/Tutorial3/macro/run_sim.C(100,\"TGeant4\")"
+root -q -b "$VMCWORKDIR/advanced/Tutorial3/macro/run_digi.C(\"TGeant4\")"
+root -q -b "$VMCWORKDIR/advanced/Tutorial3/macro/run_reco.C(\"TGeant4\")"
+```
+
+In the build folder, `config.sh` sets `VMCWORKDIR` to the folder `examples` of the source tree. See
+[Environment variables](/reference/environment/).
+
+The macros of Tutorial 2 include their headers in a block `#if !defined(__CLING__) || defined(__ROOTCLING__)`.
+Thus CMake can compile them as C++ to check them ([CMakeLists.txt](/repo/examples/simulation/Tutorial2/macros/CMakeLists.txt)).
+Use this pattern for your macros: the compiler then finds the errors before you run the macro.
+
+:::note[FairRunAnaProof]
+[`FairRunAnaProof`](/api/FairRunAnaProof/) ran the tasks on PROOF workers. It is deprecated. CMake
+builds it only with `-DBUILD_PROOF_SUPPORT=ON`. With ROOT 6.32 or later, this option stops CMake with
+an error, because ROOT removed PROOF ([CMakeLists.txt](/repo/CMakeLists.txt)).
+:::
+
+## Problems that can occur
+
+- **`Error Init is already called before!`:** the macro calls `Init()` twice. Call it once.
+- **`Container <name> not created!`:** no container factory knows this name. Make sure that the
+  library of your detector is loaded, because its container factory registers the containers.
+- **`Branch: <name> not found in Tree.`:** a task asked for a branch that the source does not have.
+  The task then usually returns `kERROR` and stays inactive. Check the branch name, the input file
+  and the friend files.
+- **`The names for the object name <name> and the folder name <name> are equal.`:** a task gives
+  `Register()` the same text for the branch and the folder. This error has the severity `fatal`
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L158-L162)). Change the folder name.
+- **`The sink does not exist to store persistent branches`:** the run has no sink. This is a warning
+  for `Register()`. For a persistent branch of `RegisterAny()`, it is fatal
+  ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L452-L466)).
+- **The run processes one entry or no entry:** check the type of the argument of `Run()`, see the
+  caution in [Other ways to run](#other-ways-to-run).
+
+## Related pages
+
+- [Runs](/concepts/runs/): the run classes and what they have in common.
+- [Tasks](/concepts/tasks/): the hooks of a task and their order.
+- [Hooks and their call order](/reference/hooks/): each call of `Init()` and `Run()`, step by step.
+- [Input sources, friends and event mixing](/reconstruction/sources/): file sources, chains, friends and mixed sources.
+- [Output: sinks and persistence](/reconstruction/output/): what goes into the output file.
+- [From MC points to digis](/reconstruction/digitization/): the tasks of a digitization macro.
+- [Parameters and the runtime database](/concepts/parameters/): containers, inputs and versions.
+- [Tutorial 3](/examples/tutorial3/): the example with simulation, digitization and reconstruction.

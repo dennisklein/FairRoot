@@ -1,0 +1,291 @@
+---
+title: 'Write a simulation macro'
+description: 'The steps of a simulation macro in their order: the environment, the run and its sink, materials, modules, field, primary generator, options, Init(), the parameter output and Run().'
+sidebar:
+  order: 2
+code:
+  [
+    examples/simulation/Tutorial1/macros/run_tutorial1.C,
+    templates/project_root_containers/macro/run_sim.C,
+    examples/advanced/Tutorial3/macro/run_sim.C,
+    fairroot/base/steer/FairRunSim.h,
+    fairroot/base/steer/FairRunSim.cxx,
+    fairroot/base/steer/FairRun.cxx,
+    fairroot/base/sim/FairModule.cxx,
+    fairroot/base/sim/FairGenericVMCConfig.cxx,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+A simulation macro is a ROOT macro that sets up a `FairRunSim` and runs it. The order of the calls is
+important. Some setters read environment variables when you call them, and `Init()` reads all
+settings of the run. This page goes through the macro of Tutorial 1 step by step, and gives the other
+options of each step.
+
+## The steps
+
+| Step | Calls | When |
+| --- | --- | --- |
+| [Set the environment](#set-the-environment) | `gSystem->Setenv()` for `GEOMPATH` and `CONFIG_DIR` | First |
+| [Create the run](#create-the-run) | `FairRunSim`, `SetName()`, `SetSimulationConfig()`, `SetIsMT()`, `SetSink()` | Before the other steps |
+| [Add the materials](#add-the-materials) | `SetMaterials()` | Before `Init()` |
+| [Add the modules and detectors](#add-the-modules-and-detectors) | `SetGeometryFileName()`, `AddModule()` | Before `Init()`, the cave first |
+| [Add a magnetic field](#add-a-magnetic-field) | `SetField()` | Before `Init()` |
+| [Set the primary generator](#set-the-primary-generator) | `SetGenerator()` | Before `Init()` |
+| [Other options](#other-options) | `SetStoreTraj()`, `SetUserConfig()`, `SetUserCuts()`, `SetRadLenRegister()` and more | Before `Init()` |
+| [Set the random seed](#set-the-random-seed) | `gRandom->SetSeed()` | Before `Init()` |
+| [Initialize the run](#initialize-the-run) | `Init()` | After all settings |
+| [Save the parameters](#save-the-parameters) | `FairParRootFileIo`, `setOutput()`, `saveOutput()` | After `Init()` |
+| [Run the events](#run-the-events) | `Run()`, `CreateGeometryFile()` | After `Init()` |
+
+The complete macro is
+[`run_tutorial1.C`](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/). The project
+template has a shorter macro with a magnetic field,
+[`run_sim.C`](/source/templates/project_root_containers/macro/run_sim.C/). To run the macro of
+Tutorial 1, see [Your first simulation](/start/first-simulation/).
+
+## Set the environment
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string dir = getenv("VMCWORKDIR");' end='gSystem->Setenv("CONFIG_DIR"' title="run_tutorial1.C" />
+
+| Variable | Read by | Read when | Without the variable |
+| --- | --- | --- | --- |
+| `VMCWORKDIR` | The macro, and the default paths of FairRoot | When the code needs a default path | FairRoot cannot make its default paths. |
+| `GEOMPATH` | [`SetMaterials()`](/api/FairRunSim/#SetMaterials), [`SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) | When you call them | `$VMCWORKDIR/geometry/` |
+| `CONFIG_DIR` | The engine configuration, the cuts macro and the decay macros | In `Init()` | `$VMCWORKDIR/gconfig/` |
+
+Usually `config.sh` sets `VMCWORKDIR`. The FairRoot examples keep their files in
+`examples/common/geometry/` and `examples/common/gconfig/`, so each macro sets `GEOMPATH` and
+`CONFIG_DIR` itself. A project from the project template has the folders `geometry/` and `gconfig/`
+in its source directory. Its `config.sh` sets `VMCWORKDIR` to this directory
+([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L59)), so its macro sets no
+variable.
+
+The folder of `CONFIG_DIR` holds the configuration macros. `g4Config.C` or `g3Config.C` makes the
+transport engine and the stack, and `SetCuts.C` sets the processes and the cuts. See
+[Transport engines and their configuration](/simulation/engines/) and
+[Environment variables](/reference/environment/).
+
+## Create the run
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// -----   Create simulation run" end="FairRuntimeDb* rtdb = run->GetRuntimeDb();" title="run_tutorial1.C" />
+
+- [`FairRunSim`](/api/FairRunSim/) is the [run](/concepts/runs/). Its constructor stops with a fatal
+  error if another run exists already ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L58)).
+  Tutorial 1 keeps the run in a `std::unique_ptr`, so the run is deleted at the end of the macro.
+  The project template makes the run with `new` and does not delete it.
+- `SetName()`, a function of the ROOT class `TNamed`, gives the name of the transport engine:
+  `"TGeant4"` or `"TGeant3"`. Without a name, the configuration makes no transport engine, and the
+  run fails, see [Select the transport engine](/simulation/engines/#select-the-transport-engine).
+- [`SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig) is optional. Without it, `Init()`
+  makes a `FairGenericVMCConfig`, which loads the configuration macros
+  ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L305-L308)). Tutorial 1 makes the
+  object itself to call [`UsePostInitConfig()`](/api/FairGenericVMCConfig/#UsePostInitConfig). For
+  the YAML configuration, give a class derived from [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/).
+- [`SetIsMT()`](/api/FairRunSim/#SetIsMT) switches on the worker threads of Geant4. See
+  [Multithreaded Geant4](/simulation/geant4-mt/).
+- [`SetSink()`](/api/FairRun/#SetSink) gives the output to the run. `FairRootFileSink` opens its file
+  with the option `recreate` in its constructor. `SetSink()` also takes a raw pointer, as in the
+  template, and the run owns that sink too
+  ([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L89-L90)).
+- [`GetRuntimeDb()`](/api/FairRun/#GetRuntimeDb) returns the runtime database. The macro uses it
+  after `Init()` for the parameter output.
+
+Without a sink, `Init()` logs `The output sink is not set. No branches will be stored.`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L138-L146)).
+
+## Add the materials
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// -----   Create media" end='run->SetMaterials("media.geo");' title="run_tutorial1.C" />
+
+[`SetMaterials()`](/api/FairRunSim/#SetMaterials) makes the path of the media file. If `GEOMPATH` is
+set, the path is `$GEOMPATH/<name>`, else `$VMCWORKDIR/geometry/<name>`. The function logs
+`Media file used: <path>`, but it does not check that the file exists
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L344-L361)). `Init()` reads the file.
+If the file does not exist, `Init()` stops with the fatal error `Failed to open file <path>`
+([FairGeoAsciiIo.cxx](/source/fairroot/geobase/FairGeoAsciiIo.cxx/#L75-L78)). Each medium that a
+geometry file names must be in the media file. For the file format, see
+[Geometry and media file format](/reference/geo-format/).
+
+## Add the modules and detectors
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='FairModule* cave = new FairCave("CAVE");' end="run->AddModule(tutdet);" title="run_tutorial1.C" />
+
+A module ([`FairModule`](/api/FairModule/)) is a passive part of the setup, for example the cave, a
+magnet or the beam pipe. A detector ([`FairDetector`](/api/FairDetector/)) is a module with sensitive
+volumes. The second argument of the detector constructor makes the detector active. A detector
+registers the sensitive volumes of an ASCII geometry file only if it is active
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)). Also, the MC application
+calls `Initialize()` and `Register()` only for an active detector
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L957-L969)).
+
+[`SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) looks for the file when you call it
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L174-L215)):
+
+1. A name that starts with `/` is an absolute path. FairRoot looks only there.
+2. Else, if `GEOMPATH` is set, FairRoot tries `$GEOMPATH/<name>`.
+3. Then it tries `$VMCWORKDIR/geometry/<name>`.
+4. If it finds no file, it logs a fatal error. A fatal error stops the program only if FairLogger
+   has a fatal handler, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+[`AddModule()`](/api/FairRunSim/#AddModule) gives each module an ID in the order of the calls
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L127-L133)). The MC application builds
+the modules in the same order
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774)). Add the cave
+first, because the other modules put their volumes into it. Make the modules with `new`, and do not
+delete them: the run deletes them.
+
+A module can also make its volumes in code. The project template reads the cave from a file, and its
+magnet, pipe and detector make their volumes in code:
+
+<Snippet file="templates/project_root_containers/macro/run_sim.C" start="// -----   Create geometry" end="run->AddModule(NewDet);" title="templates/project_root_containers/macro/run_sim.C" />
+
+See [Geometry and materials](/simulation/geometry/) and [Write a detector](/simulation/detectors/).
+
+## Add a magnetic field
+
+Tutorial 1 has no magnetic field. Tutorial 3 adds a constant field:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start="FairConstField *fMagField = new FairConstField();" end="run.SetField(fMagField);" title="examples/advanced/Tutorial3/macro/run_sim.C" />
+
+[`SetField()`](/api/FairRunSim/#SetField) only keeps the pointer. `Init()` calls `Init()` of the
+field, gives the field to the MC application, and calls `FillParContainer()` of the field
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L231-L235)). The run does not delete
+the field. `FairConstField` is a class of the examples, in the library `ExPassive`. It takes the
+field values in kG ([FairConstField.h](/source/examples/common/passive/FairConstField.h/#L63-L66)).
+See [Magnetic fields](/simulation/fields/).
+
+## Set the primary generator
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="FairPrimaryGenerator* primGen = new FairPrimaryGenerator();" end="run->SetGenerator(primGen);" title="run_tutorial1.C" />
+
+[`FairPrimaryGenerator`](/api/FairPrimaryGenerator/) holds a list of generators.
+[`AddGenerator()`](/api/FairPrimaryGenerator/#AddGenerator) adds one, and in each event the primary
+generator calls all of them. The run deletes the primary generator, and the primary generator
+deletes its generators ([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L169-L175)).
+
+Always set a primary generator. Without it, `Init()` gives no error. The MC application does not
+register the stack, so the output has no branch `MCTrack`. The log shows only the warning
+`Stack is not registered`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L945-L952)). The MC
+application also gives no primary particles to the transport engine
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L982-L994)).
+For the generators and their options, see [Primary generators](/simulation/generators/).
+
+## Other options
+
+Call these setters of the run before `Init()`. `Init()` gives the settings to the MC application and
+to the configuration of the transport engine
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L205-L235)).
+
+| Setter | What it does | Default |
+| --- | --- | --- |
+| [`SetStoreTraj()`](/api/FairRunSim/#SetStoreTraj) | Stores the trajectories of the particles in the branch `GeoTracks`, for the event display ([FairTrajFilter.h](/source/fairroot/base/steer/FairTrajFilter.h/#L119)). The template warns that the file gets large. | Off |
+| [`SetUserConfig()`](/api/FairRunSim/#SetUserConfig) | Another configuration macro or YAML file instead of `g4Config.C` or `g3Config.C` | Empty: the default file |
+| [`SetUserCuts()`](/api/FairRunSim/#SetUserCuts) | Another cuts macro | `SetCuts.C` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L68)) |
+| [`SetPythiaDecayer()`](/api/FairRunSim/#SetPythiaDecayer-2) | Pythia as the external decayer, with a decay macro | Off |
+| [`SetUserDecay()`](/api/FairRunSim/#SetUserDecay) | A macro with your own decay modes | Off |
+| [`SetRadLenRegister()`](/api/FairRunSim/#SetRadLenRegister) | Records the radiation length in the branch `RadLen` | Off |
+| [`SetRadMapRegister()`](/api/FairRunSim/#SetRadMapRegister) | Records a radiation map in the branch `RadMap` | Off |
+| [`SetRadGridRegister()`](/api/FairRunSim/#SetRadGridRegister), [`AddMesh()`](/api/FairRunSim/#AddMesh) | Fills dose and fluence histograms on grids, in a separate file | Off |
+| [`SetGenerateRunInfo()`](/api/FairRun/#SetGenerateRunInfo) | Measures the time and the memory of each event, not in MT mode ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L687-L689)) | Off |
+| [`SetRunId()`](/api/FairRun/#SetRunId) | A fixed run ID | `Init()` makes a run ID from the time ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L179-L183)). |
+| [`SetBeamMom()`](/api/FairRunSim/#SetBeamMom) | The beam momentum in GeV/c, stored in `FairBaseParSet` | 0 |
+| [`SetMCEventHeader()`](/api/FairRunSim/#SetMCEventHeader) | Your own class of the MC event header | `FairMCEventHeader` |
+
+For the decays, see [Transport engines and their configuration](/simulation/engines/). For the
+radiation tools, see [Radiation length and dose maps](/simulation/radiation/). For the run info, see
+[Measure time and memory](/tools/monitor/). For the run ID and the MC event header, see
+[Event headers and run IDs](/concepts/event-headers/).
+
+## Set the random seed
+
+The generators of FairRoot with random distributions, for example `FairBoxGenerator`, and the vertex
+smearing of `FairPrimaryGenerator` take their random numbers from `gRandom`. `Init()` stores the seed
+of `gRandom` in the parameter container `FairBaseParSet`
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L244-L249)). Set the seed before
+`Init()`. The macro of the Rutherford experiment calls `SetSeed()`:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start="// Set the random seed" end="gRandom->SetSeed(98989);" title="run_rutherford.C" />
+
+Tutorial 1 replaces `gRandom` with a `TRandom3` of the macro:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="UInt_t randomSeed = 123456;" end="run->Init();" title="run_tutorial1.C" />
+
+:::caution
+`random` is a local object. When the macro returns, the destructor of `random` sets `gRandom` to a
+null pointer. The next user of `gRandom` in the same ROOT session fails, for example `Init()` of a
+second run ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L246)). Use
+`gRandom->SetSeed()`.
+:::
+
+## Initialize the run
+
+[`Init()`](/api/FairRunSim/#Init) uses all settings of the run
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L154-L258)). It initializes the sink,
+reads the media file and makes the MC application. If you set no run ID, it makes one. It fills the
+parameter containers `FairBaseParSet` and `FairGeoParSet`. Then the configuration makes the transport
+engine and the stack. The modules build the geometry, and the MC application registers the branches.
+At the end, `Init()` runs the post-init configuration and writes the file header to the sink.
+
+[What Init() does](/simulation/overview/#what-init-does) gives all steps and the callbacks of the
+transport engine.
+
+## Save the parameters
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="Bool_t kParameterMerged = kTRUE;" end="rtdb->print();" title="run_tutorial1.C" />
+
+Write the parameters after `Init()`, because `Init()` fills the parameter containers.
+
+- [`FairParRootFileIo(kTRUE)`](/api/FairParRootFileIo/#FairParRootFileIo-2) merges. If the file
+  exists, `open()` opens it with `UPDATE`, else with `RECREATE`
+  ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L122-L134)).
+- Without merging, the default option of [`open()`](/api/FairParRootFileIo/#open) is `READ`. Then
+  give the option yourself, for example `parOut->open(parFile.Data(), "RECREATE")`.
+- [`setOutput()`](/api/FairRuntimeDb/#setOutput) connects the file to the runtime database.
+- [`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes the containers and their versions
+  ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L818-L830)).
+- [`print()`](/api/FairRuntimeDb/#print) lists the containers in the log.
+
+See [Parameters and the runtime database](/concepts/parameters/).
+
+## Run the events
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="run->Run(nEvents);" end="run->CreateGeometryFile(geoFile.c_str());" title="run_tutorial1.C" />
+
+[`Run(nEvents)`](/api/FairRunSim/#Run) transports the events. Then it keeps the multithreaded mode
+of the transport engine for [`WasMT()`](/api/FairRunSim/#WasMT), and closes the sink
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L322-L329)). The second argument of
+`Run()` has no effect. [`CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) writes
+`gGeoManager` to a file of its own, which you can read without FairRoot
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L365-L376)).
+
+## Problems that can occur
+
+Some messages in this table are `fatal` lines of FairLogger. A `fatal` line stops the program only
+if your code called `FairLogger::GetLogger()` before, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+| Message or symptom | Cause |
+| --- | --- |
+| `<module>: geometry file <name> not found in standard path` | `SetGeometryFileName()` found the file neither in `GEOMPATH` nor in `$VMCWORKDIR/geometry/`. Set `GEOMPATH` before the call. |
+| `<module>: geometry file <name> not found in absolut path!` | The absolute path does not exist. |
+| `Failed to open file <path>` | The media file does not exist. `Init()` stops with this fatal error ([FairGeoAsciiIo.cxx](/source/fairroot/geobase/FairGeoAsciiIo.cxx/#L75-L78)). Look at the line `Media file used:` in the log. With `GEOMPATH` set, the media file must be in `GEOMPATH`. |
+| `Medium <name> not found in list of media` | The media file does not have this medium, or the macro does not call `SetMaterials()` ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L271-L275)). The name of the media file must end with `.geo`, `.dat` or `.setup`, else the run reads no media ([FairGeoInterface.cxx](/source/fairroot/geobase/FairGeoInterface.cxx/#L405-L426)). |
+| `Singleton instance already exists.` | A second run, for example a second `FairRunSim`, while the first exists |
+| `No MC engine defined` | No `SetName()`, or a name that the configuration does not know |
+| `The output sink is not set. No branches will be stored.` | No `SetSink()` |
+| `Error opening file <name>` | The sink cannot make the output file, for example in a folder that does not exist ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L60-L69)). |
+| `run_tutorial1.C` fails at its first line | `VMCWORKDIR` is not set. `getenv()` returns a null pointer, and the macro makes a `std::string` from it. Source `config.sh` first. |
+
+## Related pages
+
+- [How a simulation runs](/simulation/overview/): what `Init()` and `Run()` do in detail.
+- [Transport engines and their configuration](/simulation/engines/): the configuration macros, the
+  YAML files and the cuts.
+- [Geometry and materials](/simulation/geometry/): the geometry files and the sensitive volumes.
+- [Primary generators](/simulation/generators/): the generators that you add to the primary
+  generator.
+- [Environment variables](/reference/environment/): `VMCWORKDIR`, `GEOMPATH` and `CONFIG_DIR`.
+- [Your first simulation](/start/first-simulation/): run the macro of Tutorial 1.

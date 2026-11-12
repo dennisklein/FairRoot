@@ -1,0 +1,1082 @@
+---
+// The two frames of the track parameters at one point of a track: SC (FairTrackParH) and SD (FairTrackParP).
+// A toggle turns the frame axes from one frame into the other. In SC, the axes start as the MARS axes and turn by
+// φ about z, then about y⊥ to lift x by λ. The dashed staircase shows the coordinates of the point in the frame.
+//
+// Facts and where they come from (paths relative to the FairRoot repository):
+// - FairTrackParH keeps the SC variables (q/p, lambda, phi, y_perp, z_perp) (fairroot/trackbase/FairTrackParH.h:13).
+//   The covariance diagonal is in this order: [0] q/p, [5] lambda, [9] phi, [12] y_perp, [14] z_perp
+//   (FairTrackParH.cxx:113-118). The comment in FairTrackParH.h:14 says 1/p, but the class stores q/p:
+//   fQp = qp (FairTrackParH.cxx:86); only GetCovQ() gives the matrix for 1/p (FairTrackParH.cxx:725-740).
+// - lambda = asin(pz/p) is the dip angle, phi = atan2(py, px) the azimuth (FairTrackParH.cxx:184-188,
+//   FairTrackParH.h:127-130), and px = p cos(lambda) cos(phi), py = p cos(lambda) sin(phi), pz = p sin(lambda)
+//   (FairTrackParH.cxx:99-101). Angles from TMath::ASin() and ATan2() are in rad.
+// - The SC axes: x = (cos l cos f, cos l sin f, sin l), which is p/|p|; y_perp = (-sin f, cos f, 0), in the x-y plane
+//   of MARS; z_perp = (-sin l cos f, -sin l sin f, cos l) = x × y_perp (FairTrackParH.cxx:199-201 and 109-111;
+//   FairGeaneUtil.cxx:391-393 and 419-425; "momentum along x axis (GEANE convention)", FairGeaneUtil.cxx:1074-1075).
+//   The x axis is MARS x turned by phi about z and then by -lambda about y_perp (right-hand rule): the second turn
+//   lifts x by lambda out of the x-y plane.
+// - SC has no origin of its own: FairTrackParH turns the MARS position and does not shift it
+//   (fX_sc = r·x, fY_sc = r·y_perp, fZ_sc = r·z_perp with r from the MARS origin, FairTrackParH.cxx:199-201).
+// - Getters: GetQp() (FairTrackPar.h:62), GetLambda(), GetPhi() (FairTrackParH.h:62-63), GetY_sc(), GetZ_sc()
+//   (FairTrackParH.h:85-87). Units: position in cm (FairTrackPar.h:110), q/p in 1/GeV (FairTrackPar.h:122).
+// - FairTrackParP keeps the SD variables (q/p, v', w', v, w) (FairTrackParP.h:13). The covariance diagonal:
+//   [0] q/p, [5] v', [9] w', [12] v, [14] w (FairTrackParP.cxx:119-123).
+// - The plane: origin o, j the unit vector of the v axis, k the unit vector of the w axis (FairTrackParP.h:37-38,
+//   FairGeaneUtil.cxx:362-363). SetPlane(o, j, k) normalizes j and k and sets i = j × k, normalized
+//   (FairTrackParP.cxx:878-910). (u, v, w) = (i, j, k) · (x - o) (FromMARSToSDCoord(), FairGeaneUtil.cxx:1855-1886).
+// - v' = p_v/p_u and w' = p_w/p_u (FairGeaneUtil.cxx:414-417 and 1439-1441; FairTrackParP.cxx:107-109 builds
+//   p_u = p/sqrt(1 + v'^2 + w'^2), p_v = v' p_u, p_w = w' p_u). So a step of 1 along i goes with v' along j and w' along k.
+// - The SD variables describe a point on the plane: the constructors with SD variables set fU = 0 (FairTrackParP.cxx:73,
+//   114, 187) and so does SetTrackPar() with SD variables (FairTrackParP.cxx:690).
+// - spu = sign[p · (j × k)] (FairGeaneUtil.cxx:368-371, 1489-1491), GetSPU() (FairTrackParP.h:172).
+// - Getters: GetTV(), GetTW(), GetV(), GetW() (FairTrackParP.h:152-155), GetOrigin(), GetIVer(), GetJVer(), GetKVer()
+//   (FairTrackParP.h:165-168).
+// - The morph pairs x with i, y_perp with j and z_perp with k: FromMarsToSC() goes through an SD plane on the SC
+//   transverse plane with j = y_perp and k = z_perp, so i = j × k = x (FairGeaneUtil.cxx:1077-1079, 1133-1141).
+// Example values, not from the code: lambda = 35°, phi = 115°, the point at x = 2, y_perp = 0.8, z_perp = 0.7,
+// the plane (v = 1.45, w = 1), the helix (field along z) and the camera. The diagram does not show the field.
+
+type V = [number, number, number];
+type P2 = [number, number];
+const D = Math.PI / 180;
+const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const mul = (a: V, s: number): V => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a: V, b: V) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: V, b: V): V => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const unit = (a: V): V => mul(a, 1 / Math.hypot(a[0], a[1], a[2]));
+const along = (o: V, ...t: [V, number][]): V => t.reduce((s, [e, k]) => add(s, mul(e, k)), o);
+const r1 = (n: number) => Math.round(n * 10) / 10;
+
+// The direction of the track at the point (example values).
+const LAM = 35 * D;
+const PHI = 115 * D;
+const [cl, sl, cp, sp] = [Math.cos(LAM), Math.sin(LAM), Math.cos(PHI), Math.sin(PHI)];
+const O: V = [0, 0, 0];
+const XA: V = [1, 0, 0];
+const YA: V = [0, 1, 0];
+const ZA: V = [0, 0, 1];
+// The SC axes (FairTrackParH.cxx:199-201).
+const EX: V = [cl * cp, cl * sp, sl];
+const EY: V = [-sp, cp, 0];
+const EZ: V = [-sl * cp, -sl * sp, cl];
+const SH: V = [cp, sp, 0]; // x turned by phi only: the shadow of p in the x-y plane
+const CSC: V = [2, 0.8, 0.7]; // x, y_perp, z_perp of the point
+const PT = along(O, [EX, CSC[0]], [EY, CSC[1]], [EZ, CSC[2]]);
+// The SD plane through the point. j is horizontal, k = i × j, so i = j × k as in SetPlane().
+const EI = unit(along(EX, [EY, -0.55], [EZ, -0.5]));
+const EJ = unit(cross(ZA, EI));
+const EK = cross(EI, EJ);
+const CSD: V = [0, 1.45, 1]; // u = 0: the point is on the plane
+const OSD = along(PT, [EJ, -CSD[1]], [EK, -CSD[2]]);
+const VP = dot(EX, EJ) / dot(EX, EI);
+const WP = dot(EX, EK) / dot(EX, EI);
+
+// Sizes in scene units.
+const LAX = 1; // frame axes
+const LM = [1.5, 1.5, 1.3]; // MARS axes x, y, z (z stays below the track)
+const RPHI = 0.62;
+const RLAM = 0.92;
+const LP = 1 / dot(EX, EI); // momentum arrow, with the component 1 along i
+const LG = LP * dot(EX, EI); // = 1: the steps 1, v', w' end at the tip of p, and the step 1 is as long as i
+
+// A helix with its axis along z through the point, tangent to p (example).
+const KAP = 0.3;
+const helix = (s0: number, s1: number) => {
+  const pts: V[] = [];
+  for (let i = 0; i <= 24; i++) {
+    const s = s0 + ((s1 - s0) * i) / 24;
+    const f = PHI + KAP * s;
+    pts.push(add(PT, [(cl * (Math.sin(f) - sp)) / KAP, (-cl * (Math.cos(f) - cp)) / KAP, sl * s]));
+  }
+  return pts;
+};
+const TRK_BACK = helix(-2.75, 0);
+const TRK_FRONT = helix(0, 1.6);
+const PLANE: V[] = [
+  [-0.45, -0.5],
+  [CSD[1] + 0.6, -0.5],
+  [CSD[1] + 0.6, CSD[2] + 0.6],
+  [-0.45, CSD[2] + 0.6],
+].map(([g, h]) => along(OSD, [EJ, g], [EK, h]));
+const G1 = along(PT, [EI, LG]);
+const G2 = along(G1, [EJ, LG * VP]);
+const G3 = along(G2, [EK, LG * WP]);
+
+// Camera: azimuth 40°, elevation 38°, orthographic.
+const TH = 40 * D;
+const EL = 38 * D;
+const CR: V = [-Math.sin(TH), Math.cos(TH), 0];
+const CU: V = [-Math.sin(EL) * Math.cos(TH), -Math.sin(EL) * Math.sin(TH), Math.cos(EL)];
+const W = 360;
+const M = 16;
+const fitPts: V[] = [
+  ...[XA, YA, ZA].map((e, k) => mul(e, LM[k] * 1.15)),
+  ...[EX, EY, EZ, EI, EJ, EK].map((e) => mul(e, LAX * 1.2)),
+  ...[EI, EJ, EK].map((e) => along(OSD, [e, LAX * 1.2])),
+  ...TRK_BACK,
+  ...TRK_FRONT,
+  ...PLANE,
+  along(PT, [EX, LP * 1.15]),
+  G1,
+  G2,
+];
+const raw = fitPts.map((v) => [dot(v, CR), -dot(v, CU)]);
+const [x0, x1] = [Math.min(...raw.map((p) => p[0])), Math.max(...raw.map((p) => p[0]))];
+const [y0, y1] = [Math.min(...raw.map((p) => p[1])), Math.max(...raw.map((p) => p[1]))];
+const S = (W - 2 * M) / (x1 - x0);
+const H = Math.round(S * (y1 - y0) + 2 * M);
+const C0: P2 = [M - S * x0, M - S * y0];
+const pr = (v: V): P2 => [C0[0] + S * dot(v, CR), C0[1] - S * dot(v, CU)];
+const path = (pts: V[]) => 'M' + pts.map((v) => pr(v).map(r1).join(' ')).join('L');
+
+// The same drawing functions run in the browser for the animation (see the script).
+// A tip label goes past the tip, or to the upper side of the arrow (w = 1) when a leg of the staircase goes on.
+const arrow = (a: V, b: V, w = 0) => {
+  const [ax, ay] = pr(a);
+  const [bx, by] = pr(b);
+  const l = Math.hypot(bx - ax, by - ay) || 1;
+  const [ux, uy] = [(bx - ax) / l, (by - ay) / l];
+  const [hx, hy] = [bx - ux * 9, by - uy * 9];
+  return {
+    x1: r1(ax),
+    y1: r1(ay),
+    x2: r1(hx + ux),
+    y2: r1(hy + uy),
+    d: `M${r1(bx)} ${r1(by)}L${r1(hx - uy * 4)} ${r1(hy + ux * 4)}L${r1(hx + uy * 4)} ${r1(hy - ux * 4)}Z`,
+    tx: r1(bx + ux * (13 - 10 * w) + (ux >= 0 ? uy : -uy) * 12 * w),
+    ty: r1(by + uy * (13 - 10 * w) + (ux >= 0 ? -ux : ux) * 12 * w + 5),
+  };
+};
+const sector = (e1: V, e2: V, r: number, a: number, closed: boolean) => {
+  const n = Math.max(2, Math.ceil(a / (4 * D)));
+  const pts: V[] = [];
+  for (let i = 0; i <= n; i++) pts.push(along(O, [e1, r * Math.cos((a * i) / n)], [e2, r * Math.sin((a * i) / n)]));
+  return closed ? path([O, ...pts]) + 'Z' : path(pts);
+};
+const ptAt = (e1: V, e2: V, r: number, a: number) => pr(along(O, [e1, r * Math.cos(a)], [e2, r * Math.sin(a)])).map(r1);
+// A label beside the middle of the segment a-b, on the side away from the point `away`.
+const beside = (a: V, b: V, away: V, gap = 11): P2 => {
+  const [pa, pb, pw] = [pr(a), pr(b), pr(away)];
+  const m: P2 = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2];
+  const l = Math.hypot(pb[0] - pa[0], pb[1] - pa[1]) || 1;
+  let [nx, ny] = [-(pb[1] - pa[1]) / l, (pb[0] - pa[0]) / l];
+  if (nx * (pw[0] - m[0]) + ny * (pw[1] - m[1]) > 0) [nx, ny] = [-nx, -ny];
+  return [r1(m[0] + nx * gap), r1(m[1] + ny * gap + 4.5)];
+};
+
+const SC_AX = [EX, EY, EZ];
+// The weight w of each axis: 1 when the leg along the axis starts at the origin and is longer than the axis.
+const onLeg = (c: number[], k: number) =>
+  Math.min(1, Math.max(0, (c[k] - 0.85 * LAX) / (0.3 * LAX))) *
+  Math.min(1, Math.max(0, 1 - c.slice(0, k).reduce((s, x) => s + Math.abs(x), 0) / 0.3));
+const AX_SC = SC_AX.map((e, k) => arrow(O, mul(e, LAX), onLeg(CSC, k)));
+const TIPS_SC = ['x', 'y⊥', 'z⊥'];
+const Q1 = mul(EX, CSC[0]);
+const Q2 = along(Q1, [EY, CSC[1]]);
+const LEGS_SC: [V, V][] = [
+  [O, Q1],
+  [Q1, Q2],
+  [Q2, PT],
+];
+const DROP = mul(SH, LAX * cl);
+const MOM = arrow(PT, along(PT, [EX, LP]));
+const [px, py] = pr(PT).map(r1);
+// SD labels (the SD end state only).
+const QV = along(OSD, [EJ, CSD[1]]);
+const LBL_V = beside(OSD, QV, PT);
+const LBL_W = beside(QV, PT, G1);
+const LBL_1 = beside(PT, G1, G3, 10);
+const LBL_VP = beside(G1, G2, PT, 12);
+const LBL_WP = beside(G2, G3, PT, 14); // the w′ step is nearly vertical: half the label width goes into the gap
+const [ox, oy] = pr(OSD);
+const away = [EI, EJ, EK].map((e) => {
+  const [qx, qy] = pr(along(OSD, [e, 1]));
+  const l = Math.hypot(qx - ox, qy - oy);
+  return [(qx - ox) / l, (qy - oy) / l];
+});
+const [ax_, ay_] = away.reduce((s, v) => [s[0] - v[0], s[1] - v[1]], [0, 0]);
+const al = Math.hypot(ax_, ay_) || 1;
+const LBL_O: P2 = [r1(ox + (ax_ / al) * 13), r1(oy + (ay_ / al) * 13 + 4.5)];
+const MARS = [XA, YA, ZA].map((e, k) => ({ a: pr(mul(e, LM[k])).map(r1), t: pr(mul(e, LM[k] + 0.17)).map(r1), n: 'xyz'[k] }));
+const LBL_PHI = ptAt(XA, YA, RPHI + 0.2, PHI / 2);
+const LBL_LAM = ptAt(SH, ZA, RLAM + 0.2, LAM / 2);
+
+const PAR = {
+  sc: {
+    cap: 'SC is MARS, turned by φ about z and then about y⊥ to lift x by λ out of the x-y plane. Its x axis points along the momentum p, and y⊥ stays in the x-y plane. SC has the origin of MARS.',
+    rows: [
+      ['q/p', 'p', 'GetQp()', 'charge over momentum, 1/GeV'],
+      ['λ', 'p', 'GetLambda()', 'dip angle, asin(pz/p), rad'],
+      ['φ', 'p', 'GetPhi()', 'azimuth, atan2(py, px), rad'],
+      ['y⊥', 'y', 'GetY_sc()', 'position on the y⊥ axis, cm'],
+      ['z⊥', 'z', 'GetZ_sc()', 'position on the z⊥ axis, cm'],
+    ],
+  },
+  sd: {
+    cap: 'SD is fixed to a detector plane: origin o, unit vectors j and k in the plane, normal i\u00a0=\u00a0j\u00a0×\u00a0k. The point is on the plane (u\u00a0=\u00a00). For a step of 1 along i, p goes v′ along j and w′ along k.',
+    rows: [
+      ['q/p', 'p', 'GetQp()', 'charge over momentum, 1/GeV'],
+      ['v′', 'y', 'GetTV()', 'slope dv/du'],
+      ['w′', 'z', 'GetTW()', 'slope dw/du'],
+      ['v', 'y', 'GetV()', 'position on the v axis (j), cm'],
+      ['w', 'z', 'GetW()', 'position on the w axis (k), cm'],
+    ],
+  },
+};
+const LABEL = {
+  sc: 'SC frame of FairTrackParH: the x axis points along the momentum p, y⊥ lies in the x-y plane of MARS, and z⊥ completes the frame. The origin is the origin of MARS.',
+  sd: 'SD frame of FairTrackParP: a detector plane with the origin o, the unit vectors j and k in the plane and the normal i = j × k. The track crosses the plane at the point with the coordinates v and w.',
+};
+const data = JSON.stringify({
+  ex: EX,
+  ey: EY,
+  ez: EZ,
+  sh: SH,
+  pt: PT,
+  ei: EI,
+  ej: EJ,
+  ek: EK,
+  osd: OSD,
+  csc: CSC,
+  lam: LAM,
+  phi: PHI,
+  cr: CR,
+  cu: CU,
+  s: S,
+  c0: C0,
+  lax: LAX,
+  rphi: RPHI,
+  rlam: RLAM,
+  g: [PT, G1, G2, G3],
+  label: LABEL,
+});
+---
+
+<figure class="fr-tf not-content" data-tf={data}>
+  <div class="tf-head">
+    <div class="tf-switch" role="group" aria-label="Frame">
+      <button type="button" data-view="sc" aria-pressed="true"><b>SC</b><span>FairTrackParH</span></button>
+      <button type="button" data-view="sd" aria-pressed="false"><b>SD</b><span>FairTrackParP</span></button>
+    </div>
+    <button type="button" class="tf-replay" data-act="replay" aria-label="Replay the animation" hidden>
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"
+        ><path d="M13 8a5 5 0 1 1-1.5-3.6"></path><path d="M12.5 1.5v3.3H9.2"></path></svg
+      ><span>Replay</span>
+    </button>
+  </div>
+  <div class="tf-body">
+    <svg class="tf" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={LABEL.sc}>
+      <g class="tf-mars" aria-hidden="true">
+        {
+          MARS.map((m) => (
+            <>
+              <line x1={r1(C0[0])} y1={r1(C0[1])} x2={m.a[0]} y2={m.a[1]} />
+              <text x={m.t[0]} y={m.t[1] + 4.5} text-anchor="middle">
+                {m.n}
+              </text>
+            </>
+          ))
+        }
+      </g>
+      <g class="tf-ang" aria-hidden="true">
+        <path class="tf-wedge" data-w="phi" d={sector(XA, YA, RPHI, PHI, true)}></path>
+        <path class="tf-wedge" data-w="lam" d={sector(SH, ZA, RLAM, LAM, true)}></path>
+        <line class="tf-aux" data-a="sh" x1={r1(C0[0])} y1={r1(C0[1])} x2={r1(pr(DROP)[0])} y2={r1(pr(DROP)[1])}></line>
+        <line
+          class="tf-aux"
+          data-a="drop"
+          x1={r1(pr(mul(EX, LAX))[0])}
+          y1={r1(pr(mul(EX, LAX))[1])}
+          x2={r1(pr(DROP)[0])}
+          y2={r1(pr(DROP)[1])}></line>
+        <path class="tf-arc" data-w="phi" d={sector(XA, YA, RPHI, PHI, false)}></path>
+        <path class="tf-arc" data-w="lam" d={sector(SH, ZA, RLAM, LAM, false)}></path>
+      </g>
+      <path class="tf-trk" d={path(TRK_BACK)} aria-hidden="true"></path>
+      <path class="tf-plane" d={path(PLANE) + 'Z'} opacity="0" aria-hidden="true"></path>
+      <path class="tf-trk" d={path(TRK_FRONT)} aria-hidden="true"></path>
+      <g class="tf-legs" aria-hidden="true">
+        {
+          LEGS_SC.map(([a, b], k) => (
+            <line class="tf-leg" data-k={k} x1={r1(pr(a)[0])} y1={r1(pr(a)[1])} x2={r1(pr(b)[0])} y2={r1(pr(b)[1])} />
+          ))
+        }
+      </g>
+      <g class="tf-gad" opacity="0" aria-hidden="true">
+        {
+          [
+            [PT, G1],
+            [G1, G2],
+            [G2, G3],
+          ].map(([a, b], k) => (
+            <line class="tf-g" data-k={k} x1={r1(pr(a)[0])} y1={r1(pr(a)[1])} x2={r1(pr(b)[0])} y2={r1(pr(b)[1])} />
+          ))
+        }
+      </g>
+      <g class="tf-frame" aria-hidden="true">
+        {
+          AX_SC.map((a, k) => (
+            <g class="tf-ax" data-k={k}>
+              <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} />
+              <path d={a.d} />
+            </g>
+          ))
+        }
+      </g>
+      <g class="tf-mom" aria-hidden="true">
+        <line x1={MOM.x1} y1={MOM.y1} x2={MOM.x2} y2={MOM.y2}></line>
+        <path d={MOM.d}></path>
+        <circle class="tf-pt" cx={px} cy={py} r="3.6"></circle>
+      </g>
+      <g class="tf-labels" aria-hidden="true">
+        <text class="tf-al" data-w="phi" text-anchor="middle" x={LBL_PHI[0]} y={LBL_PHI[1] + 5}>φ</text>
+        <text class="tf-al" data-w="lam" text-anchor="middle" x={LBL_LAM[0]} y={LBL_LAM[1] + 5}>λ</text>
+        {
+          AX_SC.map((a, k) => (
+            <text class="tf-tip" data-k={k} text-anchor="middle" x={a.tx} y={a.ty}>
+              {TIPS_SC[k]}
+            </text>
+          ))
+        }
+        <text class="tf-pl" text-anchor="middle" x={MOM.tx} y={MOM.ty}>p</text>
+        <g class="tf-sd" opacity="0">
+          <text class="tf-o" text-anchor="middle" x={LBL_O[0]} y={LBL_O[1]}>o</text>
+          <text class="tf-ll" data-k="1" text-anchor="middle" x={LBL_V[0]} y={LBL_V[1]}>v</text>
+          <text class="tf-ll" data-k="2" text-anchor="middle" x={LBL_W[0]} y={LBL_W[1]}>w</text>
+        </g>
+        <g class="tf-gl" opacity="0">
+          <text class="tf-ll" data-k="0" text-anchor="middle" x={LBL_1[0]} y={LBL_1[1]}>1</text>
+          <text class="tf-ll" data-k="1" text-anchor="middle" x={LBL_VP[0]} y={LBL_VP[1]}>v′</text>
+          <text class="tf-ll" data-k="2" text-anchor="middle" x={LBL_WP[0]} y={LBL_WP[1]}>w′</text>
+        </g>
+      </g>
+    </svg>
+    <div class="tf-side" aria-live="polite">
+      {
+        (['sc', 'sd'] as const).map((v) => (
+          <div class="tf-panel" data-panel={v} hidden={v === 'sd'}>
+            <p class="tf-cap">{PAR[v].cap}</p>
+            <ol class="tf-pars">
+              {PAR[v].rows.map(([sym, c, get, what]) => (
+                <li>
+                  <span class={`tf-sym c-${c}`}>{sym}</span>
+                  <span class="tf-def">
+                    <code>{get}</code>
+                    <span class="tf-what">{what}</span>
+                  </span>
+                </li>
+              ))}
+            </ol>
+            {v === 'sd' && (
+              <p class="tf-note">
+                <code>GetSPU()</code> gives spu = sign(p · i): the direction of the track along u. Here it is +1.
+              </p>
+            )}
+            <p class="tf-note">Dashed axes: MARS, the lab frame. The values are an example.</p>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</figure>
+
+<script>
+  type V = [number, number, number];
+  type Q = [number, number, number, number];
+  type View = 'sc' | 'sd';
+  interface TfData {
+    ex: V;
+    ey: V;
+    ez: V;
+    sh: V;
+    pt: V;
+    ei: V;
+    ej: V;
+    ek: V;
+    osd: V;
+    csc: V;
+    lam: number;
+    phi: number;
+    cr: V;
+    cu: V;
+    s: number;
+    c0: [number, number];
+    lax: number;
+    rphi: number;
+    rlam: number;
+    g: V[];
+    label: Record<View, string>;
+  }
+  const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const sub = (a: V, b: V): V => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const mul = (a: V, s: number): V => [a[0] * s, a[1] * s, a[2] * s];
+  const dot = (a: V, b: V) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const lerp = (a: V, b: V, t: number): V => add(a, mul(sub(b, a), t));
+  const r1 = (n: number) => Math.round(n * 10) / 10;
+  const ease = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const clamp = (t: number) => Math.min(1, Math.max(0, t));
+  // Rotations as quaternions [w, x, y, z]; a frame is the three axes (the columns of the rotation).
+  const toQ = (c: V[]): Q => {
+    const [m00, m10, m20] = c[0];
+    const [m01, m11, m21] = c[1];
+    const [m02, m12, m22] = c[2];
+    const tr = m00 + m11 + m22;
+    if (tr > 0) {
+      const s = Math.sqrt(tr + 1) * 2;
+      return [s / 4, (m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s];
+    }
+    if (m00 > m11 && m00 > m22) {
+      const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+      return [(m21 - m12) / s, s / 4, (m01 + m10) / s, (m02 + m20) / s];
+    }
+    if (m11 > m22) {
+      const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+      return [(m02 - m20) / s, (m01 + m10) / s, s / 4, (m12 + m21) / s];
+    }
+    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+    return [(m10 - m01) / s, (m02 + m20) / s, (m12 + m21) / s, s / 4];
+  };
+  const toAxes = ([w, x, y, z]: Q): V[] => [
+    [1 - 2 * (y * y + z * z), 2 * (x * y + w * z), 2 * (x * z - w * y)],
+    [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)],
+    [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)],
+  ];
+  const slerp = (a: Q, b: Q, t: number): Q => {
+    let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    const bb = d < 0 ? (b.map((v) => -v) as Q) : b;
+    d = Math.abs(d);
+    if (d > 0.9995) {
+      const q = a.map((v, i) => v + (bb[i] - v) * t) as Q;
+      const n = Math.hypot(...q);
+      return q.map((v) => v / n) as Q;
+    }
+    const th = Math.acos(d);
+    const [wa, wb] = [Math.sin((1 - t) * th) / Math.sin(th), Math.sin(t * th) / Math.sin(th)];
+    return a.map((v, i) => wa * v + wb * bb[i]) as Q;
+  };
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-tf')) {
+    const d = JSON.parse(root.dataset.tf!) as TfData;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const svg = root.querySelector<SVGSVGElement>('svg.tf')!;
+    const all = <T extends Element>(s: string) => [...root.querySelectorAll<T>(s)];
+    const one = <T extends Element>(s: string) => root.querySelector<T>(s)!;
+    const buttons = all<HTMLButtonElement>('[data-view]');
+    const replay = one<HTMLButtonElement>('[data-act=replay]');
+    const panels = all<HTMLElement>('[data-panel]');
+    const axes = all<SVGGElement>('.tf-ax').map((g) => [g.querySelector('line')!, g.querySelector('path')!] as const);
+    const tips = all<SVGTextElement>('.tf-tip');
+    const legs = all<SVGLineElement>('.tf-leg');
+    const gad = all<SVGLineElement>('.tf-g');
+    const angG = one<SVGGElement>('.tf-ang');
+    const gadG = one<SVGGElement>('.tf-gad');
+    const wedge = { phi: one<SVGPathElement>('.tf-wedge[data-w=phi]'), lam: one<SVGPathElement>('.tf-wedge[data-w=lam]') };
+    const arc = { phi: one<SVGPathElement>('.tf-arc[data-w=phi]'), lam: one<SVGPathElement>('.tf-arc[data-w=lam]') };
+    const albl = { phi: one<SVGTextElement>('.tf-al[data-w=phi]'), lam: one<SVGTextElement>('.tf-al[data-w=lam]') };
+    const auxSh = one<SVGLineElement>('[data-a=sh]');
+    const auxDrop = one<SVGLineElement>('[data-a=drop]');
+    const planeEl = one<SVGPathElement>('.tf-plane');
+    const sdLbl = one<SVGGElement>('.tf-sd');
+    const gLbl = one<SVGGElement>('.tf-gl');
+    const O: V = [0, 0, 0];
+    const X: V = [1, 0, 0];
+    const Y: V = [0, 1, 0];
+    const Z: V = [0, 0, 1];
+
+    const pr = (v: V): [number, number] => [d.c0[0] + d.s * dot(v, d.cr), d.c0[1] - d.s * dot(v, d.cu)];
+    const path = (pts: V[]) => 'M' + pts.map((v) => pr(v).map(r1).join(' ')).join('L');
+    const setLine = (el: SVGLineElement, a: V, b: V) => {
+      const [p, q] = [pr(a), pr(b)];
+      el.setAttribute('x1', String(r1(p[0])));
+      el.setAttribute('y1', String(r1(p[1])));
+      el.setAttribute('x2', String(r1(q[0])));
+      el.setAttribute('y2', String(r1(q[1])));
+    };
+    const sector = (e1: V, e2: V, r: number, a: number, closed: boolean) => {
+      const n = Math.max(2, Math.ceil(Math.abs(a) / (4 * (Math.PI / 180))));
+      const pts: V[] = [];
+      for (let i = 0; i <= n; i++) pts.push(add(mul(e1, r * Math.cos((a * i) / n)), mul(e2, r * Math.sin((a * i) / n))));
+      return closed ? path([O, ...pts]) + 'Z' : path(pts);
+    };
+    const place = (el: SVGTextElement, e1: V, e2: V, r: number, a: number) => {
+      const [x, y] = pr(add(mul(e1, r * Math.cos(a)), mul(e2, r * Math.sin(a))));
+      el.setAttribute('x', String(r1(x)));
+      el.setAttribute('y', String(r1(y + 5)));
+    };
+    const show = (el: SVGElement, o: number) => el.setAttribute('opacity', String(r1(clamp(o) * 100) / 100));
+
+    // The frame: origin and axes. The legs show the coordinates of the point in this frame.
+    const MARS: V[] = [X, Y, Z];
+    const SC: V[] = [d.ex, d.ey, d.ez];
+    const SD: V[] = [d.ei, d.ej, d.ek];
+    const NAMES = { mars: ['x', 'y', 'z'], sc: ['x', 'y⊥', 'z⊥'], sd: ['i', 'j', 'k'] };
+    let pose = { o: O, ax: SC, legs: 3 };
+    // The weight of a tip label: 1 when the leg along the axis starts at the origin and is longer than the axis.
+    const onLeg = (c: number[], k: number) =>
+      clamp((c[k] - 0.85 * d.lax) / (0.3 * d.lax)) * clamp(1 - c.slice(0, k).reduce((s, x) => s + Math.abs(x), 0) / 0.3);
+    const frame = (o: V, ax: V[], legsAt = 3) => {
+      pose = { o, ax, legs: legsAt };
+      // The coordinates of the point in this frame, drawn as a staircase from the origin to the point.
+      const c = ax.map((e) => dot(sub(d.pt, o), e));
+      ax.forEach((e, k) => {
+        const [line, head] = axes[k];
+        const [ax0, ay0] = pr(o);
+        const [bx, by] = pr(add(o, mul(e, d.lax)));
+        const l = Math.hypot(bx - ax0, by - ay0) || 1;
+        const [ux, uy] = [(bx - ax0) / l, (by - ay0) / l];
+        const [hx, hy] = [bx - ux * 9, by - uy * 9];
+        line.setAttribute('x1', String(r1(ax0)));
+        line.setAttribute('y1', String(r1(ay0)));
+        line.setAttribute('x2', String(r1(hx + ux)));
+        line.setAttribute('y2', String(r1(hy + uy)));
+        head.setAttribute('d', `M${r1(bx)} ${r1(by)}L${r1(hx - uy * 4)} ${r1(hy + ux * 4)}L${r1(hx + uy * 4)} ${r1(hy - ux * 4)}Z`);
+        const w = onLeg(c, k);
+        const [nx, ny] = ux >= 0 ? [uy, -ux] : [-uy, ux];
+        tips[k].setAttribute('x', String(r1(bx + ux * (13 - 10 * w) + nx * 12 * w)));
+        tips[k].setAttribute('y', String(r1(by + uy * (13 - 10 * w) + ny * 12 * w + 5)));
+      });
+      let q = o;
+      legs.forEach((leg, k) => {
+        const next = add(q, mul(ax[k], c[k]));
+        setLine(leg, q, lerp(q, next, clamp(legsAt - k)));
+        q = next;
+      });
+    };
+    // The tip labels change in the middle of t: they fade out, change, and fade in.
+    const fader = (to: string[]) => {
+      let from: string[] | null = null;
+      return (t: number) => {
+        const f = (from ??= tips.map((el) => (el.textContent ?? '').trim()));
+        tips.forEach((el, k) => {
+          el.textContent = t < 0.5 ? f[k] : to[k];
+          show(el, f[k] === to[k] ? 1 : Math.abs(1 - 2 * t));
+        });
+      };
+    };
+    let ang = { phi: d.phi, lam: d.lam, o: 1 };
+    const angles = (phi: number, lam: number, o: number) => {
+      ang = { phi, lam, o };
+      const sh: V = [Math.cos(phi), Math.sin(phi), 0];
+      wedge.phi.setAttribute('d', sector(X, Y, d.rphi, phi, true));
+      arc.phi.setAttribute('d', sector(X, Y, d.rphi, phi, false));
+      wedge.lam.setAttribute('d', sector(sh, Z, d.rlam, lam, true));
+      arc.lam.setAttribute('d', sector(sh, Z, d.rlam, lam, false));
+      place(albl.phi, X, Y, d.rphi + 0.2, phi / 2);
+      place(albl.lam, sh, Z, d.rlam + 0.2, lam / 2);
+      show(albl.phi, phi / d.phi > 0.3 ? o : 0);
+      show(albl.lam, lam / d.lam > 0.3 ? o : 0);
+      show(wedge.lam, lam > 0 ? 1 : 0);
+      show(arc.lam, lam > 0 ? 1 : 0);
+      const foot = mul(sh, d.lax * Math.cos(lam));
+      setLine(auxSh, O, foot);
+      setLine(auxDrop, add(foot, [0, 0, d.lax * Math.sin(lam)]), foot);
+      show(angG, o);
+    };
+    let gNow = 0;
+    const gadget = (g: number) => {
+      gNow = g;
+      gad.forEach((el, k) => setLine(el, d.g[k], lerp(d.g[k], d.g[k + 1], clamp(g - k))));
+      show(gadG, g > 0 ? 1 : 0);
+    };
+    let sdNow = { plane: 0, lbl: 0, glbl: 0 };
+    const sdParts = (plane: number, lbl: number, glbl: number) => {
+      sdNow = { plane, lbl, glbl };
+      show(planeEl, plane);
+      show(sdLbl, lbl);
+      show(gLbl, glbl);
+    };
+    // The SC axes after a turn by f about z and a lift of x by l about the turned y axis (FairTrackParH.cxx:199-201).
+    const turned = (f: number, l: number): V[] => [
+      [Math.cos(l) * Math.cos(f), Math.cos(l) * Math.sin(f), Math.sin(l)],
+      [-Math.sin(f), Math.cos(f), 0],
+      [-Math.sin(l) * Math.cos(f), -Math.sin(l) * Math.sin(f), Math.cos(l)],
+    ];
+
+    // An animation is a list of steps: [duration in ms, function of t from 0 to 1].
+    type Step = [number, (t: number) => void];
+    let raf = 0;
+    const run = (steps: Step[]) => {
+      cancelAnimationFrame(raf);
+      if (reduce) {
+        steps.forEach(([, fn]) => fn(1));
+        return;
+      }
+      let i = 0;
+      let t0 = performance.now();
+      const tick = (now: number) => {
+        while (i < steps.length) {
+          const [ms, fn] = steps[i];
+          const t = ms > 0 ? clamp((now - t0) / ms) : 1;
+          fn(t);
+          if (t < 1) {
+            raf = requestAnimationFrame(tick);
+            return;
+          }
+          i++;
+          t0 = now;
+        }
+      };
+      raf = requestAnimationFrame(tick);
+    };
+    // A step that moves the frame from where it is now to (o1, ax1).
+    const move = (ms: number, o1: V, ax1: V[], legs1: number, extra: (t: number, e: number) => void): Step => {
+      let s: { o: V; q: Q; legs: number } | null = null;
+      return [
+        ms,
+        (t) => {
+          s ??= { o: pose.o, q: toQ(pose.ax), legs: pose.legs };
+          const e = ease(t);
+          if (t >= 1) frame(o1, ax1, legs1);
+          else frame(lerp(s.o, o1, e), toAxes(slerp(s.q, toQ(ax1), e)), s.legs + (legs1 - s.legs) * e);
+          extra(t, e);
+        },
+      ];
+    };
+
+    // SC: back to MARS at the origin, then the turn by phi about z and by lambda about y_perp.
+    const toSC = (): Step[] => {
+      const atMars = pose.ax === MARS;
+      const lbl = fader(NAMES.mars);
+      // Hidden angles start again from zero; shown angles (a replay) turn back to zero.
+      const a0 = ang.o > 0.01 ? ang : { phi: 0, lam: 0, o: 1 };
+      const p0 = sdNow;
+      const g0 = gNow;
+      const lblY = fader(['x', 'y⊥', 'z']);
+      const lblZ = fader(NAMES.sc);
+      const hold: Step = [300, () => {}];
+      return [
+        move(atMars ? 0 : 750, O, MARS, 0, (t, e) => {
+          sdParts(p0.plane * (1 - e), p0.lbl * (1 - 2 * e), p0.glbl * (1 - 2 * e));
+          gadget(g0 * (1 - e));
+          lbl(t);
+          angles(a0.phi * (1 - e), a0.lam * (1 - e), a0.o + (1 - a0.o) * e);
+        }),
+        hold,
+        [
+          1100,
+          (t) => {
+            const f = d.phi * ease(t);
+            frame(O, turned(f, 0), 0);
+            angles(f, 0, 1);
+            lblY(clamp((t - 0.6) / 0.4));
+          },
+        ],
+        hold,
+        [
+          1100,
+          (t) => {
+            const l = d.lam * ease(t);
+            frame(O, turned(d.phi, l), 0);
+            angles(d.phi, l, 1);
+            lblZ(clamp((t - 0.6) / 0.4));
+          },
+        ],
+        hold,
+        [1100, (t) => frame(O, SC, t >= 1 ? 3 : 3 * ease(t))],
+      ];
+    };
+    // SD: the frame moves from where it is to the origin o of the plane and turns into i, j, k.
+    const toSD = (): Step[] => {
+      const a0 = ang;
+      const lbl = fader(NAMES.sd);
+      return [
+        [350, (t) => angles(a0.phi, a0.lam, a0.o * (1 - t))],
+        move(1300, d.osd, SD, 3, (t, e) => {
+          sdParts(clamp((e - 0.25) / 0.6), 0, 0);
+          lbl(clamp((t - 0.3) / 0.5));
+        }),
+        [
+          1000,
+          (t) => {
+            sdParts(1, clamp(t * 2.5), clamp((t - 0.7) / 0.3));
+            gadget(t >= 1 ? 3 : 3 * ease(t));
+          },
+        ],
+      ];
+    };
+    // The end state of SC, without motion: the start of a replay of SD.
+    const scNow = () => {
+      cancelAnimationFrame(raf);
+      frame(O, SC);
+      angles(d.phi, d.lam, 1);
+      fader(NAMES.sc)(1);
+      sdParts(0, 0, 0);
+      gadget(0);
+    };
+
+    let view: View = 'sc';
+    const select = (v: View, again = false) => {
+      if (v === view && !again) return;
+      view = v;
+      buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === v)));
+      panels.forEach((p) => (p.hidden = p.dataset.panel !== v));
+      svg.setAttribute('aria-label', d.label[v]);
+      if (v === 'sd' && again) scNow();
+      run(v === 'sc' ? toSC() : toSD());
+    };
+    buttons.forEach((b, i) => {
+      b.addEventListener('click', () => select(b.dataset.view as View));
+      b.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
+        ev.preventDefault();
+        const nb = buttons[(i + 1) % buttons.length];
+        nb.focus();
+        select(nb.dataset.view as View);
+      });
+    });
+    replay.addEventListener('click', () => select(view, true));
+
+    // Without motion, each view shows its end state at once. With motion, the diagram starts in MARS and plays
+    // the turn into SC when it comes into view.
+    if (!reduce && 'IntersectionObserver' in window) {
+      replay.hidden = false;
+      frame(O, MARS, 0);
+      fader(NAMES.mars)(1);
+      angles(0, 0, 1);
+      const io = new IntersectionObserver(
+        (es) => {
+          if (es.some((e) => e.isIntersecting)) {
+            io.disconnect();
+            if (view === 'sc' && pose.ax === MARS) run(toSC());
+          }
+        },
+        { threshold: 0.35 }
+      );
+      io.observe(svg);
+    }
+  }
+</script>
+
+<style>
+  .fr-tf {
+    --tf-x: var(--fr-ruby);
+    --tf-y: var(--fr-teal);
+    --tf-z: var(--fr-link);
+    --tf-p: var(--fr-bar);
+    --tf-p-ink: var(--fr-accent-ink);
+    container-type: inline-size;
+    min-width: 0;
+    margin: 1.5rem 0;
+    border: 1px solid var(--fr-rule);
+    border-radius: 6px;
+    background: var(--fr-paper);
+    padding: 0.75rem;
+  }
+  .tf-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .tf-switch {
+    display: inline-flex;
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .tf-switch button {
+    display: grid;
+    gap: 0.2rem;
+    text-align: start;
+    border: 0;
+    background: var(--fr-paper);
+    color: var(--fr-ink-2);
+    padding: 0.45rem 0.8rem;
+    cursor: pointer;
+  }
+  .tf-switch button + button {
+    border-inline-start: 1px solid var(--fr-rule-strong);
+  }
+  .tf-switch button:hover {
+    background: var(--fr-paper-2);
+  }
+  .tf-switch button[aria-pressed='true'] {
+    background: var(--fr-ink);
+    color: var(--fr-paper);
+  }
+  /* The group clips its corners, so the focus ring goes inside the button. */
+  .tf-switch button:focus-visible {
+    outline-offset: -4px;
+  }
+  .tf-switch button[aria-pressed='true']:focus-visible {
+    outline-color: var(--fr-paper);
+  }
+  .tf-switch b {
+    font: 700 0.875rem/1.1 var(--fr-font-body);
+    letter-spacing: 0.06em;
+  }
+  .tf-switch span {
+    font: 500 0.75rem/1.1 var(--fr-font-mono);
+  }
+  .tf-replay {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: 500 0.8125rem/1 var(--fr-font-body);
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 4px;
+    background: var(--fr-paper);
+    color: var(--fr-ink-2);
+    cursor: pointer;
+  }
+  .tf-replay:hover {
+    border-color: var(--fr-ink-3);
+    color: var(--fr-ink);
+  }
+  .tf-replay[hidden] {
+    display: none;
+  }
+  .tf-replay svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .tf-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: 0.75rem 1.25rem;
+    align-items: center;
+    margin-top: 0.5rem;
+  }
+  @container (max-width: 37rem) {
+    .tf-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    svg.tf {
+      max-width: 26rem;
+      margin-inline: auto;
+    }
+  }
+  /* Two columns: both panels share one grid cell, so the figure keeps its height and the drawing does not move
+     when the view changes. */
+  @container (width > 37rem) {
+    .tf-side {
+      display: grid;
+    }
+    .tf-panel {
+      grid-area: 1 / 1;
+    }
+    .tf-panel[hidden] {
+      display: block;
+      visibility: hidden;
+    }
+  }
+  /* Phones: less padding, and the replay button shows only its icon. */
+  @container (max-width: 20.5rem) {
+    .tf-switch button {
+      padding-inline: 0.65rem;
+    }
+    .tf-replay {
+      padding: 0.5rem 0.6rem;
+    }
+    .tf-replay span {
+      display: none;
+    }
+  }
+  @media (max-width: 30rem) {
+    .fr-tf {
+      padding: 0.5rem;
+    }
+  }
+
+  /* The scene */
+  svg.tf {
+    width: 100%;
+    height: auto;
+    display: block;
+    overflow: visible;
+  }
+  svg.tf text {
+    font-family: var(--fr-font-mono);
+  }
+  .tf-mars line {
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.1;
+    stroke-dasharray: 4 3;
+  }
+  .tf-mars text {
+    font-size: 14px;
+    font-weight: 500;
+    fill: var(--fr-ink-3);
+  }
+  .tf-wedge {
+    fill: var(--fr-saffron);
+    fill-opacity: 0.2;
+  }
+  .tf-arc {
+    fill: none;
+    stroke: var(--tf-p);
+    stroke-width: 1.6;
+  }
+  .tf-aux {
+    stroke: var(--fr-ink-3);
+    stroke-width: 1;
+    stroke-dasharray: 2 3;
+  }
+  .tf-trk {
+    fill: none;
+    stroke: var(--fr-ink-2);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+  }
+  .tf-plane {
+    fill: color-mix(in srgb, var(--fr-sky) 16%, var(--fr-paper));
+    fill-opacity: 0.85;
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.2;
+    stroke-linejoin: round;
+  }
+  [data-k='0'] {
+    --c: var(--tf-x);
+  }
+  [data-k='1'] {
+    --c: var(--tf-y);
+  }
+  [data-k='2'] {
+    --c: var(--tf-z);
+  }
+  .tf-leg {
+    stroke: var(--c);
+    stroke-width: 1.8;
+    stroke-dasharray: 5 3.5;
+  }
+  .tf-g {
+    stroke: var(--c);
+    stroke-width: 1.6;
+    stroke-dasharray: 3 2.5;
+  }
+  .tf-ax line {
+    stroke: var(--c);
+    stroke-width: 2.8;
+    stroke-linecap: round;
+  }
+  .tf-ax path {
+    fill: var(--c);
+  }
+  .tf-mom line {
+    stroke: var(--tf-p);
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+  .tf-mom path {
+    fill: var(--tf-p);
+  }
+  .tf-pt {
+    fill: var(--fr-ink);
+    stroke: var(--fr-paper);
+    stroke-width: 1.5;
+  }
+  .tf-labels text {
+    paint-order: stroke;
+    stroke: var(--fr-paper);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .tf-tip {
+    font-size: 15px;
+    font-weight: 700;
+    fill: var(--c);
+  }
+  .tf-al,
+  .tf-pl {
+    font-size: 15px;
+    font-weight: 700;
+    fill: var(--tf-p-ink);
+  }
+  .tf-o {
+    font-size: 15px;
+    font-weight: 700;
+    fill: var(--fr-ink);
+  }
+  .tf-ll {
+    font-size: 14px;
+    font-weight: 700;
+    fill: var(--c);
+  }
+
+  /* The panel */
+  .tf-side {
+    min-width: 0;
+  }
+  .tf-cap {
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1.55;
+    color: var(--fr-ink-2);
+  }
+  .tf-pars {
+    list-style: none;
+    margin: 0.7rem 0 0;
+    padding: 0;
+    border-top: 1px solid var(--fr-rule);
+    counter-reset: tf;
+  }
+  .tf-pars li {
+    counter-increment: tf;
+    display: grid;
+    grid-template-columns: 0.9rem 2.3rem minmax(0, 1fr);
+    gap: 0 0.45rem;
+    align-items: baseline;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--fr-rule);
+    font-size: 0.8125rem;
+    line-height: 1.35;
+  }
+  .tf-def {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 0.6rem;
+  }
+  .tf-pars li::before {
+    content: counter(tf);
+    font: 500 0.75rem var(--fr-font-mono);
+    color: var(--fr-ink-3);
+  }
+  .tf-sym {
+    font: 700 0.9375rem/1 var(--fr-font-mono);
+  }
+  .c-p {
+    color: var(--tf-p-ink);
+  }
+  .c-y {
+    color: var(--tf-y);
+  }
+  .c-z {
+    color: var(--tf-z);
+  }
+  .tf-pars li:first-child .tf-sym {
+    color: var(--fr-ink);
+  }
+  .tf-pars code,
+  .tf-note code {
+    font: 500 0.8125rem/1.35 var(--fr-font-mono);
+    color: var(--fr-ink);
+    background: none;
+    border: 0;
+    padding: 0;
+  }
+  .tf-what {
+    flex-basis: 100%;
+    color: var(--fr-ink-2);
+  }
+  .tf-note {
+    margin: 0.55rem 0 0;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--fr-ink-3);
+  }
+  .tf-note code {
+    color: var(--fr-ink-2);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-tf * {
+      transition: none !important;
+    }
+  }
+</style>

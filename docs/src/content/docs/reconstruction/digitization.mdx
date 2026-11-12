@@ -1,0 +1,307 @@
+---
+title: 'From MC points to digis'
+description: 'A digitizer task turns MC points into digis, the data of the real detector. The pattern of the task, time stamps, smearing and seeds, response parameters and links.'
+sidebar:
+  order: 2
+code:
+  [
+    examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.h,
+    examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx,
+    examples/advanced/Tutorial3/data/FairTestDetectorDigi.h,
+    examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx,
+    examples/advanced/propagator/src/FairTutPropHitProducer.cxx,
+    examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx,
+    examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx,
+    examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx,
+    examples/simulation/Tutorial2/macros/create_digis.C,
+    examples/simulation/Tutorial2/macros/compare_seed_value.C,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+In the simulation, the detector makes MC points from the steps of the transport engine. An MC point
+holds the exact position, momentum and time of a particle in a sensitive volume. A real detector
+gives other data, for example a channel number and a time with a finite resolution. A digitizer is
+a task that turns MC points into digis, so that the reconstruction gets the same data as from the
+real detector.
+
+## The pattern of a digitizer
+
+A digitizer is a task ([`FairTask`](/api/FairTask/)) in a normal reconstruction macro, see
+[Write a reconstruction macro](/reconstruction/run-macro/). The run calls the hooks of the task at
+fixed points. [Tasks](/concepts/tasks/) gives the full order:
+
+| Hook | When the run calls it | What the digitizer does |
+| --- | --- | --- |
+| [`SetParContainers()`](/api/FairTask/#SetParContainers) | In `Init()` of the run, before the containers get their values | It requests its parameter containers from the runtime database. |
+| [`Init()`](/api/FairTask/#Init) | In `Init()` of the run, after the containers got their values | It gets the branch of the MC points. It creates and registers the branch of the digis. |
+| [`ReInit()`](/api/FairTask/#ReInit) | When the run ID of the input changes | It gets its parameter containers again. |
+| `Exec()` | Once for each event | It deletes the digis of the last event. Then it makes the digis from the MC points. |
+| [`Finish()`](/api/FairTask/#Finish) | After the last event | It does the work at the end of the run, for example a summary. |
+
+## A digitizer for pads: Tutorial 3
+
+[Tutorial 3](/examples/tutorial3/) has a small digitizer,
+[`FairTestDetectorDigiTask`](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/).
+Its digi class
+[`FairTestDetectorDigi`](/source/examples/advanced/Tutorial3/data/FairTestDetectorDigi.h/) holds
+three pad numbers (x, y and z) as `Int_t`. The digi class derives from
+[`FairTimeStamp`](/api/FairTimeStamp/), which adds a time stamp, its error and the links.
+
+### Init(): get the points, register the digis
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="InitStatus FairTestDetectorDigiTask::Init()" />
+
+- [`GetObject()`](/api/FairRootManager/#GetObject) returns the array of the branch
+  `FairTestDetectorPoint` from the input. If the branch does not exist, the task returns `kERROR`,
+  and the run sets the task inactive.
+- [`Register()`](/api/FairRootManager/#Register-2) makes the branch `FairTestDetectorDigi` in the
+  folder `FairTestDetector`. With `kTRUE`, the sink writes the branch to the output file. With
+  `kFALSE`, the branch stays in memory. The branch name and the folder name must be different
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L158-L162)).
+
+### Exec(): one digi for each MC point
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="void FairTestDetectorDigiTask::Exec(Option_t* /*opt*/)" mark="digi->AddLink" />
+
+The task does these steps for each event:
+
+1. It deletes the digis of the last event with `fDigiArray->Delete()`.
+2. It makes one digi for each MC point, at the same index as the point.
+3. It calculates the pad numbers and the time stamp of the digi.
+4. It adds a link from the digi to its MC point (the marked line), see
+   [Links to the MC points](#links-to-the-mc-points).
+
+`Delete()` calls the destructors of the old digis, but `TClonesArray::Clear()` does not (ROOT
+behavior). Use `Delete()` if your digi owns memory, for example its links.
+
+`CalcPad()` converts the sum of the entry and the exit coordinate to `Int_t`, and divides it by 2
+([FairTestDetectorDigiTask.cxx](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/#L83-L87)).
+The coordinates are in cm. For positive coordinates, the result is the mean without the fraction,
+so a pad is 1 cm wide. For negative coordinates, the conversion also rounds toward 0. Thus the pad 0
+covers −1 cm to 1 cm. In your own digitizer, use `std::floor()`, so that all pads have the same
+width.
+
+### Time stamps
+
+The time stamp of a digi is the time when the detector sees the signal. `CalcTimeStamp()` adds three
+parts, and uses 0 if the sum is negative:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="Double_t FairTestDetectorDigiTask::CalcTimeStamp" />
+
+- **The event time.** [`FairRootManager::GetEventTime()`](/api/FairRootManager/#GetEventTime)
+  returns the time of the current event in ns. The source sets it when it reads the event.
+- **The time of the MC point.** The detector stores the time when the particle enters the
+  sensitive volume, in ns
+  ([FairTestDetector.cxx](/source/examples/advanced/Tutorial3/simulation/FairTestDetector.cxx/#L75-L77)).
+- **The detection time.** A random number from a Gaussian distribution with the mean 0 and the
+  width `fTimeResolution`.
+
+`FairFileSource` takes the event time from the event header of the input, if this time is 0 or
+more. If not, it takes the time of the MC event header. After
+[`SetEventMeanTime()`](/api/FairFileSource/#SetEventMeanTime) or
+[`SetEventTimeInterval()`](/api/FairFileSource/#SetEventTimeInterval), it does not use the MC time.
+It adds a random interval to the time of the previous entry instead
+([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L609-L665)).
+See [Give each event a time](/reconstruction/time-based/#give-each-event-a-time).
+
+The default of `fTimeResolution` is 0, and `run_digi.C` does not change it. Thus its digis have no
+random part in their time. To add it, call `SetTimeResolution()` with a value in ns. The task then
+sets the error of the time stamp to `fTimeResolution / TMath::Sqrt(fTimeResolution)`, the square
+root of the resolution. In your digitizer, set an error that agrees with your smearing.
+
+The time-based digitizer `FairTestDetectorTimeDigiTask` calculates the time stamp in the same way,
+with a default resolution of 100 ns. It gives the digis to a write-out buffer, see
+[Time-based simulation and reconstruction](/reconstruction/time-based/).
+
+## Smearing and random numbers
+
+A detector response has random parts, for example the resolution and the noise. The examples get the
+random numbers from `gRandom`, the random number generator of ROOT. The hit producer of the
+[propagator example](/examples/propagator/) smears each MC point with Gaussian distributions:
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropHitProducer.cxx" start="// simulate the detector response: smear position with gaussians" end="gRandom->Gaus(momentum.X(), 0.05)" title="FairTutPropHitProducer.cxx" />
+
+The task smears x and y of the position, and the three components of the momentum, with the width
+0.05. It keeps the z position and gives it the error 0. All other errors of the hit are 0.05.
+
+### Seeds
+
+The simulation macro of [Tutorial 2](/examples/tutorial2/) sets the seed of `gRandom` before the
+run:
+
+<Snippet file="examples/simulation/Tutorial2/macros/run_tutorial2.C" start="// Set the random seed" end="gRandom->SetSeed(initial_seed);" title="run_tutorial2.C" />
+
+`FairRunSim::Init()` stores the seed of `gRandom` in the parameter container `FairBaseParSet`
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L244-L249)). Thus the parameter file
+records the seed of the MC data. The macro `compare_seed_value.C` reads the seed with
+[`GetRndSeed()`](/api/FairBaseParSet/#GetRndSeed):
+
+<Snippet file="examples/simulation/Tutorial2/macros/compare_seed_value.C" start="int compare_seed_value(TString filename, UInt_t initial_seed)" title="compare_seed_value.C" />
+
+The test `ex_sim_tutorial2` runs the simulation with the seed 333. Then the test
+`ex_sim_tutorial2_compare_seed_value` runs this macro with the parameter file and 333
+([CMakeLists.txt](/repo/examples/simulation/Tutorial2/macros/CMakeLists.txt)). The macro returns 0
+if the two seeds are equal, and 1 if not.
+
+`FairRunAna` does not set a seed. Thus the smearing of a digitizer depends on the state of `gRandom`
+when the run starts. To make the same digis again, call `gRandom->SetSeed()` in the digitization
+macro before `Run()`. `FairFileSource` also uses `gRandom` when it draws the event times.
+
+## Parameters for the response: Tutorial 2
+
+A detector response needs numbers, for example the size of the pads, the thresholds and the
+resolutions. Keep these numbers in a parameter container, not in the code. Then you can change them
+without a new build, and the runtime database selects the values for each run ID.
+
+:::note[The Tutorial 2 digitizer makes no digis]
+`FairTutorialDet2Digitizer` gets its parameters, but the loop over the MC points in its `Exec()` is
+commented out. The task fills the memory branch `InMemory1` from the branch `TutorialCustomData`,
+for the second task `FairTutorialDet2CustomTask`. Use Tutorial 3 as the model for digis.
+:::
+
+### The container
+
+[`FairTutorialDet2DigiPar`](/source/examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx/)
+derives from [`FairParGenericSet`](/api/FairParGenericSet/). Its
+[`getParams()`](/api/FairParGenericSet/#getParams) reads the values by name from a
+[`FairParamList`](/api/FairParamList/):
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx" start="Bool_t FairTutorialDet2DigiPar::getParams(FairParamList* l)" />
+
+First the function reads the number of stations and the number of sectors per station. From these
+numbers, it calculates the size of the large array. If a value is missing, it returns `kFALSE`.
+[`putParams()`](/api/FairParGenericSet/#putParams) does the reverse for the output. The container
+factory `FairTutorialDet2ContFact` creates the container when a task requests its name
+([FairTutorialDet2ContFact.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx/#L15-L51)).
+See [Parameters and the runtime database](/concepts/parameters/).
+
+### The ASCII file
+
+The values come from the ASCII file
+[`parameters/tutdet.digi.par`](/repo/examples/simulation/Tutorial2/parameters/tutdet.digi.par). The
+line `[FairTutorialDet2DigiPar]` starts the section of the container. Each line gives a name, a type
+and the values. A `\` at the end of a line continues the values on the next line:
+
+<Snippet file="examples/simulation/Tutorial2/parameters/tutdet.digi.par" lines="6-18" title="tutdet.digi.par" />
+
+There are 8 stations with 756 sectors. For each station, the array `FairTutorialDet2DigiPar` has 3
+values (station number, rotation, number of sectors), then 10 values for each sector. This agrees
+with the size in `getParams()`. The format is in [ASCII parameter file format](/reference/par-format/).
+
+### Request the container in the task
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx" start="void FairTutorialDet2Digitizer::SetParContainers()" />
+
+In `SetParContainers()`, the container has no values yet. Thus `printparams()` prints the values of
+the constructor: −1 stations, an empty array of sectors, and the array `ftutdetdigipar` with its
+initial size 10. The run fills the container before it calls `Init()` of the task. When the run ID
+changes, the run calls `ReInit()`, which gets the container again.
+
+The task uses `FairRunAna::Instance()`, which is `nullptr` in other run classes, for example
+`FairRunOnline`. `FairRun::Instance()->GetRuntimeDb()` works for all run classes.
+
+### Give the file to the run
+
+`create_digis.C` uses the ROOT parameter file as first input and the ASCII file as second input, see
+[Write a reconstruction macro](/reconstruction/run-macro/). The simulation does not write the
+container `FairTutorialDet2DigiPar`, so the runtime database reads it from the ASCII file. After
+`Init()`, the macro writes the container into the ROOT file:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start="auto DigiPar = dynamic_cast<FairTutorialDet2DigiPar*>" end="rtdb->saveOutput();" title="create_digis.C" />
+
+`setChanged()` marks the container as changed. [`saveOutput()`](/api/FairRuntimeDb/#saveOutput)
+writes the changed containers and the version information to the output
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L818-L830)). Here the output is
+the ROOT parameter file, which the macro opened with `UPDATE`. For `setInputVersion()` and the
+versions, see [Write the parameters](/concepts/parameters/#write-the-parameters).
+
+## Links to the MC points
+
+A digi keeps a link to the MC point that made it. With the links, a later task can find the MC truth
+of a hit or a track, see [Match reconstructed data to MC truth](/reconstruction/mc-matching/). The
+Tutorial 3 digitizer adds the link in `Exec()`, see
+[Exec(): one digi for each MC point](#exec-one-digi-for-each-mc-point). The
+[`FairLink`](/api/FairLink/#FairLink-5) holds a file number (here −1), the entry of the current
+event, the branch and the index of the MC point. The constructor gets the branch ID with
+[`GetBranchId()`](/api/FairRootManager/#GetBranchId)
+([FairLink.cxx](/source/fairroot/base/event/FairLink.cxx/#L29-L38)).
+
+Two settings decide which links the digis keep:
+
+- **The run must use links.** [`AddLink()`](/api/FairMultiLinkedData_Interface/#AddLink) stores
+  nothing, unless the macro calls [`SetUseFairLinks(kTRUE)`](/api/FairRun/#SetUseFairLinks)
+  ([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L64-L74)).
+- **The link manager can drop links.** By default, [`FairLinkManager`](/api/FairLinkManager/)
+  drops the links to the branches that a task registers with `Register()` as not persistent
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L175-L177)). After
+  [`AddIncludeType(id)`](/api/FairLinkManager/#AddIncludeType), it keeps only the links to the
+  branches with these IDs
+  ([FairLinkManager.cxx](/source/fairroot/base/steer/FairLinkManager.cxx/#L56-L72)).
+
+:::caution[AddIncludeType(0) in Tutorial 3]
+`run_digi.C` calls `AddIncludeType(0)`. The ID of a branch is its position in the branch list of the
+input file. In the input of Tutorial 3, the first branch is `GeoTracks`: the simulation stores the
+trajectories and registers this branch first. Thus this filter also drops the links to the MC
+points. `run_reco.C` makes the same call, so the hits keep no links to the digis. Check the branch
+IDs of your input before you use `AddIncludeType()`. See [Links between data levels](/concepts/links/).
+:::
+
+## The next steps: hits and tracks
+
+After the digitization, other tasks make hits from the digis, and tracks from the hits. In
+Tutorial 3, [`FairTestDetectorRecoTask`](/source/examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx/)
+makes one hit for each digi:
+
+<Snippet file="examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx" start="TVector3 pos(digi->GetX() + 0.5" end="hit->SetTimeStampError(digi->GetTimeStampError());" title="FairTestDetectorRecoTask::Exec()" />
+
+The task adds 0.5 to each pad number. For a positive pad number, this is the center of the pad.
+`CalcPad()` rounds toward 0, so the hit of the pad 0 is 0.5 cm above the center of the pad, and the
+hit of a negative pad is 1 cm above the center. The error is 1/√12 cm, the standard deviation of a
+uniform distribution that is 1 cm wide. The hit copies the time stamp of the digi. Without
+`SetStreamProcessing(kTRUE)`, the task also adds a link from the hit to the digi.
+
+The [propagator example](/examples/propagator/) shows a chain to tracks. `runHP.C` makes hits from
+the MC points with `FairTutPropHitProducer`, and writes `prop.hits.root`. `runTF.C` reads this file
+and makes tracks with `FairTutPropTrackFinder`. For track parameters and their propagation, see
+[Track parameters and propagation](/reconstruction/tracks/).
+
+:::caution[FairTestDetectorHitProducerSmearing]
+This Tutorial 3 task makes hits directly from MC points, but no macro uses it. Its `Init()` registers
+the branch `FairTestDetectorHit` in a folder with the same name, which is a fatal error.
+:::
+
+## Write your own digitizer
+
+<Steps>
+
+1. Write the digi class. If the digi has a time, derive it from `FairTimeStamp`.
+2. Add the digi class to the `LinkDef` file of your library. See [Data classes](/concepts/data-classes/).
+3. Write a parameter container for the response. Add its name to your container factory.
+4. In `SetParContainers()`, request the container with `getContainer()`.
+5. In `Init()`, get the branch of the MC points. If it does not exist, return `kERROR`.
+6. In `Init()`, create the digi array and register it as persistent. Use a folder name that is
+   different from the branch name.
+7. In `Exec()`, delete the digis of the last event with `Delete()`. Then make the new digis.
+8. Smear with `gRandom`, and add a link from each digi to its MC point.
+9. In the macro, give the parameter inputs to the runtime database. Set the seed of `gRandom`.
+10. Call `SetUseFairLinks(kTRUE)` if you need the links. Add the digitizer with `AddTask()`.
+
+</Steps>
+
+To start, copy [`templates/NewTask`](/repo/templates/NewTask) and
+[`templates/NewParameterContainer`](/repo/templates/NewParameterContainer), see
+[Templates](/tools/templates/). The commented `Register()` line of `NewTask.cxx` uses the same text
+for the branch and the folder. If you use this line, change the folder name.
+
+## Related pages
+
+- [Write a reconstruction macro](/reconstruction/run-macro/): the macro that runs the digitizer.
+- [Tasks](/concepts/tasks/): all hooks of a task and their order.
+- [Parameters and the runtime database](/concepts/parameters/): containers, factories and inputs.
+- [Links between data levels](/concepts/links/): `FairLink`, the link manager and the history of links.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): digis with time stamps in a continuous stream.
+- [Match reconstructed data to MC truth](/reconstruction/mc-matching/): how to use the links of digis and hits.
+- [Tutorial 2](/examples/tutorial2/) and [Tutorial 3](/examples/tutorial3/): the examples on this page.

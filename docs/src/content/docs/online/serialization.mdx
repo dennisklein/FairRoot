@@ -1,0 +1,328 @@
+---
+title: 'Serialize FairRoot data for messages'
+description: 'Put FairRoot data into FairMQ messages: RootSerializer (ROOT TMessage), BoostSerializer (Boost archives), Boost support for FairRoot classes, plain structs, and how to choose.'
+sidebar:
+  order: 5
+code: [fairroot/basemq/policies/Serialization/RootSerializer.h, fairroot/basemq/policies/Serialization/BoostSerializer.h,
+  fairroot/basemq/FairBoostSerializationSupport.h, fairroot/basemq/FairTimeStampBoostSerializationSupport.h,
+  fairroot/basemq/FairHitBoostSerializationSupport.h, fairroot/basemq/FairMCPointBoostSerializationSupport.h,
+  examples/MQ/serialization/ExHeader.h, examples/MQ/serialization/data/MyDigi.h,
+  examples/MQ/pixelDetector/src/PixelPayload.h, examples/advanced/Tutorial3/MQ/data/Payload.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import MqTopology from '../../../components/diagrams/MqTopology.astro';
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+A FairMQ message carries a buffer of bytes. To send FairRoot data to another device, the sender
+writes its objects into this buffer, and the receiver makes the objects again. The header-only
+library `FairRoot::BaseMQ` gives two serializers for this: `RootSerializer` uses ROOT streaming, and
+`BoostSerializer` uses Boost serialization. Some examples send plain C++ structs without a
+serializer.
+
+## Choose a format
+
+| | ROOT `TMessage` | Boost binary archive | Plain structs |
+| --- | --- | --- | --- |
+| Code | [`RootSerializer`](/api/RootSerializer/) | [`BoostSerializer<T>`](/api/BoostSerializer/) | Your code writes into the buffer of `NewMessage(size)`. |
+| Your class needs | A ROOT dictionary | A Boost `serialize()` function, or `load()` and `save()` | Members of fixed size, no pointers |
+| One message holds | One object, for example a `TClonesArray`, a `TObjArray` of histograms or a parameter container | One object, a `std::vector`, or the objects of a `TClonesArray` | An array of structs |
+| Sender and receiver platform | Can be different. ROOT writes the numbers in a fixed byte order (ROOT behavior). | Must be the same. Boost binary archives are not portable (Boost behavior). | Must be the same, with the same compiler. The receiver reads the memory layout of the sender. |
+| The message gets | The buffer of the `TMessage` | A copy of the archive | The data that your code writes into it |
+| Used by | The pixel detector, the histogram server, the parameter server, the LMD unpacker | The serialization example, Tutorial 3 | The pixel `bin` devices, the alternative pixel example, Tutorial 3 |
+
+Use these rules to select a format:
+
+- Use `RootSerializer` for classes with a ROOT dictionary. The data classes that FairRoot writes
+  into ROOT files have a dictionary already, so you write no more code.
+- Use `BoostSerializer` for small types without a dictionary, for example a message header.
+- Use plain structs when you control the sender and the receiver, and want no serialization step.
+
+Tutorial 3 also sends its data with FlatBuffers and Protocol Buffers. See
+[Compare the formats in Tutorial 3](#compare-the-formats-in-tutorial-3).
+
+## Use the serializers in your project
+
+CMake builds `FairRoot::BaseMQ` if the option `BUILD_BASEMQ` is on, which is the default
+([CMakeLists.txt](/repo/CMakeLists.txt#L130)). The target adds the folder `policies/Serialization`
+to the include path. Thus you write `#include "RootSerializer.h"` and `#include "BoostSerializer.h"`.
+The target also links Boost serialization and the ROOT library `Net`, which has `TMessage`
+([basemq/CMakeLists.txt](/repo/fairroot/basemq/CMakeLists.txt#L27-L51)).
+
+Link your library to `FairRoot::BaseMQ`, as the library of the serialization example does:
+
+<Snippet file="examples/MQ/serialization/CMakeLists.txt" start="target_link_libraries(${target} PUBLIC" end="^\)" title="examples/MQ/serialization/CMakeLists.txt" />
+
+The same file makes the ROOT dictionary of `MyDigi` and `MyHit` with
+`fairroot_target_root_dictionary()`
+([CMakeLists.txt](/repo/examples/MQ/serialization/CMakeLists.txt#L34-L38)). All devices of the
+example link this library.
+
+## Send ROOT objects with RootSerializer
+
+[`Serialize()`](/api/RootSerializer/#Serialize) writes the object into a `TMessage` with ROOT
+streaming. Then it gives the buffer of the `TMessage` to the message:
+
+<Snippet file="fairroot/basemq/policies/Serialization/RootSerializer.h" start="void Serialize(fair::mq::Message& msg, T* input)" title="RootSerializer.h" />
+
+- The message owns the `TMessage`. The free function deletes it when the transport no longer needs
+  the buffer.
+- With the ZeroMQ transport, the message sends this buffer without a copy. With the shmem
+  transport, `Rebuild()` copies the buffer into the shared memory and deletes the `TMessage` at once
+  (FairMQ behavior).
+- `Serialize()` does not delete your object. A second form takes a `const std::unique_ptr<T>&`
+  ([`Serialize()`](/api/RootSerializer/#Serialize-2)).
+
+:::caution[Size of the messages]
+The message gets the full buffer of the `TMessage` (`BufferSize()`), not only the written bytes
+(`Length()`). A new `TMessage` has a buffer of 1032 bytes, and ROOT doubles the buffer when it is
+full (ROOT behavior). Thus each message has 1032 bytes or more, and it can be up to about twice as
+large as the data.
+:::
+
+To read the object, use one of three functions. Each one makes a new object of the class that is
+in the message:
+
+| Function | Result |
+| --- | --- |
+| [`Deserialize(msg, T*& output)`](/api/RootSerializer/#Deserialize) | Deletes the object at `output`. Then `output` points to the new object. |
+| [`Deserialize(msg, std::unique_ptr<T>& output)`](/api/RootSerializer/#Deserialize-2) | `output` deletes its old object and takes the new object. |
+| [`DeserializeTo<T>(msg)`](/api/RootSerializer/#DeserializeTo) | Returns the new object in a `std::unique_ptr<T>`. |
+
+<Snippet file="fairroot/basemq/policies/Serialization/RootSerializer.h" start="void Deserialize(const fair::mq::Message& msg, T*& output)" title="RootSerializer.h" />
+
+[`FairTMessage`](/api/FairTMessage/) reads the buffer of the message without a copy. It clears the
+bit `kIsOwner`, so the `TMessage` does not delete the buffer
+([RootSerializer.h](/source/fairroot/basemq/policies/Serialization/RootSerializer.h/#L26-L34)).
+
+Keep these rules in mind:
+
+- The receiver needs the dictionary of each class in the message. Link the library with the
+  dictionary to each device that reads the class.
+- The functions do not check the class. They cast the object to `T` with `static_cast`. If you do
+  not know the class, read a `TObject` and check its class, as the
+  [histogram server](/examples/mq-histogram-server/) does.
+- `Deserialize(msg, T*&)` deletes the old object. Give it `nullptr` or an object that you own. All
+  other pointers to the old object become invalid. Thus the TMessage sink of Tutorial 3 sets the
+  branch address of its tree again after each message:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/fileSink/FileSinkTMessage.h" start="RootSerializer().Deserialize(*msg, fOutput);" end="fTree.Fill();" title="FileSinkTMessage.h" />
+
+## Send Boost archives with BoostSerializer
+
+`BoostSerializer<DataType>` writes the data into a Boost binary archive. The template argument is
+the class of one object:
+
+| Function | What it does |
+| --- | --- |
+| [`Serialize(msg, const DataType&)`](/api/BoostSerializer/#Serialize-2), [`Serialize(msg, DataType*)`](/api/BoostSerializer/#Serialize) | Writes one object. |
+| [`Serialize(msg, const std::vector<DataType>&)`](/api/BoostSerializer/#Serialize-3) | Writes the vector. |
+| [`Serialize(msg, TClonesArray*)`](/api/BoostSerializer/#Serialize-4) | Copies the objects of the array into a `std::vector<DataType>`, then writes the vector. It skips empty slots. |
+| [`Serialize(msg, std::unique_ptr<TClonesArray>)`](/api/BoostSerializer/#Serialize-5) | The same. It takes the pointer by value, so the array is deleted after the call. |
+| [`Deserialize(msg, DataType&)`](/api/BoostSerializer/#Deserialize) | Reads one object. If the read throws `boost::archive::archive_exception`, it catches the exception and logs it with the severity `error`. |
+| [`Deserialize(msg, std::vector<DataType>&)`](/api/BoostSerializer/#Deserialize-2) | Clears the vector, then reads it. |
+| [`Deserialize(msg, TClonesArray*)`](/api/BoostSerializer/#Deserialize-3) | Reads a vector. Then it calls `Delete()` on the array and puts a copy of each object into it. |
+| [`Deserialize(msg, std::unique_ptr<TClonesArray>&)`](/api/BoostSerializer/#Deserialize-4) | The same. |
+
+Each `Serialize()` writes the archive into a string stream. Then it rebuilds the message with the
+size of the archive and copies the bytes into it:
+
+<Snippet file="fairroot/basemq/policies/Serialization/BoostSerializer.h" start="void Serialize(fair::mq::Message& msg, const DataType& data)" title="BoostSerializer.h" />
+
+Keep these rules in mind:
+
+- The receiver must read the type that the sender wrote. `BoostSerializer` has no function that
+  finds the type in a message.
+- The sender writes a `TClonesArray` as a vector. The receiver can read it into a
+  `std::vector<DataType>` or into a `TClonesArray`. Make this array for the class `DataType`,
+  because the function puts `DataType` objects into it.
+- The other forms of `Deserialize()` do not catch exceptions. `Deserialize(msg, DataType&)` makes
+  the archive before its `try` block, so an exception of the archive constructor also goes through
+  ([BoostSerializer.h](/source/fairroot/basemq/policies/Serialization/BoostSerializer.h/#L115-L125)).
+  An exception in a hook puts a FairMQ device into the state `ERROR`.
+
+## Make a class serializable with Boost
+
+Boost needs a function that names the members to write and to read. The code of FairRoot shows
+three ways:
+
+<Tabs>
+  <TabItem label="Free serialize()">
+
+For a struct with public members, write a free `serialize()` function in the namespace
+`boost::serialization`. The header of the serialization example does this:
+
+<Snippet file="examples/MQ/serialization/ExHeader.h" start="struct ExHeader" end="}   // namespace boost::serialization" title="ExHeader.h" />
+
+  </TabItem>
+  <TabItem label="Member serialize()">
+
+For your own data class, add a member template `serialize()`, and make
+`boost::serialization::access` a friend. `MyDigi` writes its base class first:
+
+<Snippet file="examples/MQ/serialization/data/MyDigi.h" start="template<class Archive>" end="friend class boost::serialization::access;" title="MyDigi.h" />
+
+  </TabItem>
+  <TabItem label="load() and save()">
+
+For a class with protected members and only getters and setters, write a free `load()` and
+`save()`. `BOOST_SERIALIZATION_SPLIT_FREE` tells Boost to use them. BaseMQ does this for three base
+classes of FairRoot:
+
+<Snippet file="fairroot/basemq/FairTimeStampBoostSerializationSupport.h" start="namespace boost::serialization {" end="BOOST_SERIALIZATION_SPLIT_FREE(FairTimeStamp)" title="FairTimeStampBoostSerializationSupport.h" />
+
+  </TabItem>
+</Tabs>
+
+The order of the `ar&` lines is the format of the archive. Thus `load()` and `save()` must handle
+the members in the same order.
+
+## Boost support for FairRoot classes
+
+BaseMQ has `load()` and `save()` functions for three base classes of the FairRoot data:
+
+| Header | Class | Members in the archive, in this order |
+| --- | --- | --- |
+| [`FairTimeStampBoostSerializationSupport.h`](/source/fairroot/basemq/FairTimeStampBoostSerializationSupport.h/) | [`FairTimeStamp`](/api/FairTimeStamp/) | Time stamp, time stamp error |
+| [`FairHitBoostSerializationSupport.h`](/source/fairroot/basemq/FairHitBoostSerializationSupport.h/) | [`FairHit`](/api/FairHit/) | The `FairTimeStamp` part, detector ID, reference index, x, y, z, dx, dy, dz |
+| [`FairMCPointBoostSerializationSupport.h`](/source/fairroot/basemq/FairMCPointBoostSerializationSupport.h/) | [`FairMCPoint`](/api/FairMCPoint/) | Track ID, event ID, detector ID, x, y, z, px, py, pz, time, length, energy loss |
+
+[`FairBoostSerializationSupport.h`](/source/fairroot/basemq/FairBoostSerializationSupport.h/)
+includes the three headers. For a class that derives from one of these classes, include the header
+and write the base class with `base_object`. `MyHit` of the serialization example has no members of
+its own:
+
+<Snippet file="examples/MQ/serialization/data/MyHit.h" start="template<class Archive>" title="MyHit.h" />
+
+The support headers do not write the links. `FairTimeStamp` and `FairMCPoint` derive from
+`FairMultiLinkedData_Interface`, which holds the links. In the headers, the `base_object` line for
+the links is a comment
+([FairTimeStampBoostSerializationSupport.h](/source/fairroot/basemq/FairTimeStampBoostSerializationSupport.h/#L21)).
+Thus a received hit or MC point has no links. See [Links between data levels](/concepts/links/).
+
+:::caution[Energy loss of FairMCPoint]
+`load()` of `FairMCPoint` gives the energy loss to `SetLength()`, not to
+[`SetEnergyLoss()`](/api/FairMCPoint/#SetEnergyLoss):
+
+<Snippet file="fairroot/basemq/FairMCPointBoostSerializationSupport.h" start="Double_t energyLoss = 0.;" end="mcPoint.SetLength(energyLoss);" title="FairMCPointBoostSerializationSupport.h" />
+
+Thus a received MC point has the energy loss as its length, and it keeps its old energy loss (0 for
+a new object). If you need these two values, send MC points with `RootSerializer`.
+:::
+
+## Combine formats in one message
+
+A multipart message (`fair::mq::Parts`) can hold parts in different formats. The sampler of the
+serialization example sends a small header as a Boost archive and the digis as a `TMessage`:
+
+<Snippet file="examples/MQ/serialization/sampler.cxx" start="auto msgHeader(NewMessage());" end="parts.AddPart(std::move(msg));" title="sampler.cxx" />
+
+The processor reads the header with `BoostSerializer<ExHeader>` and the digis with
+`DeserializeTo<TClonesArray>()`. It checks the result for `nullptr`. Then it moves the header part
+into its output, without a new serialization, and adds the hits as a Boost archive:
+
+<Snippet file="examples/MQ/serialization/processor.cxx" start="fair::mq::Parts partsOut;" end="Serialize(*partsOut.At(1), &hits);" title="processor.cxx" />
+
+The receiver must know the format of each part. The example uses a fixed order: part 0 is the
+header, and part 1 holds the data. Each receiver checks that a message has two parts.
+[MQ: serialization](/examples/mq-serialization/) describes all devices of the example.
+
+<MqTopology example="serialization" />
+
+## Send plain structs
+
+For the smallest messages, write structs with members of fixed size into the buffer of the message.
+The `bin` devices of the pixel detector use the classes of
+[PixelPayload.h](/source/examples/MQ/pixelDetector/src/PixelPayload.h/). The sampler makes a
+message for the array of digis and constructs one `PixelPayload::Digi` for each digi in the buffer:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelSamplerBin.cxx" start="Int_t nofEntries = static_cast<TClonesArray*>(fInputObjects[iobj])->GetEntries();" end="parts.AddPart(std::move(msgTCA));" title="FairMQPixelSamplerBin.cxx" />
+
+The receiver casts the buffer to the struct type. It calculates the number of digis from the size of
+the part:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessorBin.h" start="PixelPayload::Digi* payloadD = static_cast<PixelPayload::Digi*>(parts.At(1)->GetData());" end="^        }$" title="FairMQPixelTaskProcessorBin.h" />
+
+Keep these rules in mind:
+
+- Sender and receiver must use the same definition of the struct, and the same compiler and
+  platform. The bytes are a copy of the memory of the sender.
+- The message has no information about its content. Check the number of parts and the size of each
+  part before you read it.
+- The event header is a struct too. The sampler gives it to `NewMessage()` with a function that
+  deletes it
+  ([FairMQPixelSamplerBin.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelSamplerBin.cxx/#L98-L105)).
+
+## Compare the formats in Tutorial 3
+
+[Tutorial 3](/examples/tutorial3/) sends the same digis and hits in five formats. The option
+`--data-format` of each device selects the format. The start script takes it as its argument, for
+example `./start.sh boost`
+([start.sh.in](/repo/examples/advanced/Tutorial3/MQ/start.sh.in#L7-L15)). Each format is a
+specialization of the templates `DigiLoader<T>`, `MQRecoTask<T>` and `FileSink<T>` for a tag type
+of [Payload.h](/source/examples/advanced/Tutorial3/MQ/data/Payload.h/#L46-L50):
+
+| `--data-format` | Tag type | Code | Test |
+| --- | --- | --- | --- |
+| `binary` (default) | `TestDetectorBin` | The structs of `Payload.h` in the buffer of the message | `ex_tutorial3_mq_binary` |
+| `boost` | `TestDetectorBoost` | `BoostSerializer` | `ex_tutorial3_mq_boost` |
+| `tmessage` | `TestDetectorTMessage` | `RootSerializer` | `ex_tutorial3_mq_tmessage` |
+| `flatbuffers` | `TestDetectorFlatBuffers` | Code that the build makes from `PayloadDigi.fbs` and `PayloadHit.fbs` | `ex_tutorial3_mq_flatbuffers` |
+| `protobuf` | `TestDetectorProtobuf` | Code that the build makes from `Payload.proto` | `ex_tutorial3_mq_protobuf` |
+
+The formats `flatbuffers` and `protobuf` exist only if CMake finds these libraries. The same is
+true for their tests ([CMakeLists.txt](/repo/examples/advanced/Tutorial3/CMakeLists.txt#L151-L169)).
+The processor task shows the difference between the formats in one function:
+
+<Tabs>
+  <TabItem label="tmessage">
+
+<Snippet file="examples/advanced/Tutorial3/MQ/processorTask/MQRecoTaskTMessage.h" start="template<>" title="MQRecoTaskTMessage.h" />
+
+  </TabItem>
+  <TabItem label="boost">
+
+<Snippet file="examples/advanced/Tutorial3/MQ/processorTask/MQRecoTaskBoost.h" start="template<>" title="MQRecoTaskBoost.h" />
+
+  </TabItem>
+  <TabItem label="binary">
+
+<Snippet file="examples/advanced/Tutorial3/MQ/processorTask/MQRecoTaskBin.h" start="template<>" title="MQRecoTaskBin.h" />
+
+  </TabItem>
+</Tabs>
+
+In each format, the task rebuilds the message that it received and writes the hits into it. With
+`binary`, the task copies the values field by field, and it calculates the number of digis from the
+size of the message. It does not copy the time stamps of the hits, although `Payload::Hit` has
+fields for them. The binary sink does not read them either, so its hits keep the default time stamp
+−1 of `FairTimeStamp`. With `tmessage` and `boost`, the hits keep their time stamps.
+
+## Problems that can occur
+
+- **The receiver cannot make the object:** the device has no dictionary for the class. Link the
+  library with the dictionary to the device.
+- **A device goes to `ERROR` while it reads a Boost archive:** the message holds another type or
+  another format, and Boost throws an exception. See
+  [Send Boost archives with BoostSerializer](#send-boost-archives-with-boostserializer).
+- **The MC points have a wrong length and an energy loss of 0 after a Boost transfer:** see the
+  caution in [Boost support for FairRoot classes](#boost-support-for-fairroot-classes).
+- **The hits have no links after a Boost transfer:** the support headers do not write the links.
+- **The messages of `RootSerializer` are larger than the data:** the message gets the full buffer of
+  the `TMessage`. See [Send ROOT objects with RootSerializer](#send-root-objects-with-rootserializer).
+- **A device of Tutorial 3 ends with `Invalid valid data format provided (--data-format)`:** the
+  build has no code for this format, for example because CMake did not find FlatBuffers. The
+  message lists the formats that the build has.
+- **The values of plain structs are wrong:** sender and receiver use different struct definitions,
+  compilers or platforms.
+
+## Related pages
+
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): samplers, processors and sinks
+  that use `RootSerializer`.
+- [MQ: serialization](/examples/mq-serialization/): ROOT and Boost formats in one topology.
+- [MQ: pixel detector](/examples/mq-pixel-detector/): ROOT objects and plain structs.
+- [Tutorial 3](/examples/tutorial3/): the same data in five formats.
+- [Data classes](/concepts/data-classes/): digis, hits and MC points.
+- [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/): messages, multipart messages and
+  transports.

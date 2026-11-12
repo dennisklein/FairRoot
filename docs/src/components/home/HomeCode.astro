@@ -1,0 +1,121 @@
+---
+// "A complete task": a task that reads one branch and writes another, and the macro that runs it.
+import { Code } from '@astrojs/starlight/components';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const task = `#include <FairRootManager.h>
+#include <FairTask.h>
+#include <vector>
+#include "MyDigi.h"    // your data classes, with a ROOT dictionary
+#include "MyPoint.h"
+
+class MyDigitizer : public FairTask
+{
+  public:
+    MyDigitizer() : FairTask("MyDigitizer") {}
+
+    // Once for each event.
+    void Exec(Option_t*) override
+    {
+        fDigis->clear();
+        for (auto const& point : *fPoints) {
+            fDigis->emplace_back(point);
+        }
+    }
+
+  protected:
+    // Once, before the first event.
+    InitStatus Init() override
+    {
+        auto* io = FairRootManager::Instance();
+        fPoints = io->InitObjectAs<std::vector<MyPoint> const*>("MyPoint");
+        if (!fPoints) {
+            return kFATAL;   // the input has no branch "MyPoint"
+        }
+        io->RegisterAny("MyDigi", fDigis, true);   // true: write to the output
+        return kSUCCESS;
+    }
+
+  private:
+    std::vector<MyPoint> const* fPoints{nullptr};
+    std::vector<MyDigi>* fDigis{new std::vector<MyDigi>};
+
+    ClassDefOverride(MyDigitizer, 1);
+};`;
+const macro = `void run_digi()
+{
+    FairRunAna run;
+    run.SetSource(new FairFileSource("sim.root"));
+    run.SetSink(std::make_unique<FairRootFileSink>("digi.root"));
+
+    auto* parIn = new FairParRootFileIo();
+    parIn->open("params.root");
+    run.GetRuntimeDb()->setFirstInput(parIn);
+
+    run.AddTask(new MyDigitizer());
+    run.Init();   // calls Init() of each task
+    run.Run();    // calls Exec() for each event, then Finish()
+}`;
+---
+
+<section class="fr-homecode not-content" aria-labelledby="home-code">
+  <div class="hc-text">
+    <h2 id="home-code">A complete task</h2>
+    <p>A task does one step of the reconstruction or the analysis. Derive from <code>FairTask</code> and override the hooks that you need.</p>
+    <p>In <code>Init()</code>, the task gets its input branches from <code>FairRootManager</code> and registers its output branches. Then the run calls <code>Exec()</code> once for each event.</p>
+    <p>A ROOT macro puts the tasks into a run, with a source, a sink and the parameter input.</p>
+    <a href={`${base}/start/first-task/`}>Your first task →</a>
+  </div>
+  <div class="hc-code">
+    <Code code={task} lang="cpp" title="MyDigitizer.h" />
+    <Code code={macro} lang="cpp" title="run_digi.C" />
+  </div>
+</section>
+
+<style>
+  .fr-homecode {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: 2rem;
+    margin-block: 0 2rem;
+  }
+  @media (max-width: 60rem) {
+    .fr-homecode {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1rem;
+    }
+  }
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 800;
+    font-stretch: 112%;
+    line-height: 1.15;
+    margin: 0 0 0.75rem;
+    color: var(--fr-ink);
+  }
+  .hc-text p {
+    margin: 0 0 0.9rem;
+    color: var(--fr-ink-2);
+    max-width: 44ch;
+  }
+  .hc-text code {
+    font-size: 0.85em;
+    background: var(--fr-paper-3);
+    border: 1px solid var(--fr-rule);
+    border-radius: 3px;
+    padding: 0.05em 0.3em;
+  }
+  .hc-text a {
+    font-weight: 600;
+    color: var(--fr-link);
+    text-decoration: none;
+  }
+  .hc-code {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+  .hc-code :global(.expressive-code) {
+    margin: 0 !important;
+  }
+</style>

@@ -1,0 +1,167 @@
+---
+title: 'MQ: split simulation'
+description: 'The pixel detector simulated in FairMQ devices: a generator, transport devices and a chunk merger, with a sink and a parameter server. The programs, their options and the tests.'
+sidebar:
+  order: 11
+code: [examples/MQ/pixelSimSplit/run/runMQGen.cxx, examples/MQ/pixelSimSplit/run/runMQTrans.cxx,
+  examples/MQ/pixelSimSplit/run/runMQChunkMerger.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+This example simulates the detector of the [pixel detector example](/examples/mq-pixel-detector/)
+in FairMQ devices. A generator splits each event into chunks of primaries, transport devices
+simulate the chunks, and a merger puts each event together again. A sink writes the events, and
+the parameter server stores the parameter containers.
+[Split a simulation over devices](/online/sim-split/) explains how the devices work.
+
+## Files
+
+<FileTree>
+
+- examples/MQ/pixelSimSplit/
+  - src/ library `ExSimMQ`
+    - FairMCSplitEventHeader.h event header with the number of chunks and the chunk start
+    - devices/ generator, transport device and merger
+  - run/ main functions of the programs
+    - scripts/
+      - test-splitMQ.sh.in test with FairMQ only
+      - test-splitMC.sh.in test with DDS
+      - splitMC-topology.xml DDS topology
+  - README.md
+
+</FileTree>
+
+CMake builds the programs into `<build>/examples/MQ/pixelSimSplit/run/`
+([run/CMakeLists.txt](/repo/examples/MQ/pixelSimSplit/run/CMakeLists.txt)). The topology also
+uses `pixel-sink` of the pixel detector example and `parmq-server` from `<build>/bin/`.
+
+## The programs and their options
+
+Each program has a main function with `fairGetDevice()` and `addCustomOptions()`, see
+[Write the main function](/online/fairmq-devices/#write-the-main-function).
+
+`pixel-sim-gen` runs the generator:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--nof-events` | none, required | The number of events. |
+| `--chunk-size` | `0` | The maximum number of primaries in a chunk. `0` sends each event in one message. Use a value that divides the number of primaries, see [Split a simulation over devices](/online/sim-split/). |
+| `--running-mode` | `pp` | `pp` pushes the chunks. `rr` sends a chunk for each request. The mode `rr` has no end. |
+| `--ack-channel` | empty | The channel for the acknowledgments of the sink. Empty means no acknowledgments. |
+| `--random-seed` | `0` | The seed of `gRandom`. |
+| `--fairroot-config-dir` | empty | Sets `CONFIG_DIR`. Empty means `$VMCWORKDIR/common/gconfig`. |
+
+The main function adds a box generator with 100 positive pions (PDG code 211) for each event:
+
+<Snippet file="examples/MQ/pixelSimSplit/run/runMQGen.cxx" start="Int_t partPdgC[]" end="primGen->AddGenerator(boxGen);" />
+
+`pixel-sim-transport` runs a transport device:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--transport-name` | `TGeant3` | The transport engine. |
+| `--detector-library` | none | A library with the function `ExternCreateDetector()`. Give the option once for each library. |
+| `--running-mode` | `pp` | `pp` receives the pushed chunks. `rr` requests each chunk. |
+| `--param-channel-name` | `updateChannel` | The channel to the parameter server. |
+| `--run-digi-tasks` | `false` | Adds the task `PixelDigitize` with the parameters of `pixel_digi.par`. |
+| `--random-seed` | `0` | The seed of `gRandom`. |
+| `--fairroot-config-dir` | empty | Sets `CONFIG_DIR`. Empty means `$VMCWORKDIR/common/gconfig`. |
+
+The main function sets `GEOMPATH` to `$VMCWORKDIR/common/geometry`, the materials to `media.geo`
+and adds the cave `cave_vacuum.geo`
+([runMQTrans.cxx](/source/examples/MQ/pixelSimSplit/run/runMQTrans.cxx/#L42-L86)). It adds no
+detector. The tests give the pixel detector with `--detector-library`.
+
+The main functions of the generator and the transport device read `VMCWORKDIR`. Thus set the
+environment with `<build>/config.sh` before you start the programs.
+
+`pixel-sim-chunk-merger` runs the merger. It has the options `--in-channel` (default `data-in`) and
+`--out-channel` (default `data-out`). [MQ: pixel detector](/examples/mq-pixel-detector/) describes
+the options of `pixel-sink`.
+
+## Run the test
+
+CTest runs `test-splitMQ.sh` as the test `ex_MQ_pixel_split`. The time limit is 90 seconds. The
+test passes when the script ends with the exit code 0:
+
+```sh
+cd <build>
+ctest -R '^ex_MQ_pixel_split$' --output-on-failure
+```
+
+You can also start the script yourself. It sets the environment with `config.sh`:
+
+```sh
+cd <build>/examples/MQ/pixelSimSplit/run
+./test-splitMQ.sh
+```
+
+The script defines the channels with `ipc://` addresses:
+
+<Snippet file="examples/MQ/pixelSimSplit/run/scripts/test-splitMQ.sh.in" start='CH_NAME[PRIMARIES]="primariesChannel"' end="CHANNEL[ACK]=" lang="sh" />
+
+Then it defines one device of each kind:
+
+<Snippet file="examples/MQ/pixelSimSplit/run/scripts/test-splitMQ.sh.in" start="DEVICES[GENERATOR]=" end='$PARS_FILE $COMMON_OPTS"' lang="sh" />
+
+- The generator makes 100 events with chunks of 10 primaries in the mode `pp`.
+- One transport device uses the engine `TGeant4` and the library `<build>/lib/libExPixel.so`
+  (`.dylib` on macOS).
+- All devices get `--control static`, so they go to `RUNNING` without a controller.
+- Each device writes its output into `<DEVICE>.log` in the current folder, for example
+  `GENERATOR.log`.
+
+The script waits for the end of the generator. Then it stops the other devices with `kill`. If
+one of these devices ends with an error, the script shows the last 50 lines of its log. At the end,
+it counts the entries of the tree `cbmsim` with ROOT. The test fails if the data file does not have
+100 events.
+
+The test writes two ROOT files into `<build>/examples/MQ/pixelSimSplit/run/`:
+
+| File | Written by | Content |
+| --- | --- | --- |
+| `MQ.simulation_TGeant4.data.root` | `pixel-sink` | The tree `cbmsim` with one entry for each event |
+| `MQ.simulation_TGeant4.pars.root` | `parmq-server` | The parameter containers of the transport device |
+
+:::note
+The parameter file has the containers for the run ID of `FairRunSim` in the transport device. The
+events carry the run ID of the parameter server.
+[Split a simulation over devices](/online/sim-split/) explains the difference.
+:::
+
+## The DDS test
+
+The test `ex_MQ_pixel_split_DDS` runs the same topology with [DDS](https://github.com/FairRootGroup/DDS).
+CMake adds it only if FairMQ has `fairmq-dds-command-ui`, DDS has the version 3.5 or newer and
+FairMQ has the version 1.4.23 or newer. The test passes when the output contains
+`Shell script finished successfully`.
+
+The script `test-splitMC.sh` starts a DDS session with five agents on `localhost` and activates the
+topology `splitMC-topology.xml`. It moves the devices to `RUNNING` with `fairmq-dds-command-ui`.
+When the generator goes from `RUNNING` to `READY`, the script stops all devices and checks the
+number of events
+([test-splitMC.sh.in](/repo/examples/MQ/pixelSimSplit/run/scripts/test-splitMC.sh.in)).
+
+With DDS, the sink and the parameter server put the DDS session ID into the names of their files,
+for example `DDS.simulation_TGeant4.data.<session ID>.root`. The topology starts one transport
+device:
+
+<Snippet file="examples/MQ/pixelSimSplit/run/scripts/splitMC-topology.xml" start='<main @dds_name_tag@="main">' end="</main>" />
+
+To run more transport devices, increase `n` of the group `TransporterGroup`. The script starts
+five DDS agents, one for each task of the topology. Thus also increase `NOFNEEDEDAGENTS` in the
+script.
+
+## Related pages
+
+- [Split a simulation over devices](/online/sim-split/): the chunks, the merger and the end of the
+  run.
+- [MQ: pixel detector](/examples/mq-pixel-detector/): the detector, the sink and `pixel-sim`.
+- [Parameters over FairMQ](/online/parameters/): the parameter server and its update channel.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the main function and
+  `FairOnlineSink`.

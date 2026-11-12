@@ -1,0 +1,436 @@
+---
+title: 'Start a project from a template'
+description: 'Copy a project template, rename it with rename.sh, build it against an installed FairRoot, and run run_sim.C and the event display. Then change the names, the geometry and the data classes.'
+sidebar:
+  order: 5
+code: [templates/project_root_containers/macro/run_sim.C, templates/project_root_containers/macro/eventDisplay.C, templates/project_root_containers/NewDetector/NewDetector.cxx, templates/project_stl_containers/NewDetector/NewDetector.cxx, templates/project_root_containers/MyProjData/MyProjStack.cxx, templates/project_root_containers/gconfig/g4Config.C]
+---
+
+import { Steps, FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot has two project templates. Each one is a complete CMake project with a stack, a detector,
+passive modules, a magnetic field and two ROOT macros. Copy one, rename it for your experiment and
+build it against an installed FairRoot. You then have a simulation that runs, and you change it step
+by step.
+
+The templates are only in the FairRoot source tree. The installation does not copy them:
+[templates/CMakeLists.txt](/repo/templates/CMakeLists.txt) has no install rule. Take them from the source
+tree of the FairRoot version that you build against.
+
+## The two project templates
+
+Both templates have the same folders, CMake files, macros and passive modules. They differ in the
+container of the MC points and in the track selection of the stack:
+
+| | `project_root_containers` | `project_stl_containers` |
+| --- | --- | --- |
+| MC points of the detector | `TClonesArray` ([NewDetector.h](/source/templates/project_root_containers/NewDetector/NewDetector.h/#L85)) | `std::vector<NewDetectorPoint*>` ([NewDetector.h](/source/templates/project_stl_containers/NewDetector/NewDetector.h/#L84)) |
+| MC point class | Derives from `FairMCPoint` | A plain class with its own members and `ClassDef` |
+| Branch registration | `Register()`; `RegisterAny()` in multithreaded mode | Always `RegisterAny()` |
+| `GetCollection()` of the detector | Returns the `TClonesArray` | Returns `NULL` |
+| Track selection of the stack | `SelectTracks()` applies the cuts | None: each particle becomes an MC track |
+| `UpdateTrackIndex()` of the stack | Updates the mother IDs and the track IDs in the MC points | Empty: the body is a comment |
+
+Both stacks write the branch `MCTrack` as a `TClonesArray` of `MyProjMCTrack`
+([MyProjStack.cxx](/source/templates/project_root_containers/MyProjData/MyProjStack.cxx/#L356-L363)).
+Start from `project_root_containers` unless you need `std::vector`. The point drawing of the event
+display also reads a `TClonesArray`
+([FairDataSourceI.cxx](/source/fairroot/eventdisplay/datasource/FairDataSourceI.cxx/#L24-L32)).
+
+### What a template contains
+
+<FileTree>
+- project_root_containers/
+  - CMakeLists.txt finds FairRoot and the other packages, adds the folders, writes config.sh
+  - rename.sh renames the project
+  - CTestConfig.cmake settings for a CDash dashboard
+  - CTestCustom.cmake
+  - MyProjData/ library MyProjData: MyProjStack, MyProjMCTrack, the detector IDs
+  - MyProjGenerators/ library MyGen: Pythia6Generator, Pythia8Generator
+  - NewDetector/ library NewDetector: the detector, its MC point, its geometry and parameter classes
+  - passive/ library Passive: MyCave, MyMagnet, MyPipe
+  - field/ library Field: MyConstField, MyFieldPar, MyFieldCreator
+  - gconfig/ macros that configure the transport engines
+  - geometry/ cave.geo and media.geo
+  - macro/ run_sim.C and eventDisplay.C
+</FileTree>
+
+Each source folder builds one shared library with a ROOT dictionary through `GENERATE_LIBRARY()`.
+CMake adds `MyProjGenerators` only if the targets `pythia8` and `Pythia6` exist
+([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L141-L147)). The module
+[FindPythia8.cmake](/repo/cmake/modules/FindPythia8.cmake) of FairRoot defines no target `pythia8`.
+So CMake skips the generators unless another package defines this target.
+
+## Copy and rename the template
+
+<Steps>
+
+1. Copy the template folder out of the FairRoot source tree. Here the new project gets the folder
+   `panda`:
+
+   ```sh
+   cp -RP path/to/FairRoot/templates/project_root_containers panda
+   ```
+
+2. Go into the copy:
+
+   ```sh
+   cd panda
+   ```
+
+3. Run the script with the project name, the class prefix and the detector name:
+
+   ```sh
+   ./rename.sh Panda Pnd stt
+   ```
+
+</Steps>
+
+The template test of FairRoot does the same steps with `./rename.sh TestProj Tst det`
+([test_project.sh.in](/repo/templates/test_project.sh.in#L61-L64)). The script needs exactly three
+arguments ([rename.sh](/repo/templates/project_root_containers/rename.sh#L6-L29)):
+
+| Argument | Example | What the script makes of it |
+| --- | --- | --- |
+| Project name | `Panda` | The upper-case form `PANDA` replaces `MYPROJ`, the name of the CMake project. |
+| Prefix | `Pnd` | First letter upper case, the rest lower case. It replaces `MyProj` and `My` in folder, file, class and library names. |
+| Detector name | `stt` | The lower-case form is the new name of the folder `NewDetector`. The prefix plus the capitalized name (`PndStt`) replaces `NewDetector` in file and class names. |
+
+After `./rename.sh Panda Pnd stt`, the main names are these:
+
+| In the template | After the script |
+| --- | --- |
+| `project(MYPROJ VERSION 1.0.0)` | `project(PANDA VERSION 1.0.0)` |
+| Folder and library `MyProjData` | `PndData` |
+| `MyProjStack`, `MyProjMCTrack`, `MyProjDetectorList.h` | `PndStack`, `PndMCTrack`, `PndDetectorList.h` |
+| Folder `MyProjGenerators`, library `MyGen` | `PndGenerators`, `PndGen` |
+| Folder `NewDetector` | `stt` |
+| `NewDetector`, `NewDetectorPoint`, `NewDetectorGeoPar` | `PndStt`, `PndSttPoint`, `PndSttGeoPar` |
+| Detector ID `kNewDetector` | `kPndStt` |
+| Branch `NewDetectorPoint` | `PndSttPoint` |
+| `MyCave`, `MyMagnet`, `MyPipe`, `MyConstField` | `PndCave`, `PndMagnet`, `PndPipe`, `PndConstField` |
+
+The script leaves these parts unchanged:
+
+- The module names in `run_sim.C`: `"CAVE"`, `"Magnet"`, `"Pipe"` and `"TestDetector"`.
+- The libraries `Passive` and `Field`.
+- The project name `MyProj` in `CTestConfig.cmake`.
+- The stack class `PndStack` in `gconfig/Geane.C`
+  ([Geane.C](/source/templates/project_root_containers/gconfig/Geane.C/#L26)). It is correct only for
+  the prefix `Pnd`.
+- The script `MyProjGenerators/rename.sh`. It renames files `PndPythia*`, which do not exist. Do not
+  run it.
+
+:::caution[Names that start with "My"]
+Do not use a prefix or a detector name that starts with `My`, in any case. The script replaces `My`
+in several passes, so it changes these names twice. For example, `./rename.sh MyExperiment MyExp det`
+makes the folder `MyexpData`, but `CMakeLists.txt` then adds
+`MyexpexpData`. The script still ends with exit code 0.
+:::
+
+The script runs only on Linux and macOS
+([rename.sh](/repo/templates/project_root_containers/rename.sh#L31-L43)). On other systems, it prints
+`Platform not supported` and stops before it changes a file.
+
+## Build the project
+
+The top-level `CMakeLists.txt` needs the environment variable `FAIRROOTPATH`. It adds the CMake modules
+of the FairRoot installation and then looks for FairRoot:
+
+<Snippet file="templates/project_root_containers/CMakeLists.txt" start="IF(NOT DEFINED ENV{FAIRROOTPATH})" end="find_package2(PUBLIC FairRoot VERSION 19.0 REQUIRED)" title="CMakeLists.txt" />
+
+- Without `FAIRROOTPATH`, CMake stops with the message
+  `You did not define the environment variable FAIRROOTPATH ...`.
+- `FAIRROOTPATH` must be the install prefix of FairRoot. Only the installation has the folder
+  `share/fairbase/cmake/modules` ([cmake/CMakeLists.txt](/repo/cmake/CMakeLists.txt#L9-L14)).
+- `find_package2()` comes from FairCMakeModules. CMake must find FairCMakeModules 0.2 or newer, for
+  example in the FairSoft installation.
+- `FindFairRoot.cmake` puts `FAIRROOTPATH` in front of `CMAKE_PREFIX_PATH` and loads the package
+  configuration of FairRoot ([FindFairRoot.cmake](/repo/cmake/modules/FindFairRoot.cmake#L13-L41)).
+  It prints the version, the C++ standard and the prefix that it found.
+- The project asks for FairRoot 19.0 or newer.
+- `SIMPATH` is optional. If it is set, CMake searches the FairSoft installation first.
+
+Then the file looks for ROOT, VMC, FairLogger, Pythia, Geant3, Geant4, VGM, Geant4 VMC, HepMC and
+Boost ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L81-L125)). It marks
+only ROOT, FairLogger and VMC as required. CMake looks for a separate VMC package only if ROOT has no
+VMC. At the end, `find_package2_implicit_dependencies()` searches each dependency that FairRoot
+recorded and that the project did not find yet, as a required package. So the project needs the
+packages that your FairRoot build found, see [Find the dependencies](/start/cmake/#find-the-dependencies).
+
+<Steps>
+
+1. Set the install prefixes of FairRoot and, if you use it, of FairSoft:
+
+   ```sh
+   export FAIRROOTPATH=/path/to/fairroot/install
+   export SIMPATH=/path/to/fairsoft/install
+   ```
+
+2. Configure the project in a separate build folder:
+
+   ```sh
+   cmake -S . -B build
+   ```
+
+3. Build the libraries:
+
+   ```sh
+   cmake --build build
+   ```
+
+</Steps>
+
+- `CHECK_OUT_OF_SOURCE_BUILD()` stops CMake if the build folder is the source folder
+  ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L166-L174)).
+- Without `CMAKE_BUILD_TYPE`, the template uses `Debug`.
+- The template calls `Check_Compiler()` before it finds ROOT
+  ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L49-L83)). So if you do not
+  set `CMAKE_CXX_STANDARD`, `Check_Compiler()` cannot take the C++ standard from ROOT. It takes the
+  standard from `fairsoft-config` in `$SIMPATH/bin` or `$FAIRSOFT_ROOT/bin`, if this program exists.
+  It never uses a standard lower than the standard of FairRoot
+  ([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L18-L53)). The template test passes
+  `-DCMAKE_CXX_STANDARD` with the standard of the FairRoot build.
+
+The build puts the libraries into `build/lib`, each with a `.rootmap` file and a `.pcm` file for its
+dictionary ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L91-L117)). It also writes
+`build/config.sh` ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L149)).
+For the modern CMake targets of FairRoot, see [Use FairRoot in a CMake project](/start/cmake/).
+
+## Set the environment
+
+Load `config.sh` into each new shell before you run a macro:
+
+```sh
+source build/config.sh
+```
+
+`config.sh` first runs `check_system.sh`. On Linux, this script compares the distribution
+(`lsb_release -sd`) and the machine type (`uname -m`) with the values of the CMake run. If one of them
+differs, `config.sh` sets none of the variables in the table below
+([check_system.sh.in](/repo/cmake/scripts/check_system.sh.in),
+[config.sh.in](/repo/cmake/scripts/config.sh.in#L5-L6)).
+
+| Variable | Value |
+| --- | --- |
+| `VMCWORKDIR` | The source folder of the project ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L59)) |
+| `LD_LIBRARY_PATH` | `build/lib` first, then the library folder of FairRoot and the library folders of packages such as Geant3 and Geant4 VMC ([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L21-L27)) |
+| `ROOT_INCLUDE_PATH` | The include folders of Geant3 and FairRoot |
+| `PATH` | The `bin` folder of ROOT in front |
+| `SIMPATH`, `FAIRROOTPATH` | The values of the CMake run |
+| `G3SYS`, `PYTHIA8DATA` and the Geant4 data variables | The data folders of the engines and of Pythia 8 |
+
+ROOT reads the `.rootmap` files in the folders of `LD_LIBRARY_PATH`. Thus the macros use the classes of
+the project without `#include` lines. FairRoot finds the input files of a run through `VMCWORKDIR`:
+
+| File | Where FairRoot looks for it |
+| --- | --- |
+| `media.geo` | In `$GEOMPATH` if this variable is set, else in `$VMCWORKDIR/geometry/` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L344-L361)) |
+| `cave.geo` | In `$GEOMPATH`, then in `$VMCWORKDIR/geometry/` ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L174-L215)) |
+| `g4Config.C`, `g3Config.C`, `SetCuts.C` | In `$CONFIG_DIR`, then in `$VMCWORKDIR/gconfig/` ([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L34-L169)) |
+
+[Environment variables](/reference/environment/) lists all variables.
+
+## Run the first simulation
+
+Start the macro from the build folder. The output files go into the current folder.
+
+```sh
+cd build
+root -b -q '../macro/run_sim.C(10)'
+```
+
+`run_sim()` has three parameters
+([run_sim.C](/source/templates/project_root_containers/macro/run_sim.C/#L1)): the number of events
+(default 100), the transport engine (`"TGeant4"`, or `"TGeant3"` for Geant3) and the multithreaded
+mode (default `false`). The first part of the macro makes the run and adds the modules:
+
+<Snippet file="templates/project_root_containers/macro/run_sim.C" start="FairRunSim* run = new FairRunSim();" end="run->AddModule(NewDet);" title="macro/run_sim.C" />
+
+- `SetName()` selects the transport engine. `SetSink()` writes the output tree to `test.root`.
+- `SetMaterials()` selects the media file `media.geo`. `Init()` reads it.
+- The cave reads its shape from `cave.geo`. The magnet, the pipe and the detector make their volumes in
+  C++ with `TGeo` classes.
+- `NewDetector("TestDetector", kTRUE)` makes an active detector: the MC application calls its
+  `ProcessHits()`.
+
+Next, the macro sets a constant field of 20 kG along y, inside a box of ±200 cm. Then it adds the
+primary generator:
+
+<Snippet file="templates/project_root_containers/macro/run_sim.C" start="FairPrimaryGenerator* primGen" end="run->SetGenerator(primGen);" title="macro/run_sim.C" />
+
+The second argument of `FairBoxGenerator` is the multiplicity
+([FairBoxGenerator.h](/source/fairroot/generators/FairBoxGenerator.h/#L54)). So each event has five
+muons (PDG code 13). The comment `1 = multipl.` is wrong. The last part initializes and runs the
+simulation:
+
+<Snippet file="templates/project_root_containers/macro/run_sim.C" start="run->SetStoreTraj(kTRUE);" end="run->CreateGeometryFile" title="macro/run_sim.C" />
+
+| File | Contents |
+| --- | --- |
+| `test.root` | The branches `MCTrack`, `NewDetectorPoint` (after the rename `PndSttPoint`), `MCEventHeader.`, and the trajectories in `GeoTracks` |
+| `params.root` | The parameter containers of the runtime database |
+| `geofile_full.root` | The geometry |
+
+### The engine configuration
+
+`run_sim.C` sets no engine configuration. So `FairRunSim` uses `FairGenericVMCConfig`
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L309)). This class loads
+`g4Config.C` or `g3Config.C` and then `SetCuts.C`, and it logs a deprecation warning
+([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L26-L29)). The
+configuration macro also makes the stack:
+
+<Snippet file="templates/project_root_containers/gconfig/g4Config.C" start="/// create the Specific stack" end="geant4->SetStack(stack);" title="gconfig/g4Config.C" />
+
+With the values of its constructor, the root stack keeps a secondary only if it has at least one MC
+point or a kept daughter
+([MyProjStack.cxx](/source/templates/project_root_containers/MyProjData/MyProjStack.cxx/#L38-L56)).
+The macro sets this minimum to zero. `g4Config.C` also sends the Geant4 commands in
+`gconfig/g4config.in`. For the YAML configuration of the examples, see
+[Transport engines and their configuration](/simulation/engines/).
+
+## Look at the events
+
+Start the event display from the same folder:
+
+```sh
+root ../macro/eventDisplay.C
+```
+
+<Snippet file="templates/project_root_containers/macro/eventDisplay.C" title="macro/eventDisplay.C" />
+
+The macro reads `test.root` and `params.root` and writes `tst.root`. `FairEventManager::Init()` makes
+the Eve manager and initializes the run. To select an event, click the element `FairEventManager` in the
+Eve browser. Its editor has the tab `Info` with the field `Current Event:`
+([FairEventManagerEditor.cxx](/source/fairroot/eventdisplay/FairEventManagerEditor.cxx/#L64-L105)).
+
+### The display shows no MC tracks
+
+`FairMCTracksDraw` draws the branch `MCTrack` only if it holds `FairMCTrack` objects:
+
+<Snippet file="examples/common/eventdisplay/FairEveMCTracks.cxx" start="TClass* classTrack = fContainer->GetClass();" end="^    }" title="examples/common/eventdisplay/FairEveMCTracks.cxx" />
+
+The template stack writes `MyProjMCTrack` objects. So `Init()` returns `kERROR`, and
+`FairTask::InitTask()` makes the task inactive
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)). Also, `FairMCTracksDraw` is not in
+the core libraries of FairRoot. It is in the example library `ExEventDisplay`. FairRoot builds this
+library only with the examples, Geant3 and a ROOT with OpenGL
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L14-L25)).
+
+Draw the trajectories instead. `run_sim.C` stores them in the branch `GeoTracks`, because it calls
+`SetStoreTraj(kTRUE)`. `FairGeoTracksDraw` reads this branch
+([FairEveGeoTracks.cxx](/source/fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx/#L48-L60)). Add it
+before `fMan->Init()`:
+
+```cpp title="macro/eventDisplay.C"
+FairGeoTracksDraw* geoTracks = new FairGeoTracksDraw();
+fMan->AddTask(geoTracks);
+```
+
+To draw the MC points, add a [`FairMCPointDraw`](/api/FairMCPointDraw/) with the branch name, a color
+and a marker style, for example `new FairMCPointDraw("PndSttPoint", kRed, kFullSquare)`. This works
+only with `project_root_containers`, because the class reads a `TClonesArray` of `FairMCPoint`.
+[Event display](/reconstruction/event-display/) describes all drawing tasks.
+
+## What to change first
+
+Change the template in small steps. After each step, build the project and run `run_sim.C` again.
+
+### The detector geometry
+
+`ConstructGeometry()` of the detector makes all its volumes with `TGeo` calls. This is the first of
+four volumes:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="void NewDetector::ConstructGeometry()" end="AddSensitiveVolume(det1);" title="NewDetector/NewDetector.cxx" />
+
+| Volume | Shape | Position | Sensitive |
+| --- | --- | --- | --- |
+| `Det1` | Silicon tube, r = 5–80 cm, 0.2 cm thick | z = 0 | Yes |
+| `Pass1` | Silicon tube, r = 5–120 cm, 20 cm thick | z = 20 cm | No |
+| `Det2` | Silicon tube, r = 5–150 cm, 0.2 cm thick | z = 70 cm | Yes |
+| `Det3` | Silicon tube, r = 5–150 cm, 0.2 cm thick | z = 150 cm | Yes |
+
+Replace these volumes with your detector. Two places mark the sensitive volumes. `ConstructGeometry()`
+calls `AddSensitiveVolume()` for `Det1`, `Det2` and `Det3`. Also, `Initialize()` calls
+`DefineSensitiveVolumes()`, which marks each volume of the whole geometry whose name contains `Det`
+([NewDetector.cxx](/source/templates/project_root_containers/NewDetector/NewDetector.cxx/#L80-L91)):
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="Bool_t NewDetector::IsSensitive" title="NewDetector/NewDetector.cxx" />
+
+The volume list of FairRoot accepts each volume name only one time. For a name that it has already, it
+logs an error `already defined` and ignores the volume
+([FairVolumeList.cxx](/source/fairroot/base/sim/FairVolumeList.cxx/#L33-L46)). So the template logs this
+error for the three discs when `Initialize()` runs. [Initialize()](/simulation/detectors/#initialize)
+of the detector page shows the fix.
+
+Change the rule in `IsSensitive()` together with the volume names. Otherwise, volumes of other modules
+with `Det` in their names also become sensitive. The beam pipe needs a fix, too: `MyPipe` places a
+vacuum volume with the same shape and name as the carbon wall, so the two volumes overlap
+([MyPipe.cxx](/source/templates/project_root_containers/passive/MyPipe.cxx/#L60-L73)).
+
+### The data classes
+
+`ProcessHits()` makes one MC point when a track leaves, stops in or disappears in a sensitive volume
+([NewDetector.cxx](/source/templates/project_root_containers/NewDetector/NewDetector.cxx/#L93-L132)).
+It keeps the position, the momentum and the time at the entrance and sums the energy loss of all steps.
+It makes no point if the energy loss is zero. Add the members that your detector needs to the MC point
+class. Increase the class version in `ClassDef` when you change the members.
+
+Each detector has an ID in the enum `DetectorId`:
+
+<Snippet file="templates/project_root_containers/MyProjData/MyProjDetectorList.h" start="// kSTOPHERE" end="^};" title="MyProjData/MyProjDetectorList.h" />
+
+Add each new detector before `kSTOPHERE`. The stack counts the MC points of a track in a loop from
+`kNewDetector` to `kSTOPHERE`
+([MyProjStack.cxx](/source/templates/project_root_containers/MyProjData/MyProjStack.cxx/#L454-L461)).
+So keep the first ID of the template as the first entry, or change the loops.
+
+`MyProjMCTrack` has counters for the MC points in each detector, but the template does not fill them:
+
+<Snippet file="templates/project_root_containers/MyProjData/MyProjMCTrack.cxx" start="Int_t MyProjMCTrack::GetNPoints" title="MyProjData/MyProjMCTrack.cxx" />
+
+The body of `SetNPoints()` is also a comment. Write the bit layout for your detectors, or remove the
+counters. The track selection does not use them: the stack counts the points in its own map.
+
+### The stack cuts
+
+The stack of `project_root_containers` has four setters
+([MyProjStack.h](/source/templates/project_root_containers/MyProjData/MyProjStack.h/#L168-L172)). Set
+them in `g4Config.C` and `g3Config.C`, where the stack is made:
+
+| Setter | Constructor value | Value in `g4Config.C` and `g3Config.C` |
+| --- | --- | --- |
+| `StoreSecondaries()` | `kTRUE` | `kTRUE` |
+| `SetMinPoints()` | 1 | 0 |
+| `SetEnergyCut()` | 0 GeV | Not set |
+| `StoreMothers()` | `kTRUE` | Not set |
+
+The stack always keeps the primaries. A secondary needs all three cuts, and with `StoreMothers()` the
+stack also keeps the mothers of each kept track
+([MyProjStack.cxx](/source/templates/project_root_containers/MyProjData/MyProjStack.cxx/#L433-L494)).
+For the stack in general, see [The particle stack and MC tracks](/simulation/stack/).
+
+### The field and the generator
+
+- The constant field of `run_sim.C` is for the simulation. The field factory of the template is a static
+  object in the library `Field`. In a reconstruction run that loads this library, `FairRunAna::Init()`
+  asks the factory for the parameter container `MyFieldPar`
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L215-L230)). No container factory of the
+  template makes `MyFieldPar`, so the factory gives no field
+  ([MyFieldCreator.cxx](/source/templates/project_root_containers/field/MyFieldCreator.cxx/#L26-L64)).
+  See [Magnetic fields](/simulation/fields/).
+- Replace the box generator with the generators of your experiment. See
+  [Primary generators](/simulation/generators/).
+
+## Related pages
+
+- [Templates](/tools/templates/): all templates of FairRoot and their scripts.
+- [Use FairRoot in a CMake project](/start/cmake/): find FairRoot and use its CMake targets.
+- [Write a detector](/simulation/detectors/): the detector class in detail.
+- [Geometry and materials](/simulation/geometry/): `.geo` files, media and ROOT geometry files.
+- [Transport engines and their configuration](/simulation/engines/): the configuration that replaces
+  the `gconfig/` macros.
+- [Environment variables](/reference/environment/): `config.sh`, `VMCWORKDIR`, `GEOMPATH` and
+  `CONFIG_DIR`.
+- [Event display](/reconstruction/event-display/): the drawing tasks and the branches they read.

@@ -1,0 +1,343 @@
+---
+title: 'Write a detector'
+description: 'A detector is a module with sensitive volumes. For each step in them, FairRoot calls ProcessHits(), and the detector stores MC points in a collection that the run writes.'
+sidebar:
+  order: 5
+code: [fairroot/base/sim/FairDetector.h, fairroot/base/sim/FairDetector.cxx, fairroot/base/sim/FairModule.h, fairroot/base/sim/FairModule.cxx, fairroot/base/sim/FairMCApplication.cxx, templates/project_root_containers/NewDetector/NewDetector.h, templates/project_root_containers/NewDetector/NewDetector.cxx, templates/project_root_containers/NewDetector/NewDetectorContFact.cxx, templates/project_stl_containers/NewDetector/NewDetector.cxx, examples/simulation/Tutorial1/src/FairTutorialDet1.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+import DetectorLifecycle from '../../../components/diagrams/DetectorLifecycle.astro';
+
+A detector is a module that records what the particles do in its sensitive volumes. For each step in
+a sensitive volume, the MC application calls `ProcessHits()` of the detector. The detector makes MC
+points from the steps and keeps them in a collection, which the run writes as a branch.
+
+This page shows the parts of a detector class with the template `NewDetector` and the detector of
+Tutorial 1. For the volumes, see [Geometry and materials](/simulation/geometry/).
+
+## Modules and detectors
+
+[`FairModule`](/api/FairModule/) is the base class of all parts of the geometry: the cave, the beam
+pipe, the magnet and the detectors. [`FairDetector`](/api/FairDetector/) derives from it and adds the
+functions for the transport and the output. A passive module only builds volumes.
+
+The second argument of the constructor makes a detector active or inactive. The MC application calls
+the detector functions only for active detectors
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L115-L121)). An inactive
+detector builds its volumes, but it records nothing.
+
+A detector has three different IDs. Do not mix them up:
+
+| ID | Where it comes from | What uses it |
+| --- | --- | --- |
+| Module ID | `AddModule()` gives 0, 1, 2 and so on, in the order of the calls ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L127-L133)) | `FairDetector::Initialize()` selects the sensitive volumes of the module with it ([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L109-L116)) |
+| Detector ID | The third argument of the `FairDetector` constructor, default 0 ([FairDetector.h](/source/fairroot/base/sim/FairDetector.h/#L36)) | Only your code. FairRoot does not read it. [`GetDetId()`](/api/FairDetector/#GetDetId) returns it. |
+| Detector ID of an MC point | The argument `detID` of the [`FairMCPoint`](/api/FairMCPoint/#FairMCPoint-2) constructor | Your digitization. The template gives the volume ID of the transport engine. |
+
+The templates and the examples give an entry of the enum `DetectorId` as detector ID, for example
+`kNewDetector`. They use the same entry when they count the MC points in the stack, see
+[The particle stack and MC tracks](/simulation/stack/).
+
+## The functions of a detector
+
+`FairDetector` has four pure virtual functions: `ProcessHits()`, `Register()`, `GetCollection()` and
+`Reset()`. Your class must implement them:
+
+<Snippet file="fairroot/base/sim/FairDetector.h" start="virtual Bool_t ProcessHits(FairVolume* v = 0) = 0;" end="virtual void Reset() = 0;" title="FairDetector.h" />
+
+Some comments in the header are not correct. For example, FairRoot never calls `Reset()`, although
+its comment says that it "has to be called after each event". The table shows what the code does:
+
+| Function | When FairRoot calls it | What your detector does | Code |
+| --- | --- | --- | --- |
+| `SetParContainers()` | In `FairRunSim::Init()`, before the runtime database initializes the containers | Gets its parameter containers | [L1202-L1215](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1215) |
+| `InitParContainers()` | Before `ConstructGeometry()` of the same module | Reads values from its parameter containers | [L764-L774](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774) |
+| `ConstructGeometry()` | Once, when the transport engine builds the geometry | Builds its volumes and marks the sensitive volumes | [L764-L774](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774) |
+| `Initialize()` | Once, after the geometry is complete | Calls `FairDetector::Initialize()` | [L962-L967](/source/fairroot/base/sim/FairMCApplication.cxx/#L962-L967) |
+| `Register()` | Right after `Initialize()` | Registers its collection of MC points | [L962-L967](/source/fairroot/base/sim/FairMCApplication.cxx/#L962-L967) |
+| `ProcessHits()` | At each step in a sensitive volume of the detector | Makes MC points | [L513-L558](/source/fairroot/base/sim/FairMCApplication.cxx/#L513-L558) |
+| `FinishEvent()` | At the end of each event, before the sink writes it | Optional | [L657-L659](/source/fairroot/base/sim/FairMCApplication.cxx/#L657-L659) |
+| `EndOfEvent()` | After the sink writes the event | Clears its collection | [L667-L669](/source/fairroot/base/sim/FairMCApplication.cxx/#L667-L669) |
+| `GetCollection()` | Not FairRoot, but `UpdateTrackIndex()` of the stack, at the end of each event | Returns its collections, then `nullptr` | [FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L269-L298) |
+| `Reset()` | Never | Clears its collection, if your code calls it | |
+| `CloneModule()` | Multithreaded Geant4: once for each worker thread | Returns a copy | [FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L683-L687) |
+
+The explainer shows these calls in order, for the detector of the template in a run with three
+modules and three events:
+
+<DetectorLifecycle />
+
+The functions `BeginEvent()`, `BeginPrimary()`, `PreTrack()`, `PostTrack()`, `FinishPrimary()` and
+`FinishRun()` do nothing by default. [Hooks and their call order](/reference/hooks/) shows where each
+call comes from. [How a simulation runs](/simulation/overview/) shows the steps of one event.
+
+## Start from a template
+
+FairRoot has the detector `NewDetector` in four template folders. Each folder has these files, and
+each `.cxx` file has a header with the same name:
+
+<FileTree>
+- templates/project_root_containers/NewDetector/
+  - NewDetector.cxx the detector
+  - NewDetectorPoint.cxx the MC point
+  - NewDetectorGeo.cxx the geometry set for ASCII files
+  - NewDetectorGeoPar.cxx the parameter container of the geometry
+  - NewDetectorContFact.cxx the container factory
+  - NewDetectorLinkDef.h the classes of the ROOT dictionary
+  - CMakeLists.txt the library
+</FileTree>
+
+| Folder | Collection of MC points | Use |
+| --- | --- | --- |
+| [`templates/project_root_containers/NewDetector/`](/repo/templates/project_root_containers/NewDetector/) | `TClonesArray` | Part of the project template |
+| [`templates/project_stl_containers/NewDetector/`](/repo/templates/project_stl_containers/NewDetector/) | `std::vector<NewDetectorPoint*>` | Part of the project template |
+| [`templates/NewDetector_root_containers/`](/repo/templates/NewDetector_root_containers/) | `TClonesArray` | Copy into an existing project, then run its `rename.sh` |
+| [`templates/NewDetector_stl_containers/`](/repo/templates/NewDetector_stl_containers/) | `std::vector<NewDetectorPoint*>` | Copy into an existing project, then run its `rename.sh` |
+
+The tests of FairRoot build the two project templates after `./rename.sh TestProj Tst det`. They do
+not run a simulation ([test_project.sh.in](/repo/templates/test_project.sh.in)). No test builds the
+two other folders. `NewDetector_stl_containers` does not compile: its `NewDetectorPoint.cxx` defines
+a constructor with eight arguments, but the header declares seven. Thus start from a project
+template, see [Start a project from a template](/start/new-project/) and [Templates](/tools/templates/).
+
+The sections below use `templates/project_root_containers/NewDetector/`.
+
+## The detector class
+
+### The constructor
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="NewDetector::NewDetector(const char* name, Bool_t active)" end="{}" title="NewDetector.cxx" />
+
+The name is the name of the module. [`FairMCApplication::GetDetector()`](/api/FairMCApplication/#GetDetector)
+finds a detector by this name. The constructor makes the `TClonesArray` for the MC points. The copy
+constructor makes a new, empty array too, so that each clone on a worker thread has its own
+collection.
+
+### Volumes and sensitive volumes
+
+`ConstructGeometry()` builds the volumes of the detector. The default of `FairModule` only logs a
+warning ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L57-L61)). A detector can read
+an ASCII `.geo` file, a ROOT file or a GDML file, or make its volumes in code. The template makes
+them in code and gives each sensitive volume to `AddSensitiveVolume()`.
+[Geometry and materials](/simulation/geometry/) explains how each input marks the sensitive volumes.
+
+Implement `IsSensitive()` in each detector, also if your geometry marks its volumes in another way.
+On the worker threads of multithreaded Geant4, only `IsSensitive()` decides. The template looks for
+`Det` in the volume name:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="Bool_t NewDetector::IsSensitive(const std::string& name)" title="NewDetector.cxx" />
+
+### Initialize()
+
+Call `FairDetector::Initialize()` from your `Initialize()`. It gets the volume ID of each sensitive
+volume of the module from the transport engine and keeps it in the `FairVolume`
+([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L99-L117)). Without these IDs,
+`Stepping()` does not find the volumes. It also sets the member `fMC` to the transport engine of the
+current thread ([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L119-L120)).
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="void NewDetector::Initialize()" title="NewDetector.cxx" />
+
+:::caution[Remove the extra DefineSensitiveVolumes()]
+The template calls its own `DefineSensitiveVolumes()` first. This call gives each volume with `Det`
+in its name to `AddSensitiveVolume()` a second time. The volume list refuses each duplicate and logs
+an error with the text `already defined`
+([FairVolumeList.cxx](/source/fairroot/base/sim/FairVolumeList.cxx/#L33-L46)). In MT mode,
+`FairDetector::Initialize()` calls `DefineSensitiveVolumes()` itself. `FairTutorialDet1` has no extra
+call ([FairTutorialDet1.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1.cxx/#L42-L51)).
+:::
+
+The template also gets the parameter container `NewDetectorGeoPar`, but it does not use it. See
+[Parameters of the detector](#parameters-of-the-detector).
+
+### ProcessHits()
+
+The MC application calls `ProcessHits()` with the `FairVolume` of the current step. The template adds
+up the energy loss of a track in the volume. It makes one MC point when the track leaves the volume,
+stops or disappears:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="Bool_t NewDetector::ProcessHits(FairVolume* vol)" title="NewDetector.cxx" />
+
+The template uses these functions of the transport engine, through the
+[VMC](https://vmc-project.github.io/) interface `TVirtualMC`:
+
+| Function | What the template does with it |
+| --- | --- |
+| `IsTrackEntering()` | At the first step in the volume: sets the energy loss to 0 and keeps time, length, position and momentum |
+| `TrackTime()` | Multiplies it by `1.0e09` and keeps ns, the time unit of `FairMCPoint` |
+| `TrackLength()`, `TrackPosition()`, `TrackMomentum()` | Keeps the length, the position and the momentum at the entrance |
+| `Edep()` | Adds the energy loss of the step to `fELoss` |
+| `IsTrackExiting()`, `IsTrackStop()`, `IsTrackDisappeared()` | At the last step in the volume: makes the MC point |
+| `GetStack()->GetCurrentTrackNumber()` | Keeps the track number. The stack corrects it at the end of the event. |
+
+The template makes no MC point if the energy loss is 0. The return value of `ProcessHits()` has no
+effect, because `Stepping()` ignores it
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L522-L534)).
+
+`vol->getMCid()` is the volume ID of the transport engine. All copies of a volume have the same ID.
+[`getCopyNo()`](/api/FairVolume/#getCopyNo) gives the copy number. To identify a sensor in a larger
+structure, use the path of the current volume. The detector of the MQ pixel example makes an ID from
+the station and the sector number in the path:
+
+<Snippet file="examples/MQ/pixelDetector/src/Pixel.cxx" start="TString detPath = TVirtualMC::GetMC()->CurrentVolPath();" end="fVolumeID = stationNr * 256 + sectorNr;" title="Pixel.cxx" />
+
+Tutorial 4 uses the copy number of the current volume as the ID. Its geometry handler gets it with
+`CurrentVolOffID(0, copy)`, where the offset 0 is the current volume
+([FairTutorialDet4GeoHandler.cxx](/source/examples/simulation/Tutorial4/src/tools/FairTutorialDet4GeoHandler.cxx/#L68-L76)).
+
+### Make the MC point
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="NewDetectorPoint* NewDetector::AddHit(" title="NewDetector.cxx" />
+
+`AddHit()` constructs the MC point in the next free slot of the `TClonesArray`. The STL template makes
+the point with `new` and adds it to its vector
+([NewDetector.cxx](/source/templates/project_stl_containers/NewDetector/NewDetector.cxx/#L216-L227)).
+
+After `AddHit()`, `ProcessHits()` calls `AddPoint(kNewDetector)` of the stack. The stack counts the
+MC points of each track, and uses the count to select the tracks that it stores. See
+[The particle stack and MC tracks](/simulation/stack/).
+
+Put the ID of each new detector into the enum `DetectorId` of `MyProjDetectorList.h`, before
+`kSTOPHERE`. The selection of the stack adds up the counts only for the IDs before `kSTOPHERE`
+([MyProjStack.cxx](/source/templates/project_root_containers/MyProjData/MyProjStack.cxx/#L454-L461)).
+
+### The MC point class
+
+Derive the point class from [`FairMCPoint`](/api/FairMCPoint/). The stack casts each object of the
+collection to `FairMCPoint` when it corrects the track numbers. `FairMCPoint` keeps the track ID, the
+event ID, the detector ID, the position in cm and the momentum in GeV. It also keeps the time in ns,
+the track length and the energy loss ([FairMCPoint.h](/source/fairroot/base/event/FairMCPoint.h/#L83-L91)). The
+point class of the STL templates derives from no class. See [Data classes](/concepts/data-classes/).
+
+## The collection of MC points
+
+### Register the branch
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="void NewDetector::Register()" title="NewDetector.cxx" />
+
+[`FairRootManager::Register()`](/api/FairRootManager/#Register-2) makes the branch `NewDetectorPoint`
+in the folder `NewDetector`. With the last argument `kTRUE`, the sink writes the branch. With
+`kFALSE`, the branch stays in memory only
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L177)). The branch name
+and the folder name must be different. For equal names, `Register()` logs a fatal error
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L158-L162)). A fatal error
+stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+In MT mode, the template calls [`RegisterAny()`](/api/FairRootManager/#RegisterAny) instead.
+`FairTutorialDet1` calls `Register()` in both modes
+([FairTutorialDet1.cxx](/source/examples/simulation/Tutorial1/src/FairTutorialDet1.cxx/#L96-L105)),
+and FairRoot tests Tutorial 1 with multithreaded Geant4 in the test `ex_sim_tutorial1_Geant4MT`
+([CMakeLists.txt](/repo/examples/simulation/Tutorial1/macros/CMakeLists.txt)). The STL template
+registers its `std::vector` with `RegisterAny()` in all modes
+([NewDetector.cxx](/source/templates/project_stl_containers/NewDetector/NewDetector.cxx/#L143-L151)).
+
+### Give the collection to the stack
+
+At the end of each event, `FairStack::UpdateTrackIndex()` calls `GetCollection(0)`,
+`GetCollection(1)` and so on, until it gets `nullptr`. It replaces the track number in each MC point
+with the index of the stored MC track. The template returns its array for the index 0:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="TClonesArray* NewDetector::GetCollection(Int_t iColl) const" title="NewDetector.cxx" />
+
+:::caution[STL templates]
+`GetCollection()` of the STL template returns `NULL`
+([NewDetector.h](/source/templates/project_stl_containers/NewDetector/NewDetector.h/#L69)). Also, the
+whole body of `MyProjStack::UpdateTrackIndex()` is a comment
+([MyProjStack.cxx](/source/templates/project_stl_containers/MyProjData/MyProjStack.cxx/#L288-L342)).
+Thus the MC points and the mother indices of the MC tracks keep the track numbers of the stack. Write
+this correction yourself if you use the STL templates.
+:::
+
+### Clear the collection
+
+Clear the collection in `EndOfEvent()`. The MC application calls it after the sink writes the event
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L657-L669)). FairRoot does
+not call `Reset()`. The template also logs the number of MC points of each event with the severity
+info:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="void NewDetector::EndOfEvent()" title="NewDetector.cxx" />
+
+## Parameters of the detector
+
+### The geometry parameter container
+
+`NewDetectorGeo` and `NewDetectorGeoPar` are for a geometry from an ASCII `.geo` file.
+`ConstructASCIIGeometry<NewDetectorGeo, NewDetectorGeoPar>("NewDetectorGeoPar")` puts the sensitive
+and the passive nodes of the file into the two lists of the parameter container:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetectorGeoPar.h" start="class NewDetectorGeoPar : public FairParGenericSet" end="TObjArray* GetGeoPassiveNodes()" title="NewDetectorGeoPar.h" />
+
+Always give the container name. With an empty name, the function builds the volumes, but it does not
+call `ProcessNodes()`. Thus it registers no sensitive volumes
+([FairModule.h](/source/fairroot/base/sim/FairModule.h/#L207-L244)).
+
+The template makes its volumes in code, so these lists stay empty. Tutorial 1 has classes of the same
+kind for its ASCII file, `FairTutorialDet1Geo` and `FairTutorialDet1GeoPar`.
+[Geometry and materials](/simulation/geometry/) shows the steps.
+
+### The container factory
+
+The runtime database makes a parameter container only through a container factory
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L199-L218)). The template has one
+factory for its library:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetectorContFact.cxx" start="static NewDetectorContFact gNewDetectorContFact;" end="^}" title="NewDetectorContFact.cxx" />
+
+The static object `gNewDetectorContFact` comes into existence when the library is loaded. The
+constructor of `FairContFact` adds the factory to the runtime database
+([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)). When code asks
+[`FairRuntimeDb::getContainer()`](/api/FairRuntimeDb/#getContainer) for `NewDetectorGeoPar`, the
+factory makes the container in [`createContainer()`](/api/FairContFact/#createContainer). Add each
+new parameter container of your detector to this factory. See
+[Parameters and the runtime database](/concepts/parameters/).
+
+### Parameters in the detector functions
+
+Tutorial 4 uses both parameter hooks. `SetParContainers()` gets a container with misalignment values
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L107-L118)).
+The runtime database reads the values right after this call. `InitParContainers()` then copies them
+before the detector builds its volumes:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="void FairTutorialDet4::InitParContainers()" title="FairTutorialDet4.cxx" />
+
+In `Initialize()`, Tutorial 4 writes a setting into its geometry parameter container. Then it marks
+the container as changed for the run ID, so that the runtime database writes it to its output
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L120-L141)).
+
+## Multithreaded Geant4
+
+In MT mode, each worker thread gets a clone of each module from `CloneModule()`. The default stops
+the program with `Fatal()`. The template returns a copy:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="FairModule* NewDetector::CloneModule() const" title="NewDetector.cxx" />
+
+Each worker calls `Initialize()` and `Register()` of its clones
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L452-L476)). The lists of
+sensitive volumes are separate for each thread, so a worker finds the sensitive volumes only with
+`IsSensitive()`. [Multithreaded Geant4](/simulation/geant4-mt/) lists the other requirements.
+
+## Add the detector to the run
+
+In the simulation macro, make the detector with `new` and give it to
+[`AddModule()`](/api/FairRunSim/#AddModule). Tutorial 1 reads the volumes of its detector from an
+ASCII file:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="FairDetector* tutdet" end="run->AddModule(tutdet);" title="run_tutorial1.C" />
+
+The run deletes its modules in its destructor
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L94-L96)). The order of the
+`AddModule()` calls sets the module IDs and the order in which the modules build their volumes. See
+[Write a simulation macro](/simulation/run-macro/).
+
+## Related pages
+
+- [Geometry and materials](/simulation/geometry/): the inputs for the volumes and how they mark the
+  sensitive volumes.
+- [The particle stack and MC tracks](/simulation/stack/): `AddPoint()`, the selection of the tracks
+  and the correction of the track numbers.
+- [Data classes](/concepts/data-classes/): MC points, digis and hits.
+- [Multithreaded Geant4](/simulation/geant4-mt/): the clones of a detector on the worker threads.
+- [Hooks and their call order](/reference/hooks/): all functions of a detector and their callers.
+- [Templates](/tools/templates/): the templates and their rename scripts.

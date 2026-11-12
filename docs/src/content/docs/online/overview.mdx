@@ -1,0 +1,159 @@
+---
+title: 'Online processing and FairMQ'
+description: 'The two ways to process a data stream with FairRoot: FairRunOnline in one process, or FairMQ devices in several processes. The libraries, the build options and the MQ examples.'
+sidebar:
+  order: 1
+code: [fairroot/online/steer/FairRunOnline.h, fairroot/online/source/FairOnlineSource.h, fairroot/online/source/FairUnpack.h, fairroot/fairmq/FairMQ.h, fairroot/fairmq/FairRunFairMQDevice.h, fairroot/basemq/policies/Serialization/RootSerializer.h, fairroot/parmq/ParameterMQServer.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot can process data while the data acquisition records it, not only from finished ROOT files.
+It gives you two ways to do this. `FairRunOnline` runs your unpackers and tasks in one process.
+FairMQ devices run FairRoot code in several processes that send messages to each other.
+
+## The two ways
+
+| | `FairRunOnline` | FairMQ devices |
+| --- | --- | --- |
+| Processes | One process: a ROOT macro or a program | One process for each device. Channels connect the devices. |
+| Input | An online source with unpackers, for example `FairLmdSource` for LMD files | A sampler device reads the input and sends it as messages |
+| Your code | Unpackers (`FairUnpack`) and tasks (`FairTask`) | Device classes (`fair::mq::Device`) that use FairRoot runs, tasks, sources and sinks |
+| Data between the steps | Branches in memory, through `FairRootManager` | Serialized messages, for example with `RootSerializer` |
+| Output | A sink, and histograms over HTTP | Messages. A sink device writes the data. |
+| CMake targets | `FairRoot::Online` | `FairRoot::FairMQ`, `FairRoot::BaseMQ`, `FairRoot::ParMQ` |
+
+Use `FairRunOnline` when one process can keep up with the data rate. You then keep the model of an
+offline [run](/concepts/runs/): tasks, parameter containers, the runtime database and a sink. Use FairMQ
+devices when you must spread the work over several processes or computers. Each device is a
+separate program, so you must also send the data between the devices as messages.
+
+## FairRunOnline
+
+`FairRunOnline` is a run class for online sources. An online source is a
+[`FairOnlineSource`](/api/FairOnlineSource/): its
+[`GetSourceType()`](/api/FairOnlineSource/#GetSourceType) returns
+[`kONLINE`](/api/Source_Type/#kONLINE). The source reads one raw event at a time and gives the raw
+data to its unpackers. Each unpacker converts the data into objects in a branch. Then the run
+executes the tasks on these branches and fills the sink.
+
+The MBS tutorial makes a source for an LMD file, adds one unpacker, and gives the source to the
+run:
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="FairLmdSource* source = new FairLmdSource();" end="run->SetAutoFinish(kFALSE);" title="unpack_mbs.C" />
+
+The sources of FairRoot read data of MBS, the data acquisition system of GSI. See
+[Read MBS and LMD data](/online/mbs/). For another data acquisition system, derive your own source
+from `FairOnlineSource`. You must implement `Init()`, `ReadEvent()` and `Close()`, because
+`FairOnlineSource` implements the other functions of `FairSource`
+([FairOnlineSource.h](/source/fairroot/online/source/FairOnlineSource.h/#L35-L53)). Your
+`ReadEvent()` gives the raw data to the unpackers in the protected array `fUnpackers`.
+
+The setters, the event loop and the HTTP server are on
+[Process live data with FairRunOnline](/online/run-online/).
+
+## FairMQ devices
+
+[FairMQ](https://fairrootgroup.github.io/FairMQ/) is a separate project. A FairMQ device is a
+program with a state machine and with channels. The channels send messages to other devices,
+through ZeroMQ or shared memory. The FairMQ documentation explains devices, channels, states and
+transports.
+
+FairRoot gives you these parts to run FairRoot code in a device:
+
+- **`FairRunFairMQDevice.h`** makes the `main()` of a device program. You write two functions:
+  `addCustomOptions()` adds your command line options, and `fairGetDevice()` returns your device.
+  The header includes `fairmq/runDevice.h` of FairMQ, or `fairmq/runFairMQDevice.h` for FairMQ
+  before 1.4.34 ([FairRunFairMQDevice.h](/source/fairroot/fairmq/FairRunFairMQDevice.h/#L23-L61)).
+- **`FairMQ.h`** includes the FairMQ headers and gives the names `fair::mq::Device`,
+  `fair::mq::Channel`, `fair::mq::Message`, `fair::mq::Parts` and others. For FairMQ before 1.4.41,
+  it maps these names to the old class names, for example `FairMQDevice`
+  ([FairMQ.h](/source/fairroot/fairmq/FairMQ.h/#L24-L54)).
+- **Serializers** put data into messages and take it out again.
+  [`RootSerializer`](/api/RootSerializer/) uses ROOT streaming (`TMessage`).
+  [`BoostSerializer`](/api/BoostSerializer/) uses Boost serialization. The headers
+  `FairHitBoostSerializationSupport.h`, `FairMCPointBoostSerializationSupport.h` and
+  `FairTimeStampBoostSerializationSupport.h` add Boost serialization to these base classes. See
+  [Serialize FairRoot data for messages](/online/serialization/).
+- **[`ParameterMQServer`](/api/ParameterMQServer/)** is a device that answers requests for
+  parameter containers from a runtime database. The program is `parmq-server`. See
+  [Parameters over FairMQ](/online/parameters/).
+- **[`FairMQLmdSampler`](/api/FairMQLmdSampler/)** and
+  **[`FairMQUnpacker`](/api/FairMQUnpacker/)** are devices for MBS data. See
+  [MQ: LMD sampler and unpacker](/examples/mq-lmd/).
+
+This is the complete program of the LMD sampler device of the examples. It defines the options and
+returns the device:
+
+<Snippet file="examples/MQ/Lmd/runLmdSampler.cxx" title="runLmdSampler.cxx" />
+
+The examples run FairRoot classes inside devices. The sampler of the pixel detector example uses a
+`FairRunAna` and a `FairFileSource` to read ROOT files. Its task processor device runs a task class
+with the functions `InitMQ()` and `ExecMQ()`. The guide
+[Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/) shows these patterns, and
+[Split a simulation over devices](/online/sim-split/) shows the simulation in devices.
+
+## Libraries
+
+| CMake target | Folder | Contents | Built with |
+| --- | --- | --- | --- |
+| `FairRoot::Online` | [`fairroot/online/`](/repo/fairroot/online/) | `FairRunOnline`, `FairOnlineSource`, `FairUnpack`. With `BUILD_MBS` also `FairMbsSource`, `FairLmdSource`, `FairMbsStreamSource`, `FairRemoteSource` and `MRevBuffer`. | `BUILD_ONLINE` |
+| `FairRoot::MbsAPI` | [`fairroot/mbsapi/`](/repo/fairroot/mbsapi/) | The C library of GSI that reads MBS data. Deprecated. | `BUILD_MBS` |
+| `FairRoot::FairMQ` | [`fairroot/fairmq/`](/repo/fairroot/fairmq/) | Header-only: `FairMQ.h` and `FairRunFairMQDevice.h`. Links to `FairMQ::FairMQ`. | `BUILD_BASEMQ` |
+| `FairRoot::BaseMQ` | [`fairroot/basemq/`](/repo/fairroot/basemq/) | Header-only: `RootSerializer`, `BoostSerializer`, the Boost serialization support headers, `FairMQLmdSampler` and `FairMQUnpacker` | `BUILD_BASEMQ` |
+| `FairRoot::ParMQ` | [`fairroot/parmq/`](/repo/fairroot/parmq/) | `ParameterMQServer` and the program `parmq-server` | `BUILD_BASEMQ` |
+
+The online library always has `FairRunOnline` and the base classes. It compiles the MBS sources only
+with `BUILD_MBS` ([fairroot/online/CMakeLists.txt](/repo/fairroot/online/CMakeLists.txt)).
+`FairMQLmdSampler.h` includes headers of MbsAPI. Thus you can use `FairMQLmdSampler` only in a
+build with `BUILD_MBS`. Link your library or program to the targets that it uses, for example
+`FairRoot::Online` for a class that uses `FairRunOnline`.
+
+## Build options
+
+The options are in the top-level [CMakeLists.txt](/repo/CMakeLists.txt#L125-L131), and
+[fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L30-L54) adds the folders:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `BUILD_ONLINE` | `ON` | Builds `FairRoot::Online`. |
+| `BUILD_MBS` | `OFF` | Builds `FairRoot::MbsAPI` and the MBS sources of `FairRoot::Online`. It also sets `BUILD_ONLINE` to `ON`. |
+| `BUILD_BASEMQ` | `ON` | Builds `FairRoot::FairMQ`, `FairRoot::BaseMQ` and `FairRoot::ParMQ`. CMake then requires FairMQ 1.4.0 or newer, and Boost 1.67 or newer with the components `filesystem`, `serialization` and `program_options` ([CMakeLists.txt](/repo/CMakeLists.txt#L202-L241)). |
+
+:::caution[MbsAPI is deprecated]
+FairRoot 18.8 deprecated MbsAPI. Since FairRoot 19, `BUILD_MBS` is `OFF` by default, and the
+[changelog](/repo/CHANGELOG.md) plans to remove MbsAPI in the next major release. Configure with
+`-DBUILD_MBS=ON` if you need the MBS sources.
+:::
+
+FairRoot searches FairMQ only with `BUILD_BASEMQ`. The MQ examples need FairMQ and Boost. The MBS
+tutorial and the MQ LMD example need `BUILD_MBS`
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L39-L56)).
+
+## The examples
+
+| Example | Folder | What it shows |
+| --- | --- | --- |
+| [MBS tutorial](/examples/mbs-tutorial/) | [`examples/advanced/MbsTutorial/`](/repo/examples/advanced/MbsTutorial/) | `FairRunOnline` with `FairLmdSource`, an unpacker, a task and the HTTP server. Needs `BUILD_MBS`. |
+| [MQ: pixel detector](/examples/mq-pixel-detector/) | [`examples/MQ/pixelDetector/`](/repo/examples/MQ/pixelDetector/) | The simulation and the reconstruction of a pixel detector in devices: a simulation device, samplers, task processors, a merger and file sinks |
+| [MQ: pixel detector, alternative](/examples/mq-pixel-alternative/) | [`examples/MQ/pixelAlternative/`](/repo/examples/MQ/pixelAlternative/) | The hit finding of the pixel detector with plain structures (`PixelPayload`) in the messages, without `TClonesArray` |
+| [MQ: split simulation](/examples/mq-pixel-sim-split/) | [`examples/MQ/pixelSimSplit/`](/repo/examples/MQ/pixelSimSplit/) | One device generates the primary particles, other devices transport them, and a merger joins the chunks of the events |
+| [MQ: serialization](/examples/mq-serialization/) | [`examples/MQ/serialization/`](/repo/examples/MQ/serialization/) | A sampler, two processors and a sink that send digis and hits with `RootSerializer` and `BoostSerializer` |
+| [MQ: parameter server](/examples/mq-parameters/) | [`examples/MQ/parameters/`](/repo/examples/MQ/parameters/) | A client device asks `parmq-server` for a parameter container with a name and a run ID |
+| [MQ: histogram server](/examples/mq-histogram-server/) | [`examples/MQ/histogramServer/`](/repo/examples/MQ/histogramServer/) | A device sends histograms to a server device, which shows them with ROOT's `THttpServer` |
+| [MQ: LMD sampler and unpacker](/examples/mq-lmd/) | [`examples/MQ/Lmd/`](/repo/examples/MQ/Lmd/) | A sampler, an unpacker and a sink for the MBS data of an LMD file. Needs `BUILD_MBS`. |
+| [Tutorial 3](/examples/tutorial3/) | [`examples/advanced/Tutorial3/MQ/`](/repo/examples/advanced/Tutorial3/MQ/) | A sampler, two processors and a sink for the data of Tutorial 3, in binary, Boost, FlatBuffers, Protocol Buffers or `TMessage` format |
+
+## Related pages
+
+- [Process live data with FairRunOnline](/online/run-online/): the online run, its event loop and
+  the HTTP server.
+- [Read MBS and LMD data](/online/mbs/): the MBS sources and the matching of subevents.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): FairRoot code in a device.
+- [Serialize FairRoot data for messages](/online/serialization/): the serializers of `BaseMQ`.
+- [Parameters over FairMQ](/online/parameters/): `ParameterMQServer` and its clients.
+- [Examples](/examples/overview/): all examples of FairRoot.
+- [Libraries and headers](/reference/libraries/): the headers and the dependencies of each target.
+- [CMake reference](/reference/cmake/): all build options of FairRoot.
+- [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/): devices, channels, states and
+  transports.

@@ -1,0 +1,444 @@
+---
+title: 'Time-based simulation and reconstruction'
+description: 'Give each event a time, keep the digis in a writeout buffer until their active time ends, sort them by time stamp and read them back in time windows.'
+sidebar:
+  order: 5
+code: [fairroot/base/steer/FairWriteoutBuffer.h, fairroot/base/steer/FairWriteoutBuffer.cxx, fairroot/base/steer/FairRingSorter.cxx, fairroot/base/steer/FairRingSorterTask.cxx, fairroot/base/steer/FairTSBufferFunctional.h, fairroot/base/steer/FairTSBufferFunctional.cxx, fairroot/base/steer/FairRootManager.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/base/source/FairFileSource.cxx]
+---
+
+import TimeBasedExplainer from '../../../components/diagrams/TimeBasedExplainer.astro';
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A detector with a free-streaming readout gives a stream of signals with time stamps, not a sequence
+of events. At a high interaction rate, the signals of two events overlap in time. FairRoot gives
+each event a time, buffers and sorts the digis, and reads them back in time windows.
+
+<TimeBasedExplainer />
+
+## The parts
+
+| Step | Classes and functions | What they do |
+| --- | --- | --- |
+| Event time | `FairFileSource::SetEventMeanTime()`, `SetEventTimeInterval()`, `SetBeamTime()` | The source gives each event an absolute time. Tasks get it from `FairRootManager::GetEventTime()`. |
+| Buffer | `FairWriteoutBuffer` | The digitizer gives each digi to the buffer. The buffer writes the digi to the output branch after its active time, and it handles pile-up on one detector element. |
+| Sort | `FairRingSorter`, `FairRingSorterTask` | A task sorts the data of a branch by time stamp. |
+| Read | `FairRootManager::GetData()`, `FairTSBufferFunctional`, `StopTime`, `TimeGap` | A task gets the data of a branch up to a time, across the borders of the tree entries. |
+| Run | `FairRunAna::RunWithTimeStamps()`, `RunTSBuffers()` | The run calls the tasks again and again until all time-based data is read. |
+
+All times are in ns ([FairFileSource.h](/source/fairroot/base/source/FairFileSource.h/#L82-L88)).
+The classes are in the library `FairRoot::Base`. [Tutorial 3](/examples/tutorial3/) has an example
+of each step.
+
+## Give each event a time
+
+The event time is the time of the interaction. The run copies it into `FairRootManager` for each
+event, and [`FairRootManager::GetEventTime()`](/api/FairRootManager/#GetEventTime) gives it to the
+tasks ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L423-L426)).
+[`FairFileSource::GetEventTime()`](/api/FairFileSource/#GetEventTime) takes the time from the first
+of these places that applies ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L640-L665)):
+
+1. The branch `EventHeader.` of the input file, if its time is 0 or more. `FairRunAna` writes this
+   branch when the run has a sink ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L194)).
+   Thus a later run reads the times of the earlier run. To make new times, call
+   [`SetEvtHeaderNew(kTRUE)`](/api/FairFileSource/#SetEvtHeaderNew) on the source.
+2. If you did not set a time distribution: the time [`GetT()`](/api/FairMCEventHeader/#GetT) of the
+   MC event header, or 0 without an MC event header. No class of FairRoot sets this time. It is 0
+   unless your code calls [`FairMCEventHeader::SetTime()`](/api/FairMCEventHeader/#SetTime).
+3. If you set a time distribution: a generated time. For each new entry, the source adds a random
+   time gap to the time of the previous entry.
+
+Three functions of the source set the distribution of the time gaps:
+
+| Function | Time gap between two events |
+| --- | --- |
+| [`SetEventMeanTime(mean)`](/api/FairFileSource/#SetEventMeanTime) | Random, from the exponential distribution `(1/mean)*exp(-t/mean)` between 0 and 10 × `mean`. |
+| [`SetEventTimeInterval(min, max)`](/api/FairFileSource/#SetEventTimeInterval) | Random, uniform between `min` and `max`. |
+| [`SetBeamTime(beamTime, gapTime)`](/api/FairFileSource/#SetBeamTime) | The source adds gaps until the event time falls into the first `beamTime` ns of a period of `beamTime + gapTime` ns. Use it together with one of the two functions above. |
+
+The last call of `SetEventMeanTime()` or `SetEventTimeInterval()` sets the distribution.
+`SetBeamTime()` alone sets no distribution
+([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L583-L606)).
+
+The source makes the time once for each entry:
+
+<Snippet file="fairroot/base/source/FairFileSource.cxx" start="void FairFileSource::SetEventTime()" />
+
+[`FairMixedSource`](/api/FairMixedSource/) has the same three functions. But from the second event
+on, it adds two time gaps for each event, see [Mix signal and background](/reconstruction/sources/#mix-signal-and-background).
+Tutorial 3 sets a mean time of 50 ns between two events:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi_timebased.C" start="FairFileSource* fFileSource = new FairFileSource(inFile);" end="fFileSource->SetEventMeanTime(50);" />
+
+For the event header and the run ID, see [Event headers and run IDs](/concepts/event-headers/).
+
+## Buffer the digis: FairWriteoutBuffer
+
+An event-based digitizer puts each digi into the output array of the current event. In a time-based
+run, a digi can stay active after the start of the next event. It can then change the digis of later
+events, for example by pile-up. A [`FairWriteoutBuffer`](/api/FairWriteoutBuffer/) keeps each digi
+until its active time has ended, and only then writes it to the output branch.
+
+### Fill the buffer
+
+The digitizer calls [`FillNewData(data, startTime, activeTime)`](/api/FairWriteoutBuffer/#FillNewData)
+for each digi. Both times are absolute times
+([FairWriteoutBuffer.h](/source/fairroot/base/steer/FairWriteoutBuffer.h/#L76-L79)):
+
+- `startTime`: from this time on, the digi can change later data.
+- `activeTime`: up to this time, the digi can change later data.
+
+The buffer keeps a copy of the data, so the object that you give stays yours. Delete it after the
+call. Without buffering, the copy goes into the output array at once:
+
+<Snippet file="fairroot/base/steer/FairWriteoutBuffer.cxx" start="void FairWriteoutBuffer::FillNewData" />
+
+Tutorial 3 gives the true hit time (event time and time of flight) as start time. The active time
+ends 10 ns after the measured time stamp:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeDigiTask.cxx" start="Double_t timeOfFlight = point->GetTime();" end="fDataBuffer->FillNewData" />
+
+The digitizer of Tutorial 3 does not delete its digi after the call, and loses the memory of one
+digi for each MC point ([FairTestDetectorTimeDigiTask.cxx](/source/examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeDigiTask.cxx/#L75)).
+
+### What the run does with the buffers
+
+The buffer has two sets of data: the digis that wait for their start time (`fStartTime_map`), and
+the active digis (`fDeadTime_map`). The run calls all registered buffers at fixed points of the
+event loop ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L313-L345)):
+
+1. The run reads event i. The event has the time t.
+2. [`StoreWriteoutBufferData(t)`](/api/FairRootManager/#StoreWriteoutBufferData) calls
+   [`WriteOutData(t)`](/api/FairWriteoutBuffer/#WriteOutData) of each buffer. The buffer moves the
+   digis with a start time before t into the active set. Then it writes the active digis whose
+   active time ended before t into the output array of its branch.
+3. The tasks run. The digitizer gives the new digis to the buffer.
+4. `Fill()` writes the output arrays into the entry i of the tree.
+5. [`DeleteOldWriteoutBufferData()`](/api/FairRootManager/#DeleteOldWriteoutBufferData) empties
+   the output arrays of the buffers.
+6. After the last event, [`StoreAllWriteoutBufferData()`](/api/FairRootManager/#StoreAllWriteoutBufferData)
+   writes all digis that are left. Then the run calls `FinishTask()` of the tasks and
+   `LastFill()`, which can fill one more entry.
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="fRootManager->StoreWriteoutBufferData(fRootManager->GetEventTime());" end="fTask->FinishEvent();" />
+
+Thus an entry of the output tree is no longer one event. Entry i holds the digis whose active time
+ended before the time of event i, and that no earlier entry holds. The digis of one event can go
+into several entries. Each digi of Tutorial 3 keeps a link to its MC point with the entry number of
+its event, see [Links between data levels](/concepts/links/). `FairRunOnline` calls the buffers at
+the same points ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L217-L222)).
+
+### Pile-up on one detector element
+
+When a digi becomes active, the buffer looks for an active digi on the same detector element. Your
+subclass finds its active time with `FindTimeForData()`, and `equal()` of the data class compares the
+two digis ([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L154-L239)):
+
+<Snippet file="fairroot/base/steer/FairWriteoutBuffer.cxx" start="if (dataFound) {" />
+
+- If the old digi is still active at the start time of the new digi, the buffer calls `Modify(old,
+  new)`. It keeps the data that `Modify()` returns. The default `Modify()` returns the old digi
+  only, so the new digi is lost, as in the dead time of a channel.
+- If the old digi is no longer active, the buffer writes it to the output array at once and keeps
+  the new digi.
+- If no active digi with the time of `FindTimeForData()` is `equal()`, the buffer prints the error
+  line at the end of the snippet.
+
+Override [`Modify()`](/api/FairWriteoutBuffer/#Modify) for another behavior, for example to add the
+charges of the two digis.
+
+:::caution[Override Modify() with the exact signature]
+The parameters of `Modify()` are `std::pair<double, FairTimeStamp*>`. Mark your version `override`.
+The `Modify()` of the template `MyWriteoutBuffer` takes `MyDataClass*`
+([MyWriteoutBuffer.h](/source/templates/TimeBased/MyWriteoutBuffer.h/#L32-L33)). It does not
+override the function of the base class, and the buffer never calls it.
+:::
+
+### Write a buffer class
+
+`FairWriteoutBuffer` has four pure virtual functions. Your subclass knows the data class and the
+detector elements:
+
+| Function | What it must do |
+| --- | --- |
+| `AddNewDataToTClonesArray(data)` | Copy the data into the output array of the branch. Cast it to your data class. |
+| `FindTimeForData(data)` | Return the active time of the active digi on the same detector element, or −1. |
+| `FillDataMap(data, activeTime)` | Add the digi to your search map. |
+| `EraseDataFromDataMap(data)` | Remove the digi from your search map. |
+
+The data class must derive from [`FairTimeStamp`](/api/FairTimeStamp/). Override
+[`equal()`](/api/FairTimeStamp/#equal) so that it compares the detector element: the default
+compares the time stamp and its error. A data class that is the key of a `std::map` also needs
+`operator<`. Tutorial 3 uses the pad numbers for both
+([FairTestDetectorDigi.h](/source/examples/advanced/Tutorial3/data/FairTestDetectorDigi.h/#L55-L86)).
+Its buffer keeps a map from the digi to its active time:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorDigiWriteoutBuffer.h" start="class FairTestDetectorDigiWriteoutBuffer : public FairWriteoutBuffer" />
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorDigiWriteoutBuffer.cxx" start="double FairTestDetectorDigiWriteoutBuffer::FindTimeForData" />
+
+The template [`templates/TimeBased/`](/repo/templates/TimeBased/) has the same classes for a data
+class `MyDataClass`. Its script `rename.sh` copies them and replaces `MyDataClass` and `My` with the
+name that you give, see [Templates](/tools/templates/).
+
+### Register the buffer
+
+Make the buffer in `Init()` of your task. The constructor `FairWriteoutBuffer(branchName, className,
+folderName, persistance)` registers the output branch with
+[`FairRootManager::Register()`](/api/FairRootManager/#Register-3) and switches the buffering on
+([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L22-L34)). Then give
+the buffer to [`RegisterWriteoutBuffer()`](/api/FairRootManager/#RegisterWriteoutBuffer). Only
+registered buffers get the calls of the run:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeDigiTask.cxx" start="fDataBuffer = new FairTestDetectorDigiWriteoutBuffer" end="fDataBuffer->ActivateBuffering(fTimeOrderedDigi);" />
+
+Use the return value of `RegisterWriteoutBuffer()`. If the branch has a buffer already, the function
+logs a warning, deletes your buffer and returns the old one
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L826-L836)).
+
+[`ActivateBuffering(false)`](/api/FairWriteoutBuffer/#ActivateBuffering) switches the buffering off.
+`FillNewData()` then copies each digi into the output array at once, and the task works event by
+event. Tutorial 3 switches the buffering on only after a call of `RunTimeBased()` on its task.
+
+At the end of `FairRunAna::Init()`,
+[`UpdateListOfTimebasedBranches()`](/api/FairRootManager/#UpdateListOfTimebasedBranches) puts the
+branch of each buffer with buffering on into a list. The output file keeps this list as the object
+`TimeBasedBranchList` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L383-L390)).
+A later run reads it, see [Read data in time windows](#read-data-in-time-windows).
+
+:::note
+`FairWriteoutBufferAbsBasis.h` declares an interface with `WriteOutData()` and `WriteOutAllData()`.
+No class derives from it, and `FairRootManager` does not use it.
+:::
+
+### Make a digitizer time-based
+
+<Steps>
+
+1. Derive your data class from `FairTimeStamp`. Override `equal()` and add `operator<`.
+
+2. Write a buffer class. Copy the template with `rename.sh`, or derive from `FairWriteoutBuffer`.
+
+3. In `Init()` of the digitizer, make the buffer and register it with `RegisterWriteoutBuffer()`.
+
+4. In `Exec()`, give each digi to `FillNewData()` with its start time and its active time.
+
+5. Delete your digi object after the call.
+
+6. In the macro, set a time distribution on the source, for example with `SetEventMeanTime()`.
+
+7. Add a sorter task after the digitizer, see the next section.
+
+</Steps>
+
+## Sort by time stamp: FairRingSorter
+
+The writeout buffer writes the digis in the order of their active time, not of their time stamp.
+The reconstruction needs the data in time order, because the time stamp buffer stops at the first
+data after the requested time. A [`FairRingSorter`](/api/FairRingSorter/) sorts the data by time
+stamp.
+
+### How the ring works
+
+The ring has `size` cells with the time width `width`
+([FairRingSorter.h](/source/fairroot/base/steer/FairRingSorter.h/#L30-L37)). Together, they cover a
+time window of `size × width` above a lower bound.
+[`AddElement(data, timestamp)`](/api/FairRingSorter/#AddElement) puts a copy of the data into the
+cell `(timestamp / width) mod size`. In each cell, the data stay sorted by time stamp.
+
+<Snippet file="fairroot/base/steer/FairRingSorter.cxx" start="void FairRingSorter::AddElement" />
+
+- A time stamp below the lower bound comes too late. The sorter prints `-E- Timestamp ... below
+  lower bound ...` and does not keep the data.
+- A time stamp beyond the window makes the sorter write out the cells from the lower bound up to the
+  cell of this time stamp. The output is in time order. Then the window moves, so that it ends at the
+  end of this cell ([FairRingSorter.cxx](/source/fairroot/base/steer/FairRingSorter.cxx/#L50-L61)).
+- A time stamp two windows or more beyond the lower bound makes the sorter write out all cells.
+
+The written data stay in a vector. The caller gets them with
+[`GetOutputData()`](/api/FairRingSorter/#GetOutputData) and empties the vector with
+[`DeleteOutputData()`](/api/FairRingSorter/#DeleteOutputData). Choose a window that is larger than
+the largest delay of a time stamp behind the newest time stamp.
+
+### The sorter task
+
+[`FairRingSorterTask`](/api/FairRingSorterTask/) runs a sorter in the task list. Make it with the
+constructor that takes the number of cells, the cell width, the input branch, the output branch and
+the folder ([FairRingSorterTask.cxx](/source/fairroot/base/steer/FairRingSorterTask.cxx/#L30-L122)):
+
+- `Init()` makes the sorter with `InitSorter()`. It registers the output branch with the class of
+  the input array.
+- `Exec()` gives each element of the input array to the sorter, with a link to its position in the
+  input. Then it puts the data that left the ring into the output array.
+- `FinishEvent()` empties the output array.
+- `FinishTask()` gives the current content of the input array to the sorter, and writes out all
+  cells. Then it calls `FairRootManager::SetLastFill()`, so that `LastFill()` writes one more entry
+  with these data.
+
+The task gets its input array with [`GetTClonesArray()`](/api/FairRootManager/#GetTClonesArray).
+This function knows only the branches that the same run registered with
+[`Register(branch, class, folder, persistence)`](/api/FairRootManager/#Register-3), for example the
+branch of a writeout buffer. For a branch of the input file, it returns a null pointer, and `Init()`
+crashes when it uses this pointer
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L241-L250)).
+
+In a run with a writeout buffer, the input array holds in `FinishTask()` the digis that
+`StoreAllWriteoutBufferData()` wrote at the end. Thus, use the sorter task on the branch of a
+writeout buffer. A task without a writeout buffer can also fill the input branch. Then the array can
+still hold the last event in `FinishTask()`, and the sorter gets these data a second time.
+
+For your own data class, override `InitSorter()` of the task and `CreateElement()` of the sorter.
+Also override `AddNewDataToTClonesArray()` of the task. Tutorial 3 and the template construct a copy
+in the output array with placement `new`:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorDigiSorterTask.h" start="class FairTestDetectorDigiSorterTask : public FairRingSorterTask" />
+
+The sorter does not delete the objects that it gives out: `DeleteOutputData()` only empties the
+vector ([FairRingSorter.h](/source/fairroot/base/steer/FairRingSorter.h/#L50)). With a copy in
+the output array, the memory of each sorted object is lost.
+
+Tutorial 3 adds the digitizer and a sorter with 5000 cells of 50 ns. The window is thus 250 µs:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi_timebased.C" start="FairTestDetectorTimeDigiTask* digiProducer" end="fRun->AddTask(digiSorter);" />
+
+## Read data in time windows
+
+A time-based reconstruction does not read the tree entry by entry. A task asks for the data up to a
+time, and FairRoot reads as many entries as it needs.
+
+### Switch the run to time stamps
+
+Call [`FairRunAna::RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) before `Init()`.
+After `Init()`, the function logs `RunWithTimeStamps has to be set before Run::Init !` and ends
+the program with `exit(-1)` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L595-L603)).
+`Run()` then calls [`RunTSBuffers()`](/api/FairRunAna/#RunTSBuffers) and ignores its start and end
+arguments ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L256-L262)). The function
+`FairRootManager::RunWithTimeStamps()` is deprecated and does nothing.
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="void FairRunAna::RunTSBuffers()" />
+
+In each pass of the loop, the run reads the next entry of the branches that are not time-based, as
+long as entries are left. Then it calls the tasks, fills the output tree and empties the output
+arrays of the writeout buffers. The first pass always runs, because a task makes the time stamp
+buffers with its first call of `GetData()`.
+
+The time-based branches are the branches in the list `TimeBasedBranchList` of the input file.
+`FairRootManager::InitSource()` puts all other branches of the input into the list that the loop
+reads entry by entry ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L115-L136)).
+If the input file has no such list, the source logs `No time based branch list in input file`
+([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L271-L276)).
+
+### Get the data up to a time
+
+In `Exec()`, call [`FairRootManager::GetData(branch, functor, parameter)`](/api/FairRootManager/#GetData).
+The first call makes a [`FairTSBufferFunctional`](/api/FairTSBufferFunctional/) for the branch. The
+buffer reads tree entries and keeps their data until the functor says stop. It returns a
+`TClonesArray` with the data before the stop. The time-based reconstruction of Tutorial 3 asks for
+the next 200 ns in each call:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx" start="void FairTestDetectorTimeRecoTask::Exec" end="^    }" />
+
+The buffer moves forward only: it does not return data again
+([FairTSBufferFunctional.h](/source/fairroot/base/steer/FairTSBufferFunctional.h/#L146-L150)). It
+does not empty the returned array before it adds new data
+([FairTSBufferFunctional.cxx](/source/fairroot/base/steer/FairTSBufferFunctional.cxx/#L45-L131)).
+Delete the content after use, as the task does at the end of `Exec()`
+([FairTestDetectorTimeRecoTask.cxx](/source/examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx/#L97)).
+
+The functor decides where the data stop. `FairTSBufferFunctional.h` has two functors:
+
+| Functor | `Call()` says stop at | `GetData(branch, functor, p)` returns |
+| --- | --- | --- |
+| [`StopTime`](/api/StopTime/) | the first data with a time stamp after `p` | all data up to the time `p` that the buffer did not return before |
+| [`TimeGap`](/api/TimeGap/) | the first data that comes more than `p` after the data before it | the data up to the next time gap that is larger than `p` |
+
+For other windows, derive from [`BinaryFunctor`](/api/BinaryFunctor/) and implement `Call()`. Return
+`true` for the first data that is not part of the window:
+
+<Snippet file="fairroot/base/steer/FairTSBufferFunctional.h" start="/^class BinaryFunctor/" />
+
+The second form [`GetData(branch, startFunctor, start, stopFunctor, stop)`](/api/FairRootManager/#GetData-2)
+searches the start in the tree for each call. Thus it can also go back in time. The header
+says that this works only with `StopTime` as functor.
+
+### Reconstruct time-based data
+
+<Steps>
+
+1. Call `RunWithTimeStamps()` on the run before `Init()`.
+
+2. In `Init()` of the task, get the input array with `GetObject()`.
+
+3. In `Init()`, make the functor, for example `new StopTime()`.
+
+4. In `Exec()`, get the data of the next window with `GetData(branch, functor, time)`.
+
+5. At the end of `Exec()`, delete the content of the returned array.
+
+</Steps>
+
+### End the loop
+
+[`AllDataProcessed()`](/api/FairRootManager/#AllDataProcessed) returns `true` when each time stamp
+buffer is in one of these states
+([FairTSBufferFunctional.cxx](/source/fairroot/base/steer/FairTSBufferFunctional.cxx/#L273-L287)):
+
+- A task called [`TerminateTSBuffer(branch)`](/api/FairRootManager/#TerminateTSBuffer) or
+  [`TerminateAllTSBuffer()`](/api/FairRootManager/#TerminateAllTSBuffer).
+- The buffer read the last entry of its branch, and its data and the returned array are empty.
+- Its functor reports a time-out. `StopTime::TimeOut()` counts the checks in which the requested
+  time did not change. After 10 such checks, it returns `true`. Each of these checks prints
+  `-I- FairTSBufferFunctional StopTime has requested the same data as before: ...`.
+
+## Tutorial 3
+
+[Tutorial 3](/examples/tutorial3/) has the two steps as macros:
+
+- `run_digi_timebased.C` gives the events times with a mean distance of 50 ns. It digitizes with a
+  writeout buffer and sorts the digis into the branch `FairTestDetectorSortedDigi`.
+- `run_reco_timebased.C` adds `FairTestDetectorTimeRecoTask`. This task reads
+  `FairTestDetectorSortedDigi` in windows of 200 ns and makes hits.
+
+:::caution[run_reco_timebased.C has no source]
+The macro makes a `FairFileSource`, but it does not give it to the run with `SetSource()`:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_reco_timebased.C" start="FairRunAna *fRun = new FairRunAna();" end="fRun->SetUseFairLinks(kTRUE);" />
+
+Without a source, the task does not find its input. It logs `FairTestDetectorTimeRecoTask::Init: No
+Point array!` and the run deactivates it. The macro still ends with `Macro finished successfully.`
+Add `fRun->SetSource(fFileSource);` to read the data.
+:::
+
+## Problems that can occur
+
+- **`Run(delta_t)` processes no data:** the loop of [`FairRunAna::Run(Double_t)`](/api/FairRunAna/#Run-2)
+  calls `FairRootManager::ReadNextEvent()`, which always returns `false`
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L479-L484)). Use
+  `RunWithTimeStamps()` and `Run()`.
+- **The digis of the last events are not in the output:** `StoreAllWriteoutBufferData()` sets the
+  flag of `LastFill()` only if a buffer has active digis. It does not count the digis that wait for
+  their start time ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L879-L889)).
+  Call [`SetLastFill()`](/api/FairRootManager/#SetLastFill) in `FinishTask()` of your task, as
+  `FairRingSorterTask` does. A call before the run does not help, because
+  `StoreAllWriteoutBufferData()` sets the flag again.
+- **The sorter prints `-E- Timestamp ... below lower bound ...`:** the data came later than the
+  window of the ring allows. Make the window larger.
+- **The buffer prints `... old data present in dataMap but not in deadTimeMap!`:**
+  `FindTimeForData()` and `equal()` do not agree on the detector element.
+- **`RunTSBuffers()` does not end:** your task does not empty the array of `GetData()`. Or its
+  functor says stop at the first data of each call, and its `TimeOut()` never returns `true`. Delete
+  the content after use.
+- **A crash in `AllDataProcessed()`:** [`GetTSBuffer()`](/api/FairRootManager/#GetTSBuffer) with a
+  branch that has no time stamp buffer adds a null pointer to the map of buffers.
+  `AllDataProcessed()` then uses it. Call `GetTSBuffer()` only after the first `GetData()` for this
+  branch.
+
+## Related pages
+
+- [Tutorial 3](/examples/tutorial3/): the example with all parts, event-based and time-based.
+- [From MC points to digis](/reconstruction/digitization/): digitizer tasks in an event-based run.
+- [Event headers and run IDs](/concepts/event-headers/): the header that keeps the event time.
+- [Links between data levels](/concepts/links/): the links from a digi to its MC point.
+  [Entry numbers for time-based data](/concepts/links/#entry-numbers-for-time-based-data) shows how
+  a hit links to a digi of another entry.
+- [Templates](/tools/templates/): the template `TimeBased` and its script `rename.sh`.

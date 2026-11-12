@@ -1,0 +1,332 @@
+---
+title: 'How a simulation runs'
+description: 'What FairRunSim::Init() and Run() do: the MC application, the engine configuration, the VMC callbacks of one event, the stack and the output file.'
+sidebar:
+  order: 1
+code: [fairroot/base/steer/FairRunSim.cxx, fairroot/base/sim/FairMCApplication.h, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/sim/FairDetector.h, fairroot/base/sim/FairModule.h, fairroot/base/sim/FairGenericStack.h, fairroot/base/sim/FairPrimaryGenerator.cxx]
+---
+
+import SimulationExplainer from '../../../components/diagrams/SimulationExplainer.astro';
+import Snippet from '../../../components/Snippet.astro';
+
+A simulation in FairRoot is a [run](/concepts/runs/) of the class [`FairRunSim`](/api/FairRunSim/). The run makes a
+[`FairMCApplication`](/api/FairMCApplication/), which implements the callbacks of the Virtual Monte
+Carlo ([VMC](https://vmc-project.github.io/)). The transport engine calls these callbacks, and the MC
+application forwards each call to your modules, detectors, primary generator and stack.
+
+<SimulationExplainer />
+
+## The parts of a simulation
+
+Your macro makes the run and gives it the parts of the experiment. Then
+[`Init()`](/api/FairRunSim/#Init) makes the MC application and the transport engine:
+
+| Part | Class | Made by |
+| --- | --- | --- |
+| Run | `FairRunSim` | Your macro |
+| Modules and detectors | Classes derived from [`FairModule`](/api/FairModule/) and [`FairDetector`](/api/FairDetector/) | Your macro, with [`AddModule()`](/api/FairRunSim/#AddModule) |
+| Primary generator | [`FairPrimaryGenerator`](/api/FairPrimaryGenerator/) with one or more generators | Your macro, with [`SetGenerator()`](/api/FairRunSim/#SetGenerator) |
+| Sink | For example `FairRootFileSink` | Your macro, with [`SetSink()`](/api/FairRun/#SetSink) |
+| MC application | `FairMCApplication` | `FairRunSim::Init()` |
+| Transport engine | `TGeant3TGeo` or `TGeant4`, both derived from `TVirtualMC` | The engine configuration, in `Init()` |
+| Stack | A class derived from [`FairGenericStack`](/api/FairGenericStack/), for example `FairStack` | The engine configuration, in `Init()` |
+
+The name of the run selects the transport engine. A macro uses the parts in this order:
+
+```cpp title="Sketch of a simulation macro"
+auto run = std::make_unique<FairRunSim>();
+run->SetName("TGeant4");   // the transport engine: "TGeant3" or "TGeant4"
+run->SetSink(std::make_unique<FairRootFileSink>("sim.root"));
+run->SetMaterials("media.geo");
+run->AddModule(cave);      // modules and detectors
+run->AddModule(detector);
+run->SetGenerator(primGen);
+run->Init();               // makes the MC application and the transport engine
+run->Run(nEvents);         // transports nEvents events
+```
+
+[Write a simulation macro](/simulation/run-macro/) shows the complete macro.
+
+## What Init() does
+
+`FairRunSim::Init()` prepares the complete simulation. It does these steps in this order
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L154-L258)):
+
+1. It calls `InitSink()` of the sink. A `FairRootFileSink` makes its output folder there. Its output
+   file is already open at this time.
+2. It makes the geometry loader. For the default geometry model `TGeo`, the loader makes the
+   `TGeoManager` with the name `FAIRGeom`. Then the loader reads the media file of
+   [`SetMaterials()`](/api/FairRunSim/#SetMaterials).
+3. It makes the MC application with the list of modules, and gives it the primary generator.
+4. If the run ID is 0, it generates a run ID with `FairRunIdGenerator`. It adds the run ID to the
+   runtime database and to the file header.
+5. It adds the [tasks](/concepts/tasks/) of the run to the MC application. The MC application calls
+   `SetParContainers()` of each task and each module. Then it initializes the parameter containers
+   in the runtime database ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1215)).
+6. It fills two parameter containers. `FairBaseParSet` gets the list of modules, the primary
+   generator and the beam momentum. `FairGeoParSet` gets a pointer to `gGeoManager`.
+7. It gives the decayer settings, the [radiation managers](/simulation/radiation/) and the
+   [magnetic field](/simulation/fields/) to the MC application. It calls `Init()` and
+   `FillParContainer()` of the field.
+8. It adds the names of all parameter containers and the seed of `gRandom` to `FairBaseParSet`.
+   It marks `FairBaseParSet` and `FairGeoParSet` as changed for the run ID.
+9. It configures and initializes the transport engine, see
+   [The engine configuration](#the-engine-configuration).
+10. It writes the file header to the sink.
+
+After step 2, the `TGeoManager` is still empty. The modules [build the geometry](/simulation/geometry/)
+in step 9, when the transport engine calls `ConstructGeometry()` of the MC application.
+
+### The engine configuration
+
+In step 9, `Init()` calls `SetMCConfig()`. This function runs your function of
+[`SetSimSetup()`](/api/FairRunSim/#SetSimSetup), or `Setup()` of the configuration object of
+[`SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig). Without these, the run makes a
+`FairGenericVMCConfig`, which loads the macros `g3Config.C` or `g4Config.C` and `SetCuts.C`. The
+macros of the examples use `FairGenericVMCConfig`.
+
+The setup makes the transport engine and the stack, and gives the stack to the transport engine
+with `SetStack()`. Then `SetMCConfig()` calls `InitMC()` of the MC application. At the end, it runs
+the post-init configuration. The configuration classes of FairRoot do this step only after
+[`UsePostInitConfig()`](/api/FairGenericVMCConfig/#UsePostInitConfig). [When the configuration runs](/simulation/engines/#when-the-configuration-runs)
+shows the code, and [Three ways to configure](/simulation/engines/#three-ways-to-configure) compares
+the macros, the YAML files and your own function.
+
+### InitMC()
+
+[`InitMC()`](/api/FairMCApplication/#InitMC) connects the MC application to the transport engine:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="fMC = TVirtualMC::GetMC();" end="fMC->BuildPhysics();" title="FairMCApplication.cxx" />
+
+1. It gets the transport engine. If there is no transport engine, it logs the fatal error
+   `No MC engine defined`. A fatal error stops the program only if FairLogger has a fatal handler,
+   see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+2. It gets the stack from the transport engine. The stack must derive from `FairGenericStack`,
+   else `InitMC()` logs the fatal error `No Stack defined.`. The MC application keeps the stack in a
+   `std::unique_ptr` and deletes it at the end.
+3. It gives the magnetic field to the transport engine.
+4. It calls `Init()` of the transport engine. The next section shows which callbacks the transport
+   engine calls in this step.
+5. It calls `BuildPhysics()` of the transport engine.
+6. It calls `Init()` of the primary generator and `InitTask()` of the tasks. Then it writes the
+   folder of the output and makes the output tree
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L942)).
+
+The tasks initialize after the detectors register their branches. Thus a task can read the MC
+points of the detectors in its `Init()`.
+
+## The callbacks during initialization
+
+The transport engine calls these callbacks before the first event, and it sets their order and time.
+Geant3 calls all of them in its `Init()`. Geant4 VMC with the geometry option `geomRoot` of the
+examples calls `ConstructGeometry()`, `MisalignGeometry()` and `AddParticles()` when the
+configuration makes the `TGeant4` object. It calls `AddIons()` in `BuildPhysics()`.
+
+The MC application does this in each callback:
+
+| Callback | What the MC application does |
+| --- | --- |
+| [`ConstructGeometry()`](/api/FairMCApplication/#ConstructGeometry) | For each module in the order of `AddModule()`, it calls `InitParContainers()` and then `ConstructGeometry()`. Then it closes the geometry and gives it to the transport engine with `SetRootGeometry()`. At the end, it calls `RegisterAlignmentMatrices()` of each module. |
+| [`MisalignGeometry()`](/api/FairMCApplication/#MisalignGeometry) | It calls `AlignGeometry()` of the run, see [Alignment and misalignment](/reconstruction/alignment/). |
+| [`ConstructOpGeometry()`](/api/FairMCApplication/#ConstructOpGeometry) | It gives the Cherenkov parameters of the media file to the transport engine. Then it calls `ConstructOpGeometry()` of each module. |
+| [`InitGeometry()`](/api/FairMCApplication/#InitGeometry) | It registers the output: `Register()` of the stack, `SetSpecialPhysicsCuts()` of each module, `Initialize()` and `Register()` of each active detector, and the MC event header. Then it sets the run ID in the MC event header and makes the map of the sensitive volumes. |
+| [`AddParticles()`](/api/FairMCApplication/#AddParticles), [`AddIons()`](/api/FairMCApplication/#AddIons) | They define the particles of [`AddNewParticle()`](/api/FairRunSim/#AddNewParticle) and the ions of [`AddNewIon()`](/api/FairRunSim/#AddNewIon). If you enabled the external decayer or the user decay, `AddParticles()` also loads their macros. |
+
+Some details of these callbacks:
+
+- An active detector is a `FairDetector` that you make with `Active` set to `kTRUE`. Passive
+  modules and inactive detectors get calls only before the first event.
+- `ConstructGeometry()` calls `SetRootGeometry()` only if
+  [`IsImportTGeoToVMC()`](/api/FairRunSim/#IsImportTGeoToVMC) is true. This is the default.
+- The stack registers its branch only if the run has a primary generator. Else the MC application
+  logs the warning `Stack is not registered`
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L945-L952)).
+- `InitGeometry()` does its work only once, also if the transport engine calls it again
+  ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L843-L847)).
+
+## One event
+
+[`FairRunSim::Run()`](/api/FairRunSim/#Run) calls [`RunMC()`](/api/FairMCApplication/#RunMC) of the
+MC application. `RunMC()` gives the list of active detectors to the stack and calls `ProcessRun()` of
+the transport engine. The transport engine then processes one event after the other.
+
+### Begin the event and generate the primaries
+
+For each event, the transport engine first calls `BeginEvent()` and then `GeneratePrimaries()`
+(Geant3 and Geant4 VMC behavior). `BeginEvent()` calls `BeginEvent()` of each active detector.
+`GeneratePrimaries()` gives the stack to the primary generator:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="void FairMCApplication::GeneratePrimaries()" title="FairMCApplication.cxx" />
+
+[`GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) resets the
+[MC event header](/concepts/event-headers/) and makes the event vertex. Then it calls `ReadEvent()`
+of each generator. Each generator adds its particles
+with [`AddTrack()`](/api/FairPrimaryGenerator/#AddTrack), which pushes them into the stack. At the
+end, `GenerateEvent()` sets the event ID and the number of primaries in the MC event header
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L224-L285)). If no
+generator sets the event ID, the event IDs count from 1. See
+[Primary generators](/simulation/generators/).
+
+### Transport the particles
+
+The transport engine takes the particles from the stack and transports them step by step. It calls
+these callbacks:
+
+| Callback | When | What the MC application does |
+| --- | --- | --- |
+| [`BeginPrimary()`](/api/FairMCApplication/#BeginPrimary) | Before each primary | `BeginPrimary()` of each active detector |
+| [`PreTrack()`](/api/FairMCApplication/#PreTrack) | Before each track | `PreTrack()` of each active detector. With `SetStoreTraj()`, it also starts a trajectory for the event display. |
+| [`Stepping()`](/api/FairMCApplication/#Stepping) | After each step | `ProcessHits()` of the detector, if the step is in a sensitive volume. It also adds points to the trajectory and to the radiation managers. |
+| [`PostTrack()`](/api/FairMCApplication/#PostTrack) | After each track | `PostTrack()` of each active detector |
+| [`FinishPrimary()`](/api/FairMCApplication/#FinishPrimary) | After each primary | `FinishPrimary()` of each active detector, then `FinishPrimary()` of the stack |
+
+The transport engine pushes each secondary particle into the stack. Geant3 takes all particles from
+the stack. Geant4 VMC takes only the primaries, and transports the secondaries itself. For the
+details, see [The particle stack and MC tracks](/simulation/stack/).
+
+### Find the detector of a step
+
+In `InitGeometry()`, the MC application puts each sensitive volume in a map. The key is the volume
+ID of the transport engine. In each step, `Stepping()` gets the volume ID and the copy number of the
+current volume. Then it calls `ProcessHits()` of the detector that owns the volume:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="Int_t copyNo;" end="} while (voliter != fVolMap.upper_bound(id));" title="FairMCApplication.cxx" />
+
+A step in a volume that is not sensitive calls no detector. A detector marks its sensitive volumes
+when it builds its geometry, for example with `IsSensitive()`. See
+[Write a detector](/simulation/detectors/).
+
+### Make an MC point
+
+`ProcessHits()` gets the data of the step from the transport engine. `FairTutorialDet1` adds the
+energy loss of all steps in the volume. When the track leaves the volume, stops or disappears, the
+detector makes an MC point. It makes no MC point if the energy loss is 0:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="// Create FairTutorialDet1Point at exit of active volume" end="stack->AddPoint(kTutDet);" title="FairTutorialDet1.cxx" />
+
+The MC point keeps the current track number of the stack. At the end of the event, the stack
+replaces it with the index of the MC track. `AddPoint()` counts the MC points of the track. The
+stack uses this count to select the tracks that it stores.
+
+## The end of an event
+
+After the last particle, the transport engine calls
+[`FinishEvent()`](/api/FairMCApplication/#FinishEvent):
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="// --> Fill the stack output array" end="fStack->Reset();" title="FairMCApplication.cxx" />
+
+1. `FillTrackArray()`: the stack selects the particles to store and fills the array of MC tracks.
+2. `UpdateTrackIndex()`: the stack replaces the track numbers in the MC tracks and in the MC points
+   with the indices of the MC track array.
+3. The tasks of the run execute, and then the MC application calls `FinishEvent()` of each task.
+4. It calls `FinishEvent()` of each active detector.
+5. The sink writes the event. The MC application skips this step if your code called
+   [`SetSaveCurrentEvent(kFALSE)`](/api/FairMCApplication/#SetSaveCurrentEvent) during the event.
+   Then it sets the flag back to `kTRUE` for the next event.
+6. It calls `EndOfEvent()` of each active detector.
+7. It resets the stack, the trajectories and the managers of the radiation length and the radiation
+   map.
+
+The order is important for your detector. The MC points must be complete in `FinishEvent()`, because
+the sink writes them in the next step. Clear the point collection in `EndOfEvent()`, as
+[`FairTutorialDet1`](/source/examples/simulation/Tutorial1/src/FairTutorialDet1.cxx/#L94) does.
+FairRoot does not call `Reset()` of a detector.
+
+The tasks of a simulation run before the sink writes the event. Thus a task can use the MC points of
+the event, and the sink writes the output of the task in the same entry.
+
+### The hooks of a detector
+
+[Write a detector](/simulation/detectors/#the-functions-of-a-detector) lists the functions of a
+detector in the order of the calls, with the work of your detector in each one.
+[Hooks and their call order](/reference/hooks/#fairdetector) gives the line of code of each call.
+
+A stack like `FairStack` of the examples also calls
+[`GetCollection()`](/api/FairDetector/#GetCollection) of each active detector at the end of each
+event. It needs the MC points to correct their track numbers.
+
+## The end of the run
+
+After the last event, `RunMC()` calls [`FinishRun()`](/api/FairMCApplication/#FinishRun) of the MC
+application ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L308-L381)):
+
+1. It calls `FinishRun()` of each active detector and `FinishTask()` of the tasks.
+2. If the run has a radiation grid, it writes the dose histograms to their own file.
+3. Without a radiation grid, it writes the output tree with `FairRootManager::Write()`.
+4. It calls `Finish()` of the primary generator.
+5. In a run without worker threads, it removes the misalignment from the geometry.
+
+Then `FairRunSim::Run()` closes the sink.
+
+### When the primary generator stops
+
+`GenerateEvent()` returns `kFALSE` when `ReadEvent()` of a generator fails, for example at the end of
+its input file. Then `GeneratePrimaries()` calls [`StopRun()`](/api/FairMCApplication/#StopRun).
+`StopRun()` calls `FinishEvent()` and `FinishRun()`, writes the output, logs a warning and ends the
+process with `exit(0)` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L614-L623)).
+
+:::caution
+After `StopRun()`, the code after `Run()` in your macro does not run. For example, a
+`CreateGeometryFile()` after `Run()` writes no file. Also, `FinishEvent()` writes an entry for the
+event that the generator could not complete. Ask for no more events than your generators can make.
+:::
+
+## The output
+
+The run writes these objects to the file of a `FairRootFileSink`, see
+[Output: sinks and persistence](/reconstruction/output/):
+
+| Object | Content | Written by |
+| --- | --- | --- |
+| Tree `cbmsim` | One entry for each event that the sink wrote | `InitMC()` makes it, `FinishEvent()` fills it |
+| Branch `MCEventHeader.` | The MC event header (`FairMCEventHeader`): run ID, event ID, vertex, number of primaries | `InitGeometry()` registers it |
+| Branch `MCTrack` | The MC tracks of the stack, for example `FairMCTrack` objects | `Register()` of the stack |
+| Branches of the detectors, for example `TutorialDetPoint` | The MC points | `Register()` of each active detector |
+| Branches of the tasks | The output of the tasks of the run | `Init()` of each task |
+| Folder `cbmroot` | The folders and objects that the run registered | `InitMC()` |
+| `BranchList`, `TimeBasedBranchList` | The names of the registered branches | `InitMC()` |
+| `FileHeader` | `FairFileHeader` with the run ID and the class names of the tasks | `Init()` |
+| `SimulationSetup` | The engine name and the YAML configuration, only with a `FairYamlVMCConfig` | `FairYamlVMCConfig::Setup()` |
+
+The tree name `cbmsim` is the default of
+[`FairRootManager::GetTreeName()`](/api/FairRootManager/#GetTreeName). Change it with
+[`SetTreeName()`](/api/FairRootManager/#SetTreeName).
+
+The geometry and the parameters are not in this file:
+
+- The runtime database writes the parameter containers to its output, for example a
+  `FairParRootFileIo` that your macro opens. There, `FairGeoParSet` holds the `TGeoManager`.
+  `FairBaseParSet` holds the list of modules, the primary generator, the beam momentum, the names of
+  the parameter containers and the random seed. See [Parameters and the runtime database](/concepts/parameters/).
+- [`CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) writes `gGeoManager` to a separate ROOT
+  file.
+
+The macro of Tutorial 1 reads its output back and checks it. In a multithreaded run, each worker
+thread writes its own file:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='TChain chain("cbmsim");' end='leaves." << endl;' title="run_tutorial1.C" />
+
+The macro expects three branches: `MCEventHeader.`, `MCTrack` and `TutorialDetPoint`.
+
+## Multithreaded Geant4
+
+With [`SetIsMT(true)`](/api/FairRunSim/#SetIsMT) and Geant4, the transport engine processes the
+events in worker threads. For each thread, it calls
+[`CloneForWorker()`](/api/FairMCApplication/#CloneForWorker) of the MC application. The clone gets
+its own `FairRunSim` and a clone of the sink
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). It also gets a
+clone of each module (`CloneModule()`),
+of the stack (`CloneStack()`) and of the primary generator
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L132-L204)). See
+[Multithreaded Geant4](/simulation/geant4-mt/).
+
+## Related pages
+
+- [Write a simulation macro](/simulation/run-macro/): the complete macro, step by step.
+- [Transport engines and their configuration](/simulation/engines/): the YAML files, the cuts and
+  the post-init configuration.
+- [Write a detector](/simulation/detectors/): sensitive volumes, `ProcessHits()` and MC points.
+- [Primary generators](/simulation/generators/): `FairPrimaryGenerator` and its generators.
+- [The particle stack and MC tracks](/simulation/stack/): the selection of the tracks and the
+  `MCTrack` branch.
+- [Hooks and their call order](/reference/hooks/): the hooks of modules, detectors and tasks.

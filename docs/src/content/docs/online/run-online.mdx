@@ -1,0 +1,286 @@
+---
+title: 'Process live data with FairRunOnline'
+description: 'FairRunOnline reads events from an online source, lets the unpackers convert them and runs the tasks. Init(), the event loop, Finish(), run IDs and histograms over HTTP.'
+sidebar:
+  order: 2
+code: [fairroot/online/steer/FairRunOnline.h, fairroot/online/steer/FairRunOnline.cxx, fairroot/online/source/FairOnlineSource.h, fairroot/online/source/FairOnlineSource.cxx, fairroot/online/source/FairUnpack.h, examples/advanced/MbsTutorial/unpack_mbs.C, examples/advanced/MbsTutorial/FairMBSTask.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+`FairRunOnline` is the run class for data from an online source. In a loop, it reads a raw event,
+lets the unpackers of the source convert the raw data into branches, and executes your tasks. While
+the loop runs, it can show your histograms in a web browser.
+
+## Write an online macro
+
+<Steps>
+
+1. Make the source and add the unpackers with
+   [`AddUnpacker()`](/api/FairOnlineSource/#AddUnpacker). The source owns the unpackers and deletes
+   them ([FairOnlineSource.cxx](/source/fairroot/online/source/FairOnlineSource.cxx/#L32-L36)).
+
+2. Make the run with the source: `new FairRunOnline(source)`. The run owns the source
+   ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L256-L260)).
+
+3. Set a sink with [`SetSink()`](/api/FairRun/#SetSink-2) if you want to store the branches.
+   Without a sink, the run stores nothing.
+
+4. Call [`ActivateHttpServer()`](/api/FairRunOnline/#ActivateHttpServer) if you want to show
+   histograms. Call it before `Init()`.
+
+5. Add the tasks with [`AddTask()`](/api/FairRun/#AddTask-2).
+
+6. Call [`Init()`](/api/FairRunOnline/#Init).
+
+7. Call `Run(0, n)` for n events, or `Run(-1, 0)` to read until the data ends.
+
+8. If you turned off auto finish, call [`Finish()`](/api/FairRunOnline/#Finish).
+
+</Steps>
+
+The macro of the [MBS tutorial](/examples/mbs-tutorial/) does steps 1 to 6:
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="FairLmdSource* source = new FairLmdSource();" end="run->Init();" title="unpack_mbs.C" />
+
+Then it calls `run->Run(0, 400)`. It turns off auto finish, but it does not call `Finish()`. See
+the [MBS tutorial](/examples/mbs-tutorial/) for the effect.
+
+## What Init() does
+
+`Init()` prepares the source, the unpackers and the tasks in this order
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L107-L205)):
+
+1. If you call it a second time, it logs the fatal error `Error Init is already called before!`
+   and calls `exit(-1)`.
+2. It initializes the sink and the source. `FairLmdSource`, for example, opens its first file here.
+3. It sets the run ID. See [Run IDs and parameter containers](#run-ids-and-parameter-containers).
+4. It adds the run ID to the runtime database. If you set a field with `SetField()`, it calls
+   `Init()` and `FillParContainer()` of the field.
+5. It calls `SetParContainers()` of each unpacker, and then of each task. Then it initializes the
+   parameter containers for the run ID.
+6. It registers the event header as the branch `EventHeader.`. The branch is persistent if the run
+   has a sink.
+7. It calls `Init()` of each unpacker, in the order of `AddUnpacker()`. If an unpacker returns
+   `kFALSE`, the run logs a fatal error and skips the next steps. `Run()` does not check this. The
+   `fatal` line stops the program only if FairLogger has a fatal handler, see
+   [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+8. It calls `Init()` of each task.
+9. It writes the folder structure and the file header to the sink.
+
+The order has a reason. The unpackers register their output branches in their `Init()`, before the
+tasks start. Thus a task gets the unpacked data with `FairRootManager::GetObject()` in its own
+`Init()`. A source that is not online (`kFILE`) also reads its first event after step 2. An online
+source does not.
+
+:::caution
+`Init()` does not check the return value of the source's `Init()`
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L117-L118)). If the source
+cannot open its input, the run continues. `FairLmdSource` then gives a null channel to MbsAPI in
+the first `ReadEvent()`. Check the log for lines like `FairLmdSource: not found: <file>` or
+`File <file> opening failed.` before the event loop starts.
+:::
+
+## Run() and the event loop
+
+[`Run(Ev_start, Ev_end)`](/api/FairRunOnline/#Run) has no default arguments, so give both. With an
+online source, the arguments have this effect:
+
+| Call | What the run does |
+| --- | --- |
+| `Run(-1, 0)` | Any negative `Ev_start`: it reads events until the source returns 1 or until you press Ctrl-C. |
+| `Run(0, n)` | It executes n events, or fewer if the source returns 1 before. Skipped events do not count. |
+| `Run(n, 0)` | It executes no event, because the loop goes from n to 0. |
+
+The reason is [`CheckMaxEventNo()`](/api/FairSource/#CheckMaxEventNo). An online source keeps the
+default of `FairSource`, which returns -1. Then `Run()` does not change the range
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L242-L265)). A file source
+returns its number of entries, and then `Run(n, 0)` means n events. The MBS sources also ignore the
+event number. Thus `Run(100, 200)` executes the next 100 events, not the events 100 to 199.
+
+### The return value of ReadEvent()
+
+For each event, `FairRootManager::ReadEvent()` calls `Reset()` of the source, which calls
+`Reset()` of each unpacker. Then it calls `ReadEvent()` of the source
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L409-L431)). The run uses
+the return value ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L266-L299)):
+
+| Value | Meaning | What the run does |
+| --- | --- | --- |
+| 0 | The source read an event, and the unpackers took its data. | It executes the event. |
+| 1 | The data ended, or an error occurred. | It ends the loop. |
+| 2 | The source skipped the event, for example because no unpacker took its data. | It skips the event. The tasks do not see it, and it does not count for n. |
+
+### One event
+
+For each event with the value 0, the run calls this function:
+
+<Snippet file="fairroot/online/steer/FairRunOnline.cxx" start="Int_t FairRunOnline::EventLoop()" title="FairRunOnline.cxx" />
+
+The run does these steps:
+
+- It copies the run ID of the source into the event header, and checks if the run ID changed.
+- It calls `Exec()` of all tasks.
+- It fills the sink. A task can call [`MarkFill(kFALSE)`](/api/FairRun/#MarkFill) on the run to
+  keep the current event out of the sink. The run then sets the flag back to `kTRUE` for the next
+  event ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L396-L403)).
+- It calls `FinishEvent()` of the tasks.
+- It counts the event. After each `refreshRate` events, the HTTP server answers the requests that
+  wait.
+
+### Stop the loop with Ctrl-C
+
+In each event, the run tells ROOT to ignore Ctrl-C and installs its own handler for `SIGINT`. The
+handler only sets a flag. The run ends the loop after the current event, and `Run()` ends in the
+normal way: with auto finish, it calls `Finish()`. Thus the sink keeps all events up to the stop.
+
+This has two limits:
+
+- The run installs the handler in the first event that it executes. Before this event, the run
+  does not handle Ctrl-C.
+- After a skipped event, the run does not check the flag. While the source skips all events,
+  Ctrl-C does not end the loop.
+
+## Finish the run
+
+[`Finish()`](/api/FairRunOnline/#Finish) calls `Finish()` of each task, writes the sink, closes the
+source with `Close()` and closes the sink
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L307-L315)). By default,
+`Run()` calls `Finish()` at its end. After
+[`SetAutoFinish(kFALSE)`](/api/FairRunOnline/#SetAutoFinish), `Run()` does not call it. Then you
+must call `Finish()` yourself, for example after the last of several `Run()` calls.
+
+## Write an unpacker
+
+An unpacker converts one kind of raw data into objects. It derives from
+[`FairUnpack`](/api/FairUnpack/):
+
+<Snippet file="fairroot/online/source/FairUnpack.h" start="class FairUnpack : public TObject" title="FairUnpack.h" />
+
+| Function | Who calls it, and when | What your unpacker does |
+| --- | --- | --- |
+| Constructor | By you | The five values select the data that the unpacker gets. See [Read MBS and LMD data](/online/mbs/#how-a-source-selects-the-unpackers). |
+| [`SetParContainers()`](/api/FairUnpack/#SetParContainers) | In `Init()` of the run, before the tasks do the same | It gets its parameter containers from the runtime database. The default does nothing. |
+| [`Init()`](/api/FairUnpack/#Init) | In `Init()` of the run, after the parameter containers are ready | It registers its output, for example with a call of `Register()`. It returns `kFALSE` on an error. |
+| [`ReInit()`](/api/FairUnpack/#ReInit) | When the run ID changes, but not with static containers | It updates itself for the new parameters. The default returns `kTRUE`. |
+| [`DoUnpack(data, size)`](/api/FairUnpack/#DoUnpack) | By the source, for each piece of raw data that matches | It converts the data and adds objects to its output. It returns `kFALSE` on an error. |
+| [`Reset()`](/api/FairUnpack/#Reset) | Before each event | It clears its output. |
+| [`Register()`](/api/FairUnpack/#Register) | By your own `Init()`. The framework does not call it. | It registers the output branches with `FairRootManager`. |
+
+The unpacker of the MBS tutorial registers a `TClonesArray` as the persistent branch `MBSRawItem`:
+
+<Snippet file="examples/advanced/MbsTutorial/FairMBSUnpack.cxx" start="void FairMBSUnpack::Register()" title="FairMBSUnpack.cxx" />
+
+## Run IDs and parameter containers
+
+`Init()` sets the run ID of the run
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L136-L151)):
+
+- If you set a run ID with [`SetRunId()`](/api/FairRun/#SetRunId) before `Init()`, the run gives
+  it to the source.
+- If not, the run takes the run ID of the source. If this run ID is 0, the run makes a new run ID
+  with [`FairRunIdGenerator::generateId()`](/api/FairRunIdGenerator/#generateId) and gives it to the
+  source. This run ID is the current time in seconds.
+
+The MBS sources do not set a run ID. Thus, without `SetRunId()`, each execution gets the time of its
+start as the run ID. Two executions that start in the same second get the same run ID.
+
+In each event, the run compares the run ID of the source with its own run ID. When the source has a
+new run ID, the run does these steps
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L336-L357)):
+
+1. It initializes the parameter containers for the new run ID.
+2. It calls `ReInit()` of each unpacker. If an unpacker returns `kFALSE`, the run logs a fatal error
+   and ends the loop.
+3. It calls `ReInit()` of the tasks.
+
+After [`SetContainerStatic()`](/api/FairRunOnline/#SetContainerStatic), the run only takes the new
+run ID and skips the three steps. A source class of your own can call `SetRunId()` when the data
+starts a new run. See [Event headers and run IDs](/concepts/event-headers/) and
+[Parameters and the runtime database](/concepts/parameters/).
+
+## Show histograms over HTTP
+
+[`ActivateHttpServer(refreshRate, httpPort)`](/api/FairRunOnline/#ActivateHttpServer) makes a ROOT
+`THttpServer` on the port `httpPort` (default 8080). In the event loop, the run lets the server
+answer the waiting requests after each `refreshRate` events (default 10000). The run divides by
+`refreshRate`, so give a value larger than 0.
+
+[`AddObject()`](/api/FairRunOnline/#AddObject) puts an object on the server. The class of the
+object selects the folder ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L377-L394)):
+
+| Class name | Folder on the server |
+| --- | --- |
+| `TCanvas` | `CANVAS` |
+| `TFolder` | The top folder `/` |
+| Contains `TH1` or `TH2`, for example `TH1F` or `TH2D` | `HISTO` |
+| All other classes | None. The run logs the warning `FairRunOnline::AddObject : unrecognized object type : <class>`. |
+
+[`RegisterHttpCommand(name, command)`](/api/FairRunOnline/#RegisterHttpCommand) registers a command
+on the server. The run puts `/Objects/HISTO` before `command`, so the command can call a function of
+a histogram that `AddObject()` added. For other objects and settings, use the `THttpServer` directly
+with [`GetHttpServer()`](/api/FairRunOnline/#GetHttpServer).
+
+The task of the MBS tutorial adds a histogram, a command, a canvas and a folder in its `Init()`:
+
+<Snippet file="examples/advanced/MbsTutorial/FairMBSTask.cxx" start="fRunOnline.AddObject(fhQdc);" end="fRunOnline.AddObject(folder);" title="FairMBSTask.cxx" />
+
+The task gets the run as a reference in its constructor. A task can also use
+[`FairRunOnline::Instance()`](/api/FairRunOnline/#Instance). Open `http://<host>:8080` in a web
+browser to see the objects.
+
+:::caution
+Without `ActivateHttpServer()`, the functions `AddObject()` and `RegisterHttpCommand()` do
+nothing. They give no message. Thus call `ActivateHttpServer()` before `Init()`, because the tasks
+add their objects in `Init()`.
+:::
+
+## All functions of FairRunOnline
+
+The class also has the functions of [`FairRun`](/api/FairRun/), for example `SetSink()`,
+`AddTask()`, `SetRunId()` and `GetRuntimeDb()`.
+
+| Function | Effect |
+| --- | --- |
+| [`FairRunOnline(FairSource*)`](/api/FairRunOnline/#FairRunOnline-2) | Makes the run with a source. The default constructor needs `SetSource()` later. |
+| [`Instance()`](/api/FairRunOnline/#Instance) | Returns the run that was made last. |
+| [`Init()`](/api/FairRunOnline/#Init) | Prepares the source, the unpackers and the tasks. |
+| [`Run(Ev_start, Ev_end)`](/api/FairRunOnline/#Run) | Executes the event loop. |
+| [`Finish()`](/api/FairRunOnline/#Finish) | Finishes the tasks and closes the source and the sink. |
+| [`SetAutoFinish(Bool_t)`](/api/FairRunOnline/#SetAutoFinish) | `kTRUE` (default): `Run()` calls `Finish()`. |
+| [`SetContainerStatic(Bool_t = kTRUE)`](/api/FairRunOnline/#SetContainerStatic) | `kTRUE`: no new parameters when the run ID changes. The default of the run is `kFALSE`. |
+| [`Reinit(UInt_t runId)`](/api/FairRunOnline/#Reinit) | Initializes the parameter containers for `runId`. |
+| [`getRunId()`](/api/FairRunOnline/#getRunId) | Returns the run ID as `UInt_t`. |
+| [`SetField(FairField*)`](/api/FairRunOnline/#SetField) | Sets the magnetic field. The run deletes it in its destructor. |
+| [`GetField()`](/api/FairRunOnline/#GetField) | Returns the field of `SetField()`, or `nullptr`. |
+| [`GetContainerStatic()`](/api/FairRunOnline/#GetContainerStatic) | Returns the value of `SetContainerStatic()`. |
+| [`ActivateHttpServer(Int_t = 10000, Int_t = 8080)`](/api/FairRunOnline/#ActivateHttpServer) | Makes the HTTP server. |
+| [`AddObject(TObject*)`](/api/FairRunOnline/#AddObject) | Puts a histogram, a canvas or a folder on the server. |
+| [`RegisterHttpCommand(TString, TString)`](/api/FairRunOnline/#RegisterHttpCommand) | Adds a command to the server. |
+| [`GetHttpServer()`](/api/FairRunOnline/#GetHttpServer) | Returns the `THttpServer`, or `nullptr`. |
+
+## Problems that can occur
+
+- **The run executes no event:** you called `Run(n, 0)`. Call `Run(0, n)`.
+- **`run->Run()` does not compile:** `FairRunOnline::Run()` has no default arguments. Give both
+  arguments.
+- **The tasks never execute:** the source returns 2 for each event, because no unpacker matches the
+  data. Check the five values of the unpackers.
+- **The web page shows no objects:** you called `ActivateHttpServer()` after `Init()`, or not at
+  all.
+- **The web page does not update:** the run lets the server answer only after each `refreshRate`
+  events. Give a smaller value.
+- **The program crashes in the first event:** the source did not open its input. See the caution
+  in [What Init() does](#what-init-does).
+- **Ctrl-C does not stop the loop:** the source skips all events. See
+  [Stop the loop with Ctrl-C](#stop-the-loop-with-ctrl-c).
+
+## Related pages
+
+- [Read MBS and LMD data](/online/mbs/): the MBS sources and how they select the unpackers.
+- [MBS tutorial](/examples/mbs-tutorial/): a complete macro with an unpacker and a task.
+- [Runs](/concepts/runs/): the run classes of FairRoot.
+- [Tasks](/concepts/tasks/): `Init()`, `Exec()` and `Finish()` of a task.
+- [Output: sinks and persistence](/reconstruction/output/): the sink and the persistent branches.
+- [Hooks and their call order](/reference/hooks/): the call order of all hooks.

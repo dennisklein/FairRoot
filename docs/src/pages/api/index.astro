@@ -1,0 +1,92 @@
+---
+// API overview: the public types and enums of each library, then the namespaces.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { model, base, apiSidebar, apiGroups } from '../../lib/model.mjs';
+import '../../styles/api.css';
+
+const m = model();
+const groups = apiGroups();
+const libraries: { library: string; id: string; groups: any[] }[] = [];
+for (const g of groups) {
+  let lib = libraries.find((l) => l.library === g.library);
+  if (!lib) {
+    lib = { library: g.library, id: g.library.toLowerCase(), groups: [] };
+    libraries.push(lib);
+  }
+  lib.groups.push(g);
+}
+const count = m.types().length;
+const kindOf = (e: any) => (e.kind === 'enum' ? (e.strong ? 'enum class' : 'enum') : e.kind);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'API reference',
+    description: 'The public classes, structs, enums and functions of the FairRoot libraries, generated from the public headers.',
+    tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+  }}
+  sidebar={apiSidebar()}
+  headings={[...libraries.map((l) => ({ depth: 2, slug: l.id, text: l.library })), { depth: 2, slug: 'namespaces', text: 'Namespaces' }]}
+>
+  <p class="api-lead">
+    These pages show the {count} public types of the FairRoot libraries and their members. Doxygen reads the public headers in
+    <code>fairroot/</code> at each build of this site, so the signatures are always current. The text comes from the comments in the
+    headers. Many classes have no comment yet: the <a href={`${base}/concepts/architecture/`}>docs pages</a> explain them.
+  </p>
+  <p>
+    The types are sorted by library. Each library is a CMake target, for example <code>FairRoot::Base</code>. Link your target to
+    the library of the classes that you use. Each member links to its line in the <a href={`${base}/source/`}>source browser</a>.
+    Use the search (<kbd>Ctrl</kbd> <kbd>K</kbd>) to find a class or a member by name.
+  </p>
+  {
+    libraries.map((l) => (
+      <>
+        <h2 id={l.id}>
+          <code>FairRoot::{l.library}</code>
+        </h2>
+        {l.groups.map((g: any) => (
+          <>
+            {(g.sub || l.groups.length > 1) && (
+              <p class="api-group">
+                <a href={`${base}/source/#${`fairroot/${g.module}${g.sub ? '/' + g.sub : ''}`.replace(/[^A-Za-z0-9]+/g, '-')}`}>
+                  <code>fairroot/{g.module}/{g.sub ? `${g.sub}/` : ''}</code>
+                </a>
+              </p>
+            )}
+            <ul class="api-list">
+              {g.entries.map((e: any) => (
+                <li>
+                  <a href={e.url}>
+                    <code>{e.name}</code>
+                  </a>
+                  <span class="fr-badge">{kindOf(e)}</span>
+                  {e.brief ? <span class="api-list-brief" set:html={e.brief} /> : <span class="api-list-brief" />}
+                </li>
+              ))}
+            </ul>
+          </>
+        ))}
+      </>
+    ))
+  }
+  <h2 id="namespaces">Namespaces</h2>
+  <ul class="api-list">
+    <li>
+      <a href={m.global.url}>Global scope</a>
+      <span class="api-list-brief">Enums, functions, type aliases and variables of the headers outside of a class or a namespace.</span>
+    </li>
+    {
+      m.namespaces()
+        .sort((a: any, b: any) => a.name.localeCompare(b.name))
+        .map((ns: any) => (
+          <li>
+            <a href={ns.url}>
+              <code>{ns.name}</code>
+            </a>
+            <span class="fr-badge">namespace</span>
+            {ns.brief && <span class="api-list-brief" set:html={ns.brief} />}
+          </li>
+        ))
+    }
+  </ul>
+</StarlightPage>

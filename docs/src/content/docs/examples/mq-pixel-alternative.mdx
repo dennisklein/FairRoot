@@ -1,0 +1,169 @@
+---
+title: 'MQ: pixel detector, alternative'
+description: 'A variant of the pixel detector example: the devices send plain arrays of PixelPayload classes, a hit finder works on these arrays, and the sampler can pack several events into one message.'
+sidebar:
+  order: 10
+code: [examples/MQ/pixelAlternative/src/devices/FairMQPixAltSamplerBin.cxx,
+  examples/MQ/pixelAlternative/src/devices/FairMQPixAltTaskProcessorBin.h,
+  examples/MQ/pixelAlternative/src/devices/FairMQPixAltFileSinkBin.cxx, examples/MQ/pixelAlternative/src/PixelAltFindHits.cxx,
+  examples/MQ/pixelAlternative/src/PixelAltDigiWriteToRootVector.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps, FileTree } from '@astrojs/starlight/components';
+
+This example uses the detector, the macros, the parameters and some devices of the
+[pixel detector example](/examples/mq-pixel-detector/). Its own devices send no ROOT objects and no
+`TClonesArray`: each part of a message is a plain array of the classes in `PixelPayload.h`. A hit
+finder reads the digis from such an array and writes the hits straight into the output message.
+
+## What is different
+
+| | `bin` devices of pixelDetector | pixelAlternative |
+| --- | --- | --- |
+| Sampler input | ROOT file with digis, through `FairFileSource` | binary file `digisBin.dat` of `run_digiToBin.C` |
+| Events in a message | one | `--aggregate` events: a header part and a digi part for each event |
+| Hit finder | makes `PixelDigi` objects, runs `PixelFindHits`, copies the `PixelHit` objects into an array | `PixelAltFindHits` reads the digi array and writes the hit array |
+| Output | ROOT file of `pixel-sink-bin` | ROOT file of `pixel-sink-bin`, or binary file of `pixalt-sink-bin` |
+
+## Files
+
+<FileTree>
+
+- examples/MQ/pixelAlternative/
+  - src/ `PixelAltFindHits`, `PixelAltDigiWriteToRootVector` (library `ExPixelAlt`)
+    - devices/ sampler, processor and sink
+  - run/ main functions of the executables
+    - scripts/
+      - startFairMQPixAlt.sh.in
+
+</FileTree>
+
+The library `ExPixelAlt` links `FairRoot::ExPixel` of the pixel detector example. The script uses
+the input files of the pixel detector example, and `pixel-sampler-bin` and `pixel-sink-bin` from its
+build folder ([run/CMakeLists.txt](/repo/examples/MQ/pixelAlternative/run/CMakeLists.txt)).
+
+## The hit finder on arrays
+
+The processor `FairMQPixAltTaskProcessorBin<PixelAltFindHits>` loops over the pairs of parts in a
+message. For each event, it makes an output part with room for one hit for each digi, and gives the
+two arrays to the task:
+
+<Snippet file="examples/MQ/pixelAlternative/src/devices/FairMQPixAltTaskProcessorBin.h" start="// create part with hits" end="partsOut.AddPart(std::move(msgTCA));" title="FairMQPixAltTaskProcessorBin.h" />
+
+`PixelAltFindHits::ExecMQ()` makes one hit from each digi. It writes the position and its error
+into the hit array, which is the memory of the output message:
+
+<Snippet file="examples/MQ/pixelAlternative/src/PixelAltFindHits.cxx" start="void PixelAltFindHits::ExecMQ(PixelPayload::Digi* digiPalVector," title="PixelAltFindHits.cxx" />
+
+`FindHit()` gets the position of the sensor from `gGeoManager`. Thus the task needs the geometry
+and the digitization parameters. The processor gets them from the parameter server, as the
+processor of the pixel detector example does. When the run ID changes, it requests `FairGeoParSet`
+and the containers of `GetParList()`. It has no option `--static-pars`. The output message has
+the same pairs as the input message: a header part and a hit part for each event.
+
+## The sampler
+
+`FairMQPixAltSamplerBin` reads the binary format of `PixelDigiWriteToBinFile`. For each event, the
+file has four `int` values: run ID, MC entry number, part number and number of digis. Then it has
+four `short` values for each digi. The file has no charge, so the sampler sets `fCharge` to 1
+([FairMQPixAltSamplerBin.cxx](/source/examples/MQ/pixelAlternative/src/devices/FairMQPixAltSamplerBin.cxx/#L126-L171)).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--file-name` | none | Input files, read one after the other. |
+| `--max-index` | `-1` | Number of events. `-1` reads to the end of the files. |
+| `--aggregate` | `1` | Number of events in one message. |
+| `--out-channel` | `data-out` | Output channel. |
+| `--ack-channel` | empty | Channel for the acknowledgments of the sink. |
+
+With an ack channel, the sampler waits in `PostRun()` for `--max-index` divided by `--aggregate`
+acknowledgments, one for each message. If the first file name contains `.root`, the sampler reads
+the tree `fairdata` with the branches `EventHeader.` and `DigiVector` instead, one event for each
+message. The task `PixelAltDigiWriteToRootVector` writes such files, but it names the branch
+`DigiVector.`, and the only call of it in `run_digiToBin.C` is a comment. The script does not use
+this input.
+
+## The script
+
+CMake writes `startFairMQPixAlt.sh` into the build folder of `pixelAlternative/run`. In the build
+tree, its work folder is the build folder of the pixel detector example. The topology is a
+parameter server, one sampler, `-p` processors and one sink:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `-i`, `--input-type` | `dat` | `dat`: `pixalt-sampler-bin` reads `macros/digisBin.dat`. `root`: `pixel-sampler-bin` reads `macros/pixel_TGeant4.digi.root`. |
+| `-o`, `--output-type` | `root` | `root`: `pixel-sink-bin` writes `macros/MQa.pixel_TGeant4.bin.hits.root`. `dat`: `pixalt-sink-bin` writes `macros/MQa.pixel_TGeant4.bin.hits.dat`. |
+| `-a`, `--aggregate` | `1` | Events in one message of `pixalt-sampler-bin`. |
+| `-p`, `--nof-processors` | `2` | Number of processors. |
+| `-m`, `--max-index` | `-1` | Number of events. In static mode, also the expected number of output events. |
+| `-c`, `--command` | `interactive` | `print`, `interactive` (one `xterm` for each device) or `static`. |
+| `-r`, `--max-running-time` | `100` | Seconds that static mode waits for the sampler. |
+| `-w`, `--work-dir` | folder of the pixel detector example | Folder with `macros/` and `param/`. |
+| `-k`, `--force-kill` | `false` | With `true`, static mode kills old `pixAlt` processes first. |
+| `-t`, `--transport` and `-v`, `--verbose` | `zeromq`, `INFO` | FairMQ transport and severity of the processors. |
+
+The devices use the ports 5305 (parameters), 5306 (digis), 5307 (hits) and, in static mode, 5308
+(acknowledgments). In static mode, the script compares the number of entries of the tree `cbmsim`
+in the output file with `--max-index`. This check works only with `-o root`.
+
+## Run the example
+
+CMake adds the test `ex_MQ_pixel_alt_static` only if FairMQ has the target
+`FairMQ::fairmq-dds-command-ui`. Its fixture is `ex_MQ_pixel_static` of the pixel detector example,
+which needs the macro tests. CTest adds all these setup tests:
+
+```sh
+cd <build>
+ctest -R ex_MQ_pixel_alt_static --output-on-failure
+```
+
+To run the steps yourself:
+
+<Steps>
+
+1. Make the simulation, the parameters and `digisBin.dat` with divide level 0, in the macro folder
+   of the pixel detector example. The default transport engine of the macros is `TGeant3`, but the
+   script reads `TGeant4` files. Thus give `"TGeant4"` to each macro:
+
+   ```sh
+   cd <build>/examples/MQ/pixelDetector/macros
+   ./run_sim.sh 1000 '"TGeant4"'
+   ./run_digi.sh '"TGeant4"'
+   ./run_digiToBin.sh 0 '"TGeant4"'
+   ```
+
+2. Start the topology with 10 events in each message:
+
+   ```sh
+   <build>/examples/MQ/pixelAlternative/run/startFairMQPixAlt.sh --max-index 1000 --aggregate 10 --command static --force-kill true
+   ```
+
+</Steps>
+
+If the output file has 1000 entries, the last line of the script is
+`Shell script finished successfully.`
+
+:::caution[Known problems]
+- The test gives `--processors 5`, but the script knows only `-p` and `--nof-processors`. The test
+  thus runs with two processors
+  ([run/CMakeLists.txt](/repo/examples/MQ/pixelAlternative/run/CMakeLists.txt)).
+- `pixalt-sink-bin` writes only the first event of each message, and it writes the first hit for
+  each hit of this event
+  ([FairMQPixAltFileSinkBin.cxx](/source/examples/MQ/pixelAlternative/src/devices/FairMQPixAltFileSinkBin.cxx/#L41-L90)).
+  Use `-o root` if you need the hits.
+- `PreRun()` of the sampler starts the acknowledgment thread also without an ack channel, but
+  `PostRun()` joins it only with an ack channel
+  ([FairMQPixAltSamplerBin.cxx](/source/examples/MQ/pixelAlternative/src/devices/FairMQPixAltSamplerBin.cxx/#L52-L61)).
+  The destructor of a `std::thread` that nobody joined calls `std::terminate()`. This affects
+  the interactive mode, which has no ack channel. `pixel-sampler-bin` has the same code.
+:::
+
+## Related pages
+
+- [MQ: pixel detector](/examples/mq-pixel-detector/): the detector, the macros and the other
+  devices.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the task processor pattern.
+- [Serialize FairRoot data for messages](/online/serialization/): binary payloads and other
+  formats.
+- [Parameters over FairMQ](/online/parameters/): the parameter server.

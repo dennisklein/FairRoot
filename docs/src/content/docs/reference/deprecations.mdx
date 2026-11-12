@@ -1,0 +1,220 @@
+---
+title: 'Deprecated APIs'
+description: 'The functions, classes, build options and CMake arguments that FairRoot marks as deprecated, with the release that deprecated them, the planned removal and the replacement.'
+sidebar:
+  order: 8
+code:
+  [
+    fairroot/base/steer/FairRun.h,
+    fairroot/base/steer/FairRunAna.h,
+    fairroot/base/steer/FairRootManager.h,
+    fairroot/base/sim/FairModule.h,
+    fairroot/geane/FairGeanePro.h,
+    fairroot/tools/FairLogger.h,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+A deprecated API still works, but a later release of FairRoot removes it. FairRoot marks these APIs
+in the code, so that the compiler warns you when your code uses them. This page lists each
+deprecated item, the release that deprecated it, the planned removal and the replacement.
+
+The data comes from the deprecation marks in the code and from the changelog. When neither gives a
+release or a replacement, the tables say "Not stated". For the steps to update a project, see
+[Migrate to a new release](/project/migration/).
+
+## How FairRoot marks deprecated code
+
+FairRoot uses four marks:
+
+| Mark | Where | What you see |
+| --- | --- | --- |
+| The C++ attribute `[[deprecated]]` or `__attribute__((deprecated))` | Functions and data members | A compiler warning at each use, with the message of the attribute |
+| A `\deprecated` comment | Above the declaration | Often the release that deprecated the item and the planned removal, else the replacement |
+| `#warning` | The headers of the DataMatch library | A compiler warning in each source file that includes one of the headers |
+| A build option with the default `OFF` | `CMakeLists.txt` | The classes are not in the libraries until you set the option to `ON` |
+
+A function that has a replacement often has both forms side by side in the header. The
+deprecated form gives the name of the replacement in its message:
+
+<Snippet file="fairroot/base/steer/FairRun.h" start="void SetEventHeader(std::unique_ptr" end="FairEventHeader* EvHeader);" />
+
+Some deprecated functions also write a warning to the log when they run, for example the output-file
+functions of [`FairRun`](/api/FairRun/) ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L201-L230)).
+In 18.8.0, FairRoot marked the items that older releases had deprecated with C++14 deprecation
+attributes. The changelog of 18.8.0 schedules these items for removal in v20.
+
+### Find the deprecated calls in your code
+
+GCC and Clang report a use of a deprecated function or member with the warning
+`-Wdeprecated-declarations`. Build your project and look for this warning in the build log. To stop
+the build at each use, add the compiler option `-Werror=deprecated-declarations` to your targets.
+
+FairRoot itself still calls some deprecated functions, so that old user code keeps working. It turns
+the warning off around these calls:
+
+<Snippet file="fairroot/base/sim/FairModule.cxx" start="Bool_t FairModule::IsSensitive(const std::string& name)" />
+
+:::note
+If you need a deprecated API that has no replacement, tell the FairRoot developers before the
+removal. See [Contributing](/project/contributing/).
+:::
+
+## Build options and libraries
+
+FairRoot 19.0.0 builds three deprecated components only on request. The DataMatch library is always
+built, but its headers give a warning.
+
+| Component | Deprecated in | Removal | How to get it, replacement |
+| --- | --- | --- | --- |
+| MbsAPI library, and the MBS and LMD classes of the Online library: [`FairLmdSource`](/api/FairLmdSource/), [`FairMbsSource`](/api/FairMbsSource/), [`FairMbsStreamSource`](/api/FairMbsStreamSource/), [`FairRemoteSource`](/api/FairRemoteSource/), [`MRevBuffer`](/api/MRevBuffer/) | 18.8.0 | Planned for 20, "the next major release" | Off by default since 19.0.0. Set `-DBUILD_MBS=ON`. No replacement. |
+| PROOF support: [`FairRunAnaProof`](/api/FairRunAnaProof/), [`FairAnaSelector`](/api/FairAnaSelector/) | 19.0.0 | Not stated | Off by default. Set `-DBUILD_PROOF_SUPPORT=ON`. ROOT deprecated PROOF in 6.26. No replacement. |
+| [`FairEventBuilder`](/api/FairEventBuilder/), [`FairEventBuilderManager`](/api/FairEventBuilderManager/) | 19.0.0 | Not stated | Off by default. Set `-DBUILD_EVENT_BUILDER=ON`. No replacement. |
+| DataMatch library (`FairRoot::DataMatch`): [`FairMCMatch`](/api/FairMCMatch/), [`FairMCDataCrawler`](/api/FairMCDataCrawler/), [`FairMCEntry`](/api/FairMCEntry/), [`FairMCList`](/api/FairMCList/), [`FairMCMatchCreatorTask`](/api/FairMCMatchCreatorTask/), [`FairMCMatchLoaderTask`](/api/FairMCMatchLoaderTask/), [`FairMCMatchSelectorTask`](/api/FairMCMatchSelectorTask/), [`FairMCObject`](/api/FairMCObject/), [`FairMCResult`](/api/FairMCResult/), [`FairMCStage`](/api/FairMCStage/) | 18.8.0 | "A future major release" | Always built. No replacement. |
+
+The options are in the top-level [`CMakeLists.txt`](/repo/CMakeLists.txt#L122-L129). Some facts
+about them:
+
+- `BUILD_MBS=ON` also sets `BUILD_ONLINE=ON`. The MBS sources are part of the `FairRoot::Online`
+  library ([fairroot/online/CMakeLists.txt](/repo/fairroot/online/CMakeLists.txt#L18-L29)).
+- The examples [MBS tutorial](/examples/mbs-tutorial/) and [MQ: LMD sampler and unpacker](/examples/mq-lmd/)
+  are built only with `BUILD_MBS=ON` ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L39-L54)).
+- CMake stops with an error if you set `BUILD_PROOF_SUPPORT=ON` with ROOT 6.32 or later, because
+  ROOT 6.32 has no PROOF ([CMakeLists.txt](/repo/CMakeLists.txt#L151-L153)).
+- [`FairRunAna::RunEventReco()`](/api/FairRunAna/#RunEventReco) is deprecated "along with
+  FairEventBuilder", but FairRoot always builds it.
+
+Each header of the DataMatch library has this block:
+
+<Snippet file="fairroot/datamatch/FairMCMatch.h" start="#ifndef FAIR_SILENCE_DATAMATCH_DEPRECATION" end="#endif" />
+
+To silence the warning, define `FAIR_SILENCE_DATAMATCH_DEPRECATION` for your target. FairRoot does
+this for its own build of the library
+([fairroot/datamatch/CMakeLists.txt](/repo/fairroot/datamatch/CMakeLists.txt#L42-L44)).
+
+## Runs, sources, sinks and tasks
+
+| Deprecated API | Deprecated in | Removal | Replacement |
+| --- | --- | --- | --- |
+| [`FairRun::SetEventHeader(FairEventHeader*)`](/api/FairRun/#SetEventHeader-2) | 19.0.0 | Not stated | [`SetEventHeader(std::unique_ptr<FairEventHeader>)`](/api/FairRun/#SetEventHeader). The run owns the event header. |
+| [`FairRun::SetWriteRunInfoFile(Bool_t)`](/api/FairRun/#SetWriteRunInfoFile) | Before 19 | 20 | [`SetGenerateRunInfo(Bool_t)`](/api/FairRun/#SetGenerateRunInfo) |
+| [`FairRun::GetWriteRunInfoFile()`](/api/FairRun/#GetWriteRunInfoFile) | Before 19 | 20 | [`IsRunInfoGenerated()`](/api/FairRun/#IsRunInfoGenerated) |
+| [`FairRun::SetOutputFile(const char*)`](/api/FairRun/#SetOutputFile), [`SetOutputFile(TFile*)`](/api/FairRun/#SetOutputFile-2), [`SetOutputFileName(const TString&)`](/api/FairRun/#SetOutputFileName) | Before 19 | 20 | A [`FairSink`](/api/FairSink/), for example `FairRootFileSink`, and [`FairRun::SetSink()`](/api/FairRun/#SetSink) |
+| [`FairRun::GetOutputFile()`](/api/FairRun/#GetOutputFile) | Before 19 | 20 | The log message says: "Use separate file to store additional data." |
+| [`FairRunAna::Run(Long64_t entry)`](/api/FairRunAna/#Run-3) | 19.0.0 | Not stated | [`RunSingleEntry(Long64_t entry)`](/api/FairRunAna/#RunSingleEntry). The changelog says that the meaning of `Run(int)` and `Run(long)` was unclear. |
+| [`FairRunAna::RunEventReco(Int_t, Int_t)`](/api/FairRunAna/#RunEventReco) | 19.0.0, with `FairEventBuilder` | Not stated | Not stated |
+| [`FairRunAnaProof::Instance()`](/api/FairRunAnaProof/#Instance) | 18.8 | 20 | Keep a pointer to the object after you make it. |
+| [`FairRootManager::RunWithTimeStamps()`](/api/FairRootManager/#RunWithTimeStamps) | 18.8 | 20 | The function is empty. Call [`FairRunAna::RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) before `Init()`. |
+| [`FairRootManager::FillEventHeader(FairEventHeader*)`](/api/FairRootManager/#FillEventHeader) | 18.8 | 20 | [`FairSource::FillEventHeader()`](/api/FairSource/#FillEventHeader). The deprecated function only calls it. |
+| [`FairRootManager::SetSource(FairSource*)`](/api/FairRootManager/#SetSource), [`FairRootManager::SetSink(FairSink*)`](/api/FairRootManager/#SetSink) | Not stated | Not stated | Not stated. Set the source and the sink on the run: [`FairRun::SetSource()`](/api/FairRun/#SetSource), [`FairRun::SetSink()`](/api/FairRun/#SetSink). |
+| [`FairRootFileSink::OpenRootFile(TString)`](/api/FairRootFileSink/#OpenRootFile) | Not stated | Not stated | `TFile::Open()` of ROOT |
+| [`FairTask::SetInputPersistance()`](/api/FairTask/#SetInputPersistance), [`CheckInputPersistance()`](/api/FairTask/#CheckInputPersistance), [`fInputPersistance`](/api/FairTask/#fInputPersistance) | 18.8 | 20 | None. The changelog says that there is no getter and that no code in FairRoot uses the setters. |
+
+The deprecated functions `SetOutputFile()` and `SetOutputFileName()` still make a `FairRootFileSink`
+and give it to the run. Each deprecated output-file function writes a warning to the log
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L201-L230)). `SetOutputFileName()` opens the
+file at once, although its comment says that it does not make the file
+([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L60-L69)).
+
+[`FairRootManager::GetOutFile()`](/api/FairRootManager/#GetOutFile) and
+[`GetOutTree()`](/api/FairRootManager/#GetOutTree) are not deprecated. They were deprecated from
+18.0.0 to 18.8.0.
+
+## Simulation
+
+| Deprecated API | Deprecated in | Removal | Replacement |
+| --- | --- | --- | --- |
+| [`FairRunSim::fGen`](/api/FairRunSim/#fGen) (protected member) | 18.8 | 19.2 | [`GetPrimaryGenerator()`](/api/FairRunSim/#GetPrimaryGenerator), [`SetGenerator()`](/api/FairRunSim/#SetGenerator) |
+| [`FairModule::ModifyGeometry()`](/api/FairModule/#ModifyGeometry) | Before 18.8 | 20 | [`FairAlignmentHandler`](/api/FairAlignmentHandler/). See [Tutorial 4](/examples/tutorial4/). No FairRoot code calls this function, so an override has no effect. |
+| [`FairModule::ConstructASCIIGeometry(T*, TString, U*)`](/api/FairModule/#ConstructASCIIGeometry-2) | 18.8.0 | Not stated | [`ConstructASCIIGeometry<T, U>(TString)`](/api/FairModule/#ConstructASCIIGeometry-3). The first and the third argument did nothing. |
+| [`FairModule::CheckIfSensitive(std::string)`](/api/FairModule/#CheckIfSensitive) | Not stated | Not stated | Implement [`IsSensitive(const std::string&)`](/api/FairModule/#IsSensitive) in the detector class. |
+| [`FairModule::getFairVolume(FairGeoNode*)`](/api/FairModule/#getFairVolume) | Not stated | "A future release" | None. The comment says that no code uses it. |
+| [`FairVolumeList::getVolume(TString*)`](/api/FairVolumeList/#getVolume-2), [`getVolumeId(TString*)`](/api/FairVolumeList/#getVolumeId-2) | Not stated | Not stated | The overloads that take `const TString&`: [`getVolume()`](/api/FairVolumeList/#getVolume), [`getVolumeId()`](/api/FairVolumeList/#getVolumeId) |
+| [`FairVolumeList::addVolume(FairVolume*)`](/api/FairVolumeList/#addVolume-2) | Not stated | Not stated | [`addVolume(std::unique_ptr<FairVolume>)`](/api/FairVolumeList/#addVolume) |
+| [`FairGenericStack::fFSTrackIter`](/api/FairGenericStack/#fFSTrackIter) | Not stated | Not stated | A local variable |
+| [`FairGeaneApplication::Instance()`](/api/FairGeaneApplication/#Instance) | 18.8 | 20 | Not stated |
+| [`FairRadGridManager::Instance()`](/api/FairRadGridManager/#Instance) | 18.8 | 20 | [`FairMCApplication::GetRadGridMan()`](/api/FairMCApplication/#GetRadGridMan) |
+| [`FairRadLenManager::Instance()`](/api/FairRadLenManager/#Instance), [`FairRadMapManager::Instance()`](/api/FairRadMapManager/#Instance) | 18.8 | 20 | Not stated |
+| [`FairRadLenManager::AddPoint(const Int_t)`](/api/FairRadLenManager/#AddPoint-2), [`FairRadMapManager::AddPoint(const Int_t)`](/api/FairRadMapManager/#AddPoint-2) | 18.8 | 20 | `AddPoint(TVirtualMC*, const Int_t)`: [`FairRadLenManager`](/api/FairRadLenManager/#AddPoint), [`FairRadMapManager`](/api/FairRadMapManager/#AddPoint) |
+
+The default [`FairModule::IsSensitive()`](/api/FairModule/#IsSensitive) calls `CheckIfSensitive()`,
+which returns `kFALSE`. FairRoot calls `IsSensitive()` for the volumes of a ROOT or GDML geometry,
+and with multithreaded Geant4 for all volumes. In an ASCII geometry, a volume is sensitive when the
+sensitivity flag of its medium in the media file is set
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)). For more about this, see
+[Write a detector](/simulation/detectors/).
+
+### Configuration macros of the transport engine
+
+[`FairGenericVMCConfig`](/api/FairGenericVMCConfig/) configures the transport engine with the ROOT
+macros in `CONFIG_DIR`. It has no deprecation mark, but its
+[`Setup()`](/api/FairGenericVMCConfig/#Setup) and
+[`SetupPostInit()`](/api/FairGenericVMCConfig/#SetupPostInit) write warnings to the log. The
+warnings say that the use of the macros is deprecated and point to the YAML implementation in
+[examples/common/gconfig](/repo/examples/common/gconfig/):
+
+<Snippet file="fairroot/base/sim/FairGenericVMCConfig.cxx" start="void FairGenericVMCConfig::Setup(const char* mcEngine)" end="Check FairRoot/examples/common/gconfig/" />
+
+[`FairRunSim`](/api/FairRunSim/) uses `FairGenericVMCConfig` when you set no configuration. The
+YAML implementation is a class derived from [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/), for
+example [`FairVMCConfig`](/source/examples/common/gconfig/FairVMCConfig.h/) of the examples. The code
+gives no release for the removal. See [Transport engines and their configuration](/simulation/engines/).
+
+## Geometry, fields and event display
+
+| Deprecated API | Deprecated in | Removal | Replacement |
+| --- | --- | --- | --- |
+| [`FairGeoVector::round(Double_t, Int_t)`](/api/FairGeoVector/#round) (protected), [`round(Int_t)`](/api/FairGeoVector/#round-2) | 18.8 | 20 | None. The functions never did anything. |
+| [`FairGeoRootBuilder::setGeoManager(TGeoManager*)`](/api/FairGeoRootBuilder/#setGeoManager) | Not stated | Not stated | Not stated. The class has a [constructor](/api/FairGeoRootBuilder/#FairGeoRootBuilder-3) that takes a `std::unique_ptr<TGeoManager>`. |
+| [`FairFieldFactory::fCreator`](/api/FairFieldFactory/#fCreator) (protected member) | 18.8 | 20 | `this`. The changelog says that the member points to `this`, but the constructor of `FairFieldFactory` sets it to `nullptr` ([FairFieldFactory.cxx](/source/fairroot/base/field/FairFieldFactory.cxx/#L19-L23)). |
+| [`FairEventManager::StringToColor()`](/api/FairEventManager/#StringToColor) (protected) | Not stated | Not stated | `FairXMLPdgColor::StringToColor()`, a static function that `FairXMLPdgColor` gets from [`FairXMLEveConf`](/api/FairXMLEveConf/#StringToColor) |
+
+## Track propagation with Geane
+
+[`FairGeanePro`](/api/FairGeanePro/) has many deprecated functions. The comments of all of them say
+"Deprecated pre-v18.8, will be removed in v20." The library is built only when Geant3 is found.
+
+| Deprecated function | Replacement |
+| --- | --- |
+| [`PropagateToPlane()`](/api/FairGeanePro/#PropagateToPlane) | [`SetDestinationPlane()`](/api/FairGeanePro/#SetDestinationPlane) |
+| [`PropagateFromPlane()`](/api/FairGeanePro/#PropagateFromPlane) | [`SetOriginPlane()`](/api/FairGeanePro/#SetOriginPlane) |
+| [`PropagateToVolume()`](/api/FairGeanePro/#PropagateToVolume) | [`SetDestinationVolume()`](/api/FairGeanePro/#SetDestinationVolume) |
+| [`PropagateToLength()`](/api/FairGeanePro/#PropagateToLength) | [`SetDestinationLength()`](/api/FairGeanePro/#SetDestinationLength) |
+| [`PropagateOnlyParameters()`](/api/FairGeanePro/#PropagateOnlyParameters) | [`SetPropagateOnlyParameters()`](/api/FairGeanePro/#SetPropagateOnlyParameters) |
+| [`FindPCA()`](/api/FairGeanePro/#FindPCA) with 11 arguments | [`FindPCA(pca, PDGCode, point, wire1, wire2, maxdistance)`](/api/FairGeanePro/#FindPCA-2), which returns a [`PCAOutputStruct`](/api/PCAOutputStruct/) |
+| [`PropagateToPCA(int)`](/api/FairGeanePro/#PropagateToPCA), [`PropagateToPCA(int, int)`](/api/FairGeanePro/#PropagateToPCA-2), [`ActualFindPCA()`](/api/FairGeanePro/#ActualFindPCA) | [`SetPCAPropagation()`](/api/FairGeanePro/#SetPCAPropagation) |
+| [`SetWire()`](/api/FairGeanePro/#SetWire), [`SetPoint()`](/api/FairGeanePro/#SetPoint), [`GetPCAOnWire()`](/api/FairGeanePro/#GetPCAOnWire), [`GetPCAOnTrack()`](/api/FairGeanePro/#GetPCAOnTrack), [`GetLengthAtPCA()`](/api/FairGeanePro/#GetLengthAtPCA), [`GetTimeAtPCA()`](/api/FairGeanePro/#GetTimeAtPCA) | None. The message says: contact the FairRoot group if you need it. |
+| [`PropagateToVirtualPlaneAtPCA()`](/api/FairGeanePro/#PropagateToVirtualPlaneAtPCA), [`BackTrackToVertex()`](/api/FairGeanePro/#BackTrackToVertex), [`BackTrackToVirtualPlaneAtPCA()`](/api/FairGeanePro/#BackTrackToVirtualPlaneAtPCA) | None. The message calls the function "questionable" and says: contact FairRoot if you need it. |
+
+For the current interface, see [Track parameters and propagation](/reconstruction/tracks/).
+
+## Logging
+
+Parts of the old interface of [`FairLogger`](/api/FairLogger/) are deprecated. The code gives no
+release for the deprecation or for the removal
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L89-L116)).
+
+| Deprecated API | Replacement |
+| --- | --- |
+| `FairLogger::Fatal()`, `Error()`, `Warning()`, `Info()`, `Debug()`, `Debug1()` to `Debug4()` | The macro `LOG`, for example `LOG(info) << content;` |
+| `FairLogger::IsLogNeeded(FairLogLevel)` | `IsLogNeeded(fair::Severity)`, or `fair::Logger::Logging()` with a severity or a severity string |
+| `FairLogger::endl`, `FairLogger::flush` | Nothing. The `LOG` macro adds the line break and flushes the data. |
+
+The enum `FairLogLevel` and the array `LogLevelString` have no deprecation mark. A comment says that
+they exist only for older `FairLogger` calls and that they will be deleted
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L26-L42)). See [Logging](/tools/logging/).
+
+## CMake
+
+| Deprecated item | Deprecated in | Removal | Replacement |
+| --- | --- | --- | --- |
+| The argument `BASENAME` of `fairroot_target_root_dictionary()` | Not stated | Not stated | None. Remove the argument. CMake writes the status message "BASENAME parameter is deprecated. Will be ignored" ([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L56-L58)). |
+| The option `BUILD_PROOF_SUPPORT`, described as "Support ROOT::Proof (deprecated)" | 19.0.0 | Not stated | See [Build options and libraries](#build-options-and-libraries) |
+
+## Related pages
+
+- [Migrate to a new release](/project/migration/): the steps to update a project.
+- [Release notes](/project/release-notes/): the changes of each release, with the deprecations.
+- [Logging](/tools/logging/): the `LOG` macro that replaces the old `FairLogger` functions.
+- [Contributing](/project/contributing/): how to contact the developers.

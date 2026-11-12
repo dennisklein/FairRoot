@@ -1,0 +1,263 @@
+---
+title: 'Propagator'
+description: 'Particles in a 2 T field: propagate their parameters from the first to the fourth station with the Runge-Kutta propagator, compare with the MC truth, then make hits, tracks and a display.'
+sidebar:
+  order: 7
+code: [examples/advanced/propagator/macros/runMC.C, examples/advanced/propagator/macros/runProp.C, examples/advanced/propagator/macros/runPull.C, examples/advanced/propagator/macros/runHP.C, examples/advanced/propagator/macros/runTF.C, examples/advanced/propagator/macros/runMM.C, examples/advanced/propagator/macros/eventDisplay.C, examples/advanced/propagator/src/FairTutPropDet.cxx, examples/advanced/propagator/src/FairTutPropTr.cxx, examples/advanced/propagator/src/FairTutPropHitProducer.cxx, examples/advanced/propagator/src/FairTutPropTrackFinder.cxx, examples/advanced/propagator/src/FairEveRecoTracksExample.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+The propagator example simulates charged particles in a constant field of 20 kG (2 T) along z. A task takes the
+MC point of each track on the first station and propagates it to the plane of the fourth station. A second macro
+compares the result with the MC point on the fourth station.
+
+More macros make hits and tracks from the MC points and show them in the event display. For the classes and their
+traps, see [Track parameters and propagation](/reconstruction/tracks/).
+
+## Files
+
+<FileTree>
+- examples/advanced/propagator/
+  - src/
+    - FairTutPropDet.cxx the detector of both station sets
+    - FairTutPropPoint.cxx the MC point
+    - FairTutPropGeo.cxx the geometry set with the prefix Pixel
+    - FairTutPropTr.cxx the propagation task
+    - FairTutPropHitProducer.cxx makes hits from MC points
+    - FairTutPropTrackFinder.cxx makes tracks from hits
+    - FairRecoTracksDraw.cxx the draw task for the tracks
+    - FairEveRecoTracksExample.cxx draws the tracks
+    - …
+  - macros/
+    - runMC.C simulation
+    - runProp.C propagation
+    - runPull.C comparison with the MC truth
+    - runHP.C hits
+    - runTF.C tracks
+    - runMM.C a second simulation sample
+    - eventDisplay.C event display
+    - conf.xml colors for the event display
+    - CMakeLists.txt the tests
+</FileTree>
+
+The library `ExPropagator` links `FairRoot::TrackBase`, but not `FairRoot::Geane`. CMake adds the classes for the
+event display only when the target `FairRoot::EventDisplay` exists
+([src/CMakeLists.txt](/repo/examples/advanced/propagator/src/CMakeLists.txt#L24-L30)).
+
+## The setup
+
+| Part | Values |
+| --- | --- |
+| Cave | [`cave_vacuum.geo`](/repo/examples/common/geometry/cave_vacuum.geo), vacuum |
+| `TutPropDetector` | [`tutProp.geo`](/repo/examples/common/geometry/tutProp.geo): `Pixel1` to `Pixel4`, silicon boxes, 0.15 mm thick, at z = 10, 20, 30 and 40 cm. Half widths: 5, 10, 15 and 20 cm. MC points in `FairTutPropPoint`. |
+| `TutPropDetector2` | [`tutProp2.geo`](/repo/examples/common/geometry/tutProp2.geo): `Pixel5` to `Pixel8`, silicon discs, 0.15 mm thick, at z = 50, 60, 70 and 80 cm. Radii: 30, 40, 50 and 60 cm. MC points in `FairTutPropPoint2`. |
+| Field | `FairConstField`: 20 kG along z, for x and y from −150 to 150 cm and z from −250 to 250 cm |
+| Primaries | 3 π+, 3 e− and 3 protons in each event. Momentum: 2 to 2.01 GeV/c. θ: 10° to 10.01°. φ: 0° to 360°. |
+
+## Run the example
+
+The file [`macros/CMakeLists.txt`](/repo/examples/advanced/propagator/macros/CMakeLists.txt) makes a script for
+`runMC.C`, `runProp.C` and `runPull.C` and defines three tests. CTest fixtures make sure that each test runs after
+the test that makes its input:
+
+| Test | Macro call | Reads | Writes |
+| --- | --- | --- | --- |
+| `runPropagatorMC` | `runMC.C()`: 1000 events with `TGeant4` | None | `prop.mc.root`, `prop.par.root`, `geofile_TGeant4_full.root` |
+| `runPropagator` | `runProp.C()`: the Runge-Kutta propagator | `prop.mc.root`, `prop.par.root` | `prop.rk.cal.root` |
+| `runPropagatorPull` | `runPull.C()` | `prop.rk.cal.root` | None |
+
+A test passes when its output contains "Macro finished successfully" within 60 s. The Catch2 test
+`ExPropagator::FairTutPropGeo` checks the names of the geometry set
+([test_FairTutPropGeo.cxx](/repo/tests/examples/advanced/propagator/test_FairTutPropGeo.cxx)). Run the three
+macro tests from the build folder:
+
+```bash
+ctest -R runPropagator
+```
+
+A script joins its arguments with commas and calls ROOT with the macro
+([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). Put a string argument in double quotes inside single
+quotes:
+
+```bash
+cd <build>/examples/advanced/propagator/macros
+./runMC.sh 100 '"TGeant4"'
+./runProp.sh '"rk"'
+./runPull.sh '"rk"'
+```
+
+The other macros have no script. Start them in the same folder after you source `config.sh`:
+
+```bash
+source <build>/config.sh
+cd <build>/examples/advanced/propagator/macros
+root -q -b "$VMCWORKDIR/advanced/propagator/macros/runHP.C"
+root -q -b "$VMCWORKDIR/advanced/propagator/macros/runTF.C"
+cp "$VMCWORKDIR/advanced/propagator/macros/conf.xml" .
+root "$VMCWORKDIR/advanced/propagator/macros/eventDisplay.C"
+```
+
+`eventDisplay.C` reads `conf.xml` from the working folder
+([eventDisplay.C](/source/examples/advanced/propagator/macros/eventDisplay.C/#L48-L49)). The build does not copy this
+file, so copy it first.
+
+## Simulation: runMC.C
+
+`runMC(nEvents = 1000, mcEngine = "TGeant4", isMT = false)` uses the random seed 123456. It adds the same detector
+class twice. The second module has its own geometry file and its own branch:
+
+<Snippet file="examples/advanced/propagator/macros/runMC.C" start="FairTutPropDet* det = new FairTutPropDet(" end="run.AddModule(det2);" title="runMC.C" />
+
+Three box generators make the primaries. `runProp.C`, `runMM.C` and `eventDisplay.C` set the same field:
+
+<Snippet file="examples/advanced/propagator/macros/runMC.C" start="FairPrimaryGenerator* primGen = new FairPrimaryGenerator();" end="run.SetField(fMagField);" title="runMC.C" />
+
+The macro stores trajectories for the event display. The trajectory filter keeps primaries and secondaries above
+0.5 GeV/c ([runMC.C](/source/examples/advanced/propagator/macros/runMC.C/#L106-L116)). The momentum cut applies to
+the primaries too ([FairTrajFilter.cxx](/source/fairroot/base/steer/FairTrajFilter.cxx/#L85-L131)).
+
+:::caution[Comments in runMC.C]
+The comment names the particles "pions", "eplus" and "proton", but the PDG code 11 is the electron e−
+([runMC.C](/source/examples/advanced/propagator/macros/runMC.C/#L28-L29)). The comment of `SetStepSizeCut(0.01)`
+says "1 cm". `FairMCApplication` compares this value with `TrackStep()` of the VMC, which is in cm. The cut is thus
+0.1 mm.
+:::
+
+## The detector
+
+`FairTutPropDet::ProcessHits()` keeps the position, the momentum and the time at the entrance of a sensitive
+volume. It adds up the energy loss and makes the MC point at the exit. A track without energy loss makes no MC
+point ([FairTutPropDet.cxx](/source/examples/advanced/propagator/src/FairTutPropDet.cxx/#L65-L115)). The detector ID
+of the MC point is the station number from the volume path:
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropDet.cxx" start="// Taking stationNr from string" end="fVolumeID = stationNr;" title="FairTutPropDet.cxx" />
+
+The MC points are on the entrance face of each layer, 0.075 mm before its center. The propagation planes are at
+the centers, z = 10 cm and z = 40 cm.
+
+## Propagation: runProp.C and FairTutPropTr
+
+`runProp(propName = "rk")` accepts "rk" and "geane". It reads `prop.mc.root` and `prop.par.root` and writes
+`prop.<propName>.cal.root`. The task `FairTutPropTr` registers four branches of `FairTrackParP` in the folder "Prop"
+([FairTutPropTr.cxx](/source/examples/advanced/propagator/src/FairTutPropTr.cxx/#L61-L87)):
+
+| Branch | Content |
+| --- | --- |
+| `PropTrackIni` | The start: an MC point with z ≤ 15 cm, on the plane z = 10 cm, with zero errors |
+| `PropTrackFinal` | The MC truth: the MC point of the same MC track with z ≥ 35 cm, on the plane z = 40 cm |
+| `PropTrackPar` | The propagation of `PropTrackIni` with the PDG code −13 (μ+) |
+| `PropTrackParWrong` | The propagation with the PDG code 13 (μ−), the wrong charge |
+
+In its first `Exec()`, the task sets the destination plane:
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropTr.cxx" start="void FairTutPropTr::InitPropagator()" title="FairTutPropTr.cxx" />
+
+For each start point, it makes the start parameters with the MARS constructor of `FairTrackParP`. Their plane is
+z = 10 cm, with the x and y axes as j and k:
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropTr.cxx" start="FairTrackParP* fStart = new" end="TVector3(0., 1., 0.));" title="FairTutPropTr.cxx" />
+
+Then it propagates them twice:
+
+<Snippet file="examples/advanced/propagator/src/FairTutPropTr.cxx" start="fPro->Propagate(fStart, fRes, PDGCode);" end="fPro->Propagate(fStart, fWro, -PDGCode);" title="FairTutPropTr.cxx" />
+
+After these calls, a block of comments shows `SetPCAPropagation()` and `FindPCA()` for a point and a wire
+([FairTutPropTr.cxx](/source/examples/advanced/propagator/src/FairTutPropTr.cxx/#L190-L208)).
+
+:::caution
+- The task uses the PDG code −13 for all tracks. Thus the propagation bends the e− tracks in the wrong direction
+  ([FairTutPropTr.cxx](/source/examples/advanced/propagator/src/FairTutPropTr.cxx/#L146-L150)).
+- If an MC track has no MC point with z ≥ 35 cm, the inner loop ends on the last point of the array. The check
+  `point2 == 0` does not find this, and the task uses this point as the MC truth
+  ([FairTutPropTr.cxx](/source/examples/advanced/propagator/src/FairTutPropTr.cxx/#L122-L134)).
+- With "geane", the macro creates `FairGeane` and `FairGeanePro` only if the preprocessor symbol `Geant3_FOUND` is
+  defined ([runProp.C](/source/examples/advanced/propagator/macros/runProp.C/#L65-L87)). No file of the build
+  defines it. The task then has no propagator and dereferences a null pointer in its first `Exec()`.
+:::
+
+## Compare with the MC truth: runPull.C
+
+`runPull(propName = "rk", drawHist = false)` reads `prop.<propName>.cal.root`. For each pair of `PropTrackFinal`
+and `PropTrackPar`, it fills the difference final minus propagated of q/p, x, y, px, py and pz. Each histogram has
+200 bins from −0.1 to 0.1. These are residuals: the lines that divide by the errors are comments
+([runPull.C](/source/examples/advanced/propagator/macros/runPull.C/#L57-L77)). With `drawHist = true`, the macro
+draws and fits the six histograms.
+
+A Gaussian fit of the x residuals gives the result of the test:
+
+<Snippet file="examples/advanced/propagator/macros/runPull.C" start="TF1* fitX = new TF1(" end="too far off" title="runPull.C" />
+
+The macro returns 0 in both cases. CTest finds the result in the text "Macro finished successfully".
+
+## Hits and tracks: runHP.C and runTF.C
+
+`runHP.C` reads `prop.mc.root` and writes `prop.hits.root`. It adds a hit producer for each branch of MC points:
+
+<Snippet file="examples/advanced/propagator/macros/runHP.C" start="FairTutPropHitProducer* hpTask = new FairTutPropHitProducer();" end="fRun->AddTask(hpTask2);" title="runHP.C" />
+
+`FairTutPropHitProducer` needs the branch `MCTrack`. It smears x and y with a Gaussian of 0.05 cm and keeps z. It
+smears each momentum component with 0.05 GeV/c. The hit also keeps the MC track ID, the PDG code and the charge from
+`TDatabasePDG` ([FairTutPropHitProducer.cxx](/source/examples/advanced/propagator/src/FairTutPropHitProducer.cxx/#L85-L134)).
+
+`runTF.C` reads `prop.hits.root` and writes `prop.tracks.root`. `FairTutPropTrackFinder` uses the MC truth: it
+groups the hits of both arrays by their MC track ID and keeps groups with 3 hits or more. For each group, it writes a
+`FairTutPropTrack` to the branch `FairTutPropTracks`
+([FairTutPropTrackFinder.cxx](/source/examples/advanced/propagator/src/FairTutPropTrackFinder.cxx/#L83-L179)).
+
+- The track has the PDG code, the parameters at its first hit, the hit list and the MC track index. Each entry of
+  the hit list is a pair: the hit array (1 or 2) and the index in that array.
+- The first-hit parameters are a `FairTrackParP` on the plane z = const through the hit.
+- The field does not change the first-hit parameters. The MARS constructor of `FairTrackParP` calls
+  `FairGeaneUtil::FromMarsToSD()`, and this function ignores the field
+  ([FairGeaneUtil.cxx](/source/fairroot/trackbase/FairGeaneUtil.cxx/#L1241-L1244)).
+
+:::caution
+The hit counter starts at 2 for an MC track with its first hit in the second array
+([FairTutPropTrackFinder.cxx](/source/examples/advanced/propagator/src/FairTutPropTrackFinder.cxx/#L101-L109)). Such
+a track passes the cut with only two hits.
+:::
+
+## A second sample: runMM.C
+
+`runMM.C` has the signature of `runMC.C` and writes the same files. It thus replaces the output of `runMC.C`. The
+differences:
+
+- In each event, 2 π+ and 2 μ− (PDG code 13) with θ from 0° to 30° and p from 1 to 3 GeV/c.
+- It stores no trajectories. `FairGeoTracksDraw` in the event display then logs a warning and turns itself off
+  ([FairEveGeoTracks.cxx](/source/fairroot/eventdisplay/tracks/FairEveGeoTracks.cxx/#L55-L59)).
+- Both detectors have the name `TutPropDetector` ([runMM.C](/source/examples/advanced/propagator/macros/runMM.C/#L68-L75)).
+
+## Event display: eventDisplay.C
+
+`eventDisplay.C` reads `prop.mc.root` with the friends `prop.tracks.root` and `prop.hits.root`. It writes `ed.root`.
+Run `runHP.C` and `runTF.C` first. The macro sets the same field as the simulation and adds the draw tasks:
+
+<Snippet file="examples/advanced/propagator/macros/eventDisplay.C" start="FairEventManager *fMan = new FairEventManager();" end="fMan->Init();" title="eventDisplay.C" />
+
+`FairRecoTracksDraw` uses `FairEveRecoTracksExample`. Its `Init()` needs the branches `FairTutPropTracks`,
+`FairTutPropHits` and `FairTutPropHits2` and returns `kFATAL` without them
+([FairEveRecoTracksExample.cxx](/source/examples/advanced/propagator/src/FairEveRecoTracksExample.cxx/#L196-L225)).
+Without the branch `MCTrack`, `Init()` only logs a warning. `DrawTrack()` then uses a null pointer
+([FairEveRecoTracksExample.cxx](/source/examples/advanced/propagator/src/FairEveRecoTracksExample.cxx/#L149-L150)).
+`DrawTrack()` draws each track with the Runge-Kutta propagator, from the first hit through the planes
+z = 0, 10, …, 990 cm:
+
+<Snippet file="examples/advanced/propagator/src/FairEveRecoTracksExample.cxx" start="for (int i = 0; i < 100; i++) {" title="FairEveRecoTracksExample.cxx" />
+
+- `FairMCTracksDraw` is in `examples/common/eventdisplay`. CMake builds it only when it finds Geant3 and the event
+  display ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L14-L25)).
+- [`conf.xml`](/repo/examples/advanced/propagator/macros/conf.xml) sets the colors and the transparency of the
+  volumes and the colors of the MC tracks by PDG code. See [Configuration files](/reference/config-files/).
+- The names `Pixel101_0` to `Pixel104_0` in `conf.xml` match no volume of this geometry.
+
+## Related pages
+
+- [Track parameters and propagation](/reconstruction/tracks/): the classes, the frames and both propagators.
+- [From MC points to digis](/reconstruction/digitization/): the hit producer of this example.
+- [Input sources, friends and event mixing](/reconstruction/sources/): the friend files of `eventDisplay.C`.
+- [Event display](/reconstruction/event-display/): `FairEventManager` and the draw tasks.
+- [Magnetic fields](/simulation/fields/): `FairConstField` and the field of the run.
+- [Examples](/examples/overview/): all examples and their tests.
+- [Tests](/tools/testing/): CTest, the fixtures and the Catch2 tests.

@@ -1,0 +1,297 @@
+---
+title: 'Install FairRoot'
+description: 'Get the dependencies, for example with FairSoft. Then configure, build, install and test FairRoot with CMake, and set up the environment with FairRootConfig.sh.'
+sidebar:
+  order: 2
+---
+
+import { Steps, FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot is a set of shared libraries that you build from source with CMake. It needs ROOT, VMC,
+FairLogger and some more packages. The distribution [FairSoft](https://github.com/FairRootGroup/FairSoft)
+contains all of them, so the usual way is to install FairSoft first and FairRoot on top of it.
+
+## Requirements
+
+FairRoot builds only on UNIX systems. On other systems, CMake stops with an error
+([CMakeLists.txt](/repo/CMakeLists.txt#L113-L117)). The CI builds and tests FairRoot on Debian,
+Fedora and Ubuntu with GCC, and on macOS with Apple Clang ([Jenkinsfile](/repo/Jenkinsfile#L3-L32)).
+
+CMake finds FairCMakeModules with `find_package()`. Then it searches each other dependency with
+`find_package2()` from FairCMakeModules. If CMake does not find a required package, the
+configuration stops. These packages are required:
+
+| Package | Minimum version | Notes |
+| --- | --- | --- |
+| CMake | 3.18 | [CMakeLists.txt](/repo/CMakeLists.txt#L8) |
+| C++ compiler | C++17 | See [The C++ standard](#the-c-standard). |
+| [FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/) | 0.2 | Use 1.0 or newer. Only then the CMake package of FairRoot records its dependencies ([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L13-L18)). |
+| [ROOT](https://root.cern/) | 6.18.00 | With the component `RIO` ([CMakeLists.txt](/repo/CMakeLists.txt#L139-L149)). |
+| [VMC](https://vmc-project.github.io/) | — | Only if ROOT has no component `vmc` ([CMakeLists.txt](/repo/CMakeLists.txt#L166-L171)). |
+| [FairLogger](https://github.com/FairRootGroup/FairLogger) | 1.2.0 | CMake asks for 1.2.0 ([CMakeLists.txt](/repo/CMakeLists.txt#L207)), but the code uses `LOGP` with `{}` fields. Use 1.8.0 or newer, see [Logging](/tools/logging/#the-library-and-the-class). |
+| fmt | — | |
+| [FairMQ](https://fairrootgroup.github.io/FairMQ/) | 1.4.0 | Only with `BUILD_BASEMQ=ON`, the default ([CMakeLists.txt](/repo/CMakeLists.txt#L202-L209)). |
+| Boost | 1.67 | With `BUILD_BASEMQ`, `BUILD_EXAMPLES` or `BUILD_TESTING`. All three are `ON` by default. |
+
+Boost must have these components ([CMakeLists.txt](/repo/CMakeLists.txt#L211-L241)):
+
+- `filesystem`, `serialization` and `program_options` for `BUILD_BASEMQ`
+- `program_options` and `serialization` for `BUILD_EXAMPLES`
+- `filesystem` for `BUILD_TESTING`
+
+The test framework Catch2 is part of the repository, in the folder `third_party/Catch2_v3.5.4`
+([third_party/CMakeLists.txt](/repo/third_party/CMakeLists.txt#L15-L33)).
+
+### Optional packages
+
+If CMake does not find an optional package, it continues and leaves out the parts that need the
+package ([CMakeLists.txt](/repo/CMakeLists.txt#L172-L200)):
+
+| Package | What you get with it |
+| --- | --- |
+| ROOT component `opengl` | `FairRoot::EventDisplay`. Without it, CMake prints `eventdisplay will not be built, because ROOT has no opengl support.` ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L37-L41)) |
+| ROOT component `gdml` | Geometry from GDML files. Without it, [`FairModule::ConstructGDMLGeometry()`](/api/FairModule/#ConstructGDMLGeometry) logs errors and a fatal line ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L478-L490)). This line stops the program only if FairLogger has a fatal handler, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does). |
+| Geant3 | `FairRoot::Geane`. With `ENABLE_GEANT3_TESTING=ON`, the example tests also run with the transport engine `TGeant3`. |
+| [Geant4](https://geant4.web.cern.ch/) and Geant4VMC | `FairRoot::FastSim`, and with it the example Tutorial 1. |
+| Geant3, Geant4VMC and yaml-cpp | `FairRoot::MCConfigurator`. It also needs `FairRoot::FastSim` ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L22-L46)). |
+| Pythia6, Pythia8 | The Pythia tests of Tutorial 1 ([macros/CMakeLists.txt](/repo/examples/simulation/Tutorial1/macros/CMakeLists.txt#L25-L41)) |
+| Protobuf, Flatbuffers | The Protobuf and Flatbuffers formats of Tutorial 3 ([CMakeLists.txt](/repo/examples/advanced/Tutorial3/CMakeLists.txt#L41-L71)) |
+| DDS | The DDS tests of the FairMQ examples |
+| include-what-you-use | The target `checkHEADERS`. The build of FairRoot adds no header checks to it. |
+| clang-format and git-clang-format | The target `FormatCheck`, which checks the format of the source code |
+| VGM, GSL | Nothing. CMake searches them and shows them in the summary, but no target uses them. |
+
+The macro tests of the examples always use the transport engine `TGeant4` of Geant4VMC
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L12-L17)).
+
+### FairSoft
+
+[FairSoft](https://github.com/FairRootGroup/FairSoft) installs these packages into one installation
+prefix. Its documentation describes the installation. The CI of FairRoot builds on Linux with the
+FairSoft releases `apr22_patches`, `nov22_patches`, `jan24_patches` and `jan24_patches_mt`, and with
+the development version `dev`. The macOS builds use the FairSoft versions `24.01p4` and
+`24.01p4-macos15` ([Jenkinsfile](/repo/Jenkinsfile#L3-L32)).
+
+## Tell CMake where the dependencies are
+
+CMake looks for the packages in the prefixes of `CMAKE_PREFIX_PATH` and in the system folders. The
+build of FairRoot also reads the environment variable `SIMPATH`, the installation prefix of
+FairSoft:
+
+<Snippet file="CMakeLists.txt" start="if(DEFINED ENV{SIMPATH})" end="^endif" title="CMakeLists.txt" />
+
+- If `SIMPATH` is set in the environment, CMake puts it in front of `CMAKE_PREFIX_PATH`. A CMake
+  variable `-DSIMPATH=…` does not do this.
+- The environment scripts and the test scripts get `$SIMPATH/lib` in `LD_LIBRARY_PATH`.
+
+Without FairSoft, give the prefixes of the packages as a list:
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH="/opt/root;/opt/fairlogger;/opt/fairmq"
+```
+
+For one package, you can also set `<NAME>_ROOT`, with the package name in upper case. An example
+is `-DFAIRLOGGER_ROOT=/opt/fairlogger`. `find_package2()` puts this prefix in front of
+`CMAKE_PREFIX_PATH` for that package, and it also reads the variable from the environment
+([FairFindPackage2](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFindPackage2.html)).
+
+## Build and install
+
+<Steps>
+
+1. If you use FairSoft, set `SIMPATH` to its installation prefix:
+
+   ```sh
+   export SIMPATH=/path/to/fairsoft
+   ```
+
+2. Clone the repository with the branch `dev`, as the README shows:
+
+   <Snippet file="README.md" start="git clone -b dev" end="cd FairRoot" lang="sh" title="README.md" />
+
+3. Configure the build. Give an installation prefix outside the build folder:
+
+   ```sh
+   cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/fairroot_install"
+   ```
+
+   At the end, CMake prints a summary. It shows the install prefix, the C++ standard, the
+   dependencies with their versions and prefixes, and if it builds the examples.
+
+4. Build FairRoot:
+
+   ```sh
+   cmake --build build --parallel
+   ```
+
+5. Install FairRoot:
+
+   ```sh
+   cmake --install build
+   ```
+
+6. Run the tests in the build folder:
+
+   ```sh
+   cd build
+   ctest --output-on-failure -j 4
+   ```
+
+</Steps>
+
+Run the tests after the install, as the CI does
+([FairRoot_build_test.cmake](/repo/FairRoot_build_test.cmake#L52-L76)). Some tests use the
+installation. The template tests build the project templates against the install prefix
+([test_project.sh.in](/repo/templates/test_project.sh.in#L66-L67)). The scripts of the macro tests
+put `<prefix>/include` into `ROOT_INCLUDE_PATH` ([CMakeLists.txt](/repo/CMakeLists.txt#L283-L284)).
+[Tests](/tools/testing/) tells how to select tests.
+
+CMake checks two folders at the start ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L166-L188)):
+
+- The build folder must not be the source folder.
+- The install prefix must not be the build folder.
+
+Set the install prefix when you configure. The scripts `FairRootConfig.sh` and `FairRootConfig.csh`
+contain the absolute paths of the installation.
+
+## Build options
+
+The top-level `CMakeLists.txt` declares the options of FairRoot:
+
+<Snippet file="CMakeLists.txt" start="# Set option(s)" end="Option(BUILD_EXAMPLES" title="CMakeLists.txt" />
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `CMAKE_INSTALL_PREFIX` | `/usr/local` | The installation folder. |
+| `CMAKE_BUILD_TYPE` | `RelWithDebInfo` | The build type. FairRoot adds more build types, for example `Nightly` and `DebugFull`. |
+| `CMAKE_CXX_STANDARD` | The standard of ROOT | See [The C++ standard](#the-c-standard). |
+| `BUILD_EXAMPLES` | `ON` | Builds the examples and their tests. Installs their libraries and headers, and their programs, macros and data in `share/fairbase/examples`. |
+| `BUILD_TESTING` | `ON` | Adds the tests. Keep it `ON`: with `OFF`, the configuration fails. |
+| `BUILD_BASEMQ` | `ON` | Builds `FairRoot::FairMQ`, `FairRoot::BaseMQ` and `FairRoot::ParMQ`. Needs FairMQ. |
+| `BUILD_ONLINE` | `ON` | Builds `FairRoot::Online`. |
+| `ENABLE_GEANT3_TESTING` | `OFF` | Runs the example tests also with `TGeant3`. Needs Geant3. |
+| `BUILD_MBS` | `OFF` | Deprecated. Builds `FairRoot::MbsAPI` and the MBS sources of `FairRoot::Online`. Sets `BUILD_ONLINE` to `ON`. |
+| `BUILD_PROOF_SUPPORT` | `OFF` | Deprecated. Adds the PROOF classes to `FairRoot::Base`. Not possible with ROOT 6.32 or newer. |
+| `BUILD_EVENT_BUILDER` | `OFF` | Deprecated. Adds `FairEventBuilder` and `FairEventBuilderManager` to `FairRoot::Base`. |
+
+FairRoot 19.0.0 deprecated the last three options ([Deprecated APIs](/reference/deprecations/#build-options-and-libraries)). The
+[CMake reference](/reference/cmake/) lists all options and variables with their effects.
+
+### The C++ standard
+
+FairRoot compiles with the C++ standard of ROOT. If you do not set `CMAKE_CXX_STANDARD`, CMake takes
+the highest standard in the compile features of the target `ROOT::Core`. If `ROOT::Core` has no
+`cxx_std_<N>` feature, the configuration fails with `list GET given empty list`. The standard is at
+least C++17 ([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L18-L60)).
+
+Then `fairroot_check_root_cxxstd_compatibility()` compares the standard with ROOT. If ROOT does not
+list the standard, CMake prints the warning `CXX Standard <N> not found in compile features of ROOT`
+([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L286-L304)). The CMake package of FairRoot
+keeps the standard, and projects that link FairRoot compile with at least this standard.
+
+## Set up the environment
+
+The build writes shell scripts that set the environment for ROOT macros and programs
+([CMakeLists.txt](/repo/CMakeLists.txt#L318-L344)). They set the library path, `ROOT_INCLUDE_PATH`,
+`VMCWORKDIR` and the data folders of the transport engines. There is one script for the build folder
+and one for the installation ([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L15-L27)):
+
+| | `build/config.sh` | `<prefix>/bin/FairRootConfig.sh` |
+| --- | --- | --- |
+| Libraries in `LD_LIBRARY_PATH` | `build/lib` | `<prefix>/lib` or `<prefix>/lib64` |
+| `VMCWORKDIR` | The folder `examples` of the source | `<prefix>/share/fairbase/examples` |
+| `ROOT_INCLUDE_PATH` | `<prefix>/include` | `<prefix>/include` |
+| System check | `build/check_system.sh` | `<prefix>/libexec/check_system.sh` |
+
+`ROOT_INCLUDE_PATH` also contains the include folders of Geant3 when CMake found Geant3
+([config.sh.in](/repo/cmake/scripts/config.sh.in#L26)). Source the script in a bash shell:
+
+```sh
+source "$HOME/fairroot_install/bin/FairRootConfig.sh"
+```
+
+The script first compares the system with the system of the build. It prints the distribution
+(`lsb_release -sd`, on macOS `uname -sr`) and the architecture (`uname -m`) of both. If one of them
+is different, the script prints a warning and does not set the environment
+([check_system.sh.in](/repo/cmake/scripts/check_system.sh.in)).
+
+The scripts also export `FAIRROOTPATH`, but the build of FairRoot leaves it empty
+([config.sh.in](/repo/cmake/scripts/config.sh.in#L6-L8)). Thus the script removes a value that you
+set before. Set it after the script when a project needs it, for example a project from a
+template. [Environment variables](/reference/environment/) lists all variables of the scripts.
+
+:::caution
+Use the sh versions of the scripts. The csh versions `config.csh` and `FairRootConfig.csh` do not
+work. Their template has errors: line 5 runs the sh command `.`, and lines 31 to 33 use
+`setenv NAME=value` ([config.csh.in](/repo/cmake/scripts/config.csh.in#L5-L33)). In tcsh, the
+script stops with `same_system: Undefined variable.`
+:::
+
+The program `<prefix>/bin/fairroot-config` prints facts about the build. It takes exactly one
+option: `--version`, `--major_version`, `--minor_version`, `--patch_version`, `--cc`, `--cxx`,
+`--fairsoft_path` or `--help` ([fairroot-config.in](/repo/cmake/scripts/fairroot-config.in)). For
+example, `fairroot-config --version` prints the version with a `v` in front.
+
+## Installed files
+
+The install step creates these folders under the install prefix
+([CMakeLists.txt](/repo/CMakeLists.txt#L318-L346)):
+
+<FileTree>
+- fairroot_install/
+  - bin/ the scripts, `fairroot-config`, and `parmq-server` with `BUILD_BASEMQ`
+  - include/ all headers in one folder
+  - lib/ the libraries with their rootmap and pcm files, `lib64/` on some systems
+    - cmake/
+      - FairRoot-19.0.0/ the CMake package
+  - libexec/ `check_system.sh` and `check_system.csh`
+  - share/
+    - fairbase/
+      - cmake/ the CMake modules and the script templates
+      - examples/ with `BUILD_EXAMPLES`
+</FileTree>
+
+[Libraries and headers](/reference/libraries/) lists the libraries and the files in each folder.
+
+## Problems that can occur
+
+- **CMake stops and asks for an out-of-source build.** The build folder is the source folder. Remove
+  `CMakeCache.txt` and the folder `CMakeFiles` from the source folder. Then configure with
+  `-B build` ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L166-L174)).
+- **CMake stops with `Your build and installation directory is the same one.`** Give an install
+  prefix outside the build folder.
+- **CMake stops with `ROOT::Proof support is not buildable, it was removed in ROOT 6.32+`.** Remove
+  `-DBUILD_PROOF_SUPPORT=ON`, or use an older ROOT ([CMakeLists.txt](/repo/CMakeLists.txt#L151-L153)).
+- **CMake does not find FairMQ.** Install FairMQ 1.4.0 or newer, or configure with
+  `-DBUILD_BASEMQ=OFF`. Without `BUILD_BASEMQ`, the build leaves out `FairRoot::BaseMQ`,
+  `FairRoot::ParMQ`, Tutorial 3 and the FairMQ examples
+  ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L43-L56)).
+- **CMake does not find the Boost of the system.** FairRoot sets `Boost_NO_SYSTEM_PATHS` to `TRUE`
+  if you do not set it ([CMakeLists.txt](/repo/CMakeLists.txt#L211-L214)). Then the FindBoost
+  module of CMake does not search the system folders. Configure with `-DBoost_NO_SYSTEM_PATHS=OFF`.
+- **CMake stops with `Unknown CMake command "catch_discover_tests"`.** You configured with
+  `-DBUILD_TESTING=OFF`. The tests of `FairRoot::Tools` are always added
+  ([fairroot/tools/CMakeLists.txt](/repo/fairroot/tools/CMakeLists.txt#L59)), but CMake loads
+  Catch2 only with `BUILD_TESTING=ON`. Keep the default.
+- **CMake stops with `set given invalid arguments for CACHE mode` after the search for Protobuf.**
+  CMake did not find the CMake package of Protobuf. Then the find module of CMake found Protobuf 4.22
+  or newer, and the abseil target `absl::raw_logging_internal` does not exist
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L179-L188)). Give CMake the CMake package of Protobuf, or
+  configure with `-DCMAKE_DISABLE_FIND_PACKAGE_Protobuf=ON`.
+- **The summary says `-DBBUILD_EXAMPLES=ON`.** This is a typo in the summary. The option is
+  `BUILD_EXAMPLES` ([FairRootSummary.cmake](/repo/cmake/private/FairRootSummary.cmake#L158-L163)).
+- **With Ninja, each link fails with `-Wl,--enable-new-dtags: not found`.** The linker flags were not
+  empty at the first configuration, for example from the environment variable `LDFLAGS`. FairRoot
+  adds `-Wl,--enable-new-dtags` to them as a list item, so the link command contains a `;`
+  ([CMakeLists.txt](/repo/CMakeLists.txt#L42-L48)). Unset `LDFLAGS` and configure a new build folder.
+- **`FairRootConfig.sh` does not set the environment.** The system is different from the system of
+  the build. Read the message of the script, and build FairRoot on the system where you use it.
+
+## Related pages
+
+- [Your first simulation](/start/first-simulation/): run a simulation with the installed FairRoot.
+- [Use FairRoot in a CMake project](/start/cmake/): build your own code against FairRoot.
+- [CMake reference](/reference/cmake/): all options, variables, targets and CMake functions.
+- [Environment variables](/reference/environment/): the variables that the scripts set.
+- [Tests](/tools/testing/): select and run the tests.

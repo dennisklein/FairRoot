@@ -1,0 +1,1118 @@
+---
+// MqTopology: the FairMQ devices of a FairRoot MQ example, animated. Boxes are the devices of the start
+// script (device ID and class or program), lines are the channels (name and socket type at each end,
+// a filled dot where the socket binds, an open dot where it connects), and squares are the messages.
+// The prop `example` selects the topology: 'pixel' (default), 'split' or 'serialization'.
+// Paths are relative to the FairRoot repository.
+//
+// pixel: examples/MQ/pixelDetector/run/scripts/startFairMQPixel.sh.in
+// - Server: parmq-server --id pixDet-parmq-server, channel param rep bind tcp://*:5405 (117-120). The program makes a
+//   ParameterMQServer (fairroot/parmq/runParameterMQServer.cxx:39), --channel-name param makes OnData(param,
+//   ProcessRequest) (fairroot/parmq/ParameterMQServer.cxx:45-56). ProcessRequest() reads "<name>,<run ID>", gets the
+//   container from the runtime database and replies with it, serialized with RootSerializer (117-164).
+// - Sampler: pixel-sampler --id pixDet-sampler1, data-out push bind tcp://*:5406 (123-126). The program makes a
+//   FairMQPixelSampler (run/runPixelSampler.cxx:41). ConditionalRun() reads one event and sends one multipart message
+//   with one part for each branch, here PixelDigis and EventHeader. (FairMQPixelSampler.cxx:100-123; script 83, 130).
+// - Processors: NOFPROCESSORS=3 (15) is the default of -p, --nof-processors (41-42); IDs pixDet-processor1 … N
+//   (141-144). Channels: param req connect :5405, data-in pull connect :5406, data-out push connect :5407 (136-138).
+//   --task-name PixelFindHits is the default (14), so the program makes FairMQPixelTaskProcessor<PixelFindHits>
+//   (run/runPixelTaskProcessor.cxx:21, 47).
+//   ProcessData() is the OnData callback of data-in (FairMQPixelTaskProcessor.h:170). fCurrentRunId starts at -1 (37),
+//   so at the first message, and when the run ID of the event header changes (--static-pars is false by default,
+//   run/runPixelTaskProcessor.cxx:36), it calls UpdateParameters() (88-105):
+//   one request "<name>,<run ID>" and one reply for each container of the list (184-217). The list holds
+//   FairGeoParSet and the containers of the task (160-165), for PixelFindHits "PixelDigiParameters"
+//   (src/PixelFindHits.cxx:145-149). Then ExecMQ() runs the task (110), and the header and the output go to data-out
+//   (118-136).
+// - Sink: pixel-sink --id pixDet-sink1, data-in pull bind tcp://*:5407 (147-149), a FairMQPixelFileSink
+//   (run/runPixelFileSink.cxx:28). StoreData() fills the tree "cbmsim" (FairMQPixelFileSink.cxx:34-55, 57-81).
+// - The ack channel: only with --command static (127-129, 150-152): sampler ack pull bind :5408, sink ack push
+//   connect :5408. The sink sends one empty message for each stored message (FairMQPixelFileSink.cxx:83-86). The
+//   sampler counts the acks in a thread up to the number of events, and PostRun() waits for that thread
+//   (FairMQPixelSampler.cxx:91-98, 125-147). The static script waits until the sampler ends, then stops the other
+//   devices and compares the events in the input and output file (script 236-295).
+// - A push socket sends each message to the next connected pull socket in turn (ZeroMQ push/pull, round-robin).
+//
+// split: examples/MQ/pixelSimSplit/run/scripts/test-splitMQ.sh.in (the same channels as splitMC-topology.xml)
+// - Channels (24-42) and devices (48-71): generator (pixel-sim-gen) primariesChannel push bind, ack pull bind;
+//   transporter (pixel-sim-transport) primariesChannel pull connect, data#all# push connect, updateChannel req
+//   connect; merger (pixel-sim-chunk-merger) data#all# pull bind, dataOut push bind; filesink (pixel-sink) dataOut
+//   pull connect, ack push connect; parmq-server updateChannel rep bind. Addresses are ipc://. The script starts one
+//   transporter, the DDS topology a group with n="1" (splitMC-topology.xml:54).
+// - Generator: FairMQPrimaryGeneratorDevice (run/runMQGen.cxx:59) with a box generator of 100 pions per event
+//   (runMQGen.cxx:49-57) and --chunk-size 10 (script 10): 100 / 10 = 10 chunks per event. One message for each chunk:
+//   the header with the chunk range and all primaries (FairMQPrimaryGeneratorDevice.cxx:76-126). It counts the acks up
+//   to --nof-events 100 (script 8) and PostRun() waits for them (128-149). The script waits for the generator (93-99).
+// - Transporter: FairMQTransportDevice (run/runMQTrans.cxx:57-58, pull mode). The first PreRun() calls InitializeRun():
+//   "ReportSimDevice" on updateChannel, reply "<run ID>_<device number>", then one request with each parameter
+//   container, and SendObject() waits for each reply (FairMQTransportDevice.cxx:143-199, 253-271;
+//   pixelDetector/src/devices/FairMQRunDevice.cxx:46-60). The server replies with the run ID, or stores the container
+//   and replies SUCCESS (ParameterMQServer.cxx:166-227). TransportData() simulates the chunk with ProcessRun(1)
+//   (FairMQTransportDevice.cxx:232-251). FairOnlineSink::Fill() calls SendBranches(), which sends the branches on each
+//   channel with "#all#" in the name (pixelDetector/src/FairOnlineSink.cxx:47-55, FairMQRunDevice.cxx:62-120).
+// - Merger: FairMQChunkMerger keeps the parts of an event until it has GetNofChunks() of them, merges them and sends one
+//   message on its out channel (FairMQChunkMerger.cxx:44-50, 52-196).
+// - Filesink: the FairMQPixelFileSink of the pixel example, with an ack for each event (see above).
+//
+// serialization: examples/MQ/serialization/startSerializationEx.sh.in
+// - sampler1 (ex-serialization-sampler) data1 push bind tcp://localhost:5565; processor1 and processor2
+//   (ex-serialization-processor) data1 pull connect :5565, data2 push connect :5570; sink1 (ex-serialization-sink)
+//   data2 pull bind tcp://localhost:5570 (8-30). Programs: CMakeLists.txt:43-50.
+// - sampler.cxx:63-79: part 0 an ExHeader with BoostSerializer<ExHeader>, part 1 the TClonesArray of MyDigi of the
+//   tree cbmsim with RootSerializer (a TMessage, RootSerializer.h:41-48). processor.cxx:35-63: FindHits() makes MyHit
+//   objects; part 0 is the received header part, part 1 the hits with BoostSerializer<MyHit>, a Boost archive of a
+//   std::vector<MyHit> (BoostSerializer.h:90-111). sink.cxx:30-60: fills the tree "SerializationEx". The two
+//   serializers are in fairroot/basemq/policies/Serialization/.
+//
+// Motion: one shared event simulation; durations come from the route lengths of the visible layout. The timing is
+// illustrative. Reduced motion: a static picture, and the Play button starts the motion.
+interface Props {
+  example?: 'pixel' | 'split' | 'serialization';
+}
+const ex = (['pixel', 'split', 'serialization'] as const).find((e) => e === Astro.props.example) ?? 'pixel';
+
+type P = [number, number];
+type C = 'd' | 'p' | 'a'; // data, request/reply, ack
+type Seg = string | { c: string }; // text, or a code name
+type Txt = { id: string; cls: string; does: Seg[]; srv?: boolean; meter?: boolean };
+type Box = { k: string; x: number; y: number; w: number; h: number };
+type Route = { c: C; pts: P[]; dash?: boolean };
+type Port = [number, number, C, boolean]; // x, y, kind, binds
+type Lbl = { x: number; y: number; a: 'start' | 'middle' | 'end'; t: [string, string][] }; // [class, text]
+type Layout = { id: 'wide' | 'narrow'; W: number; H: number; boxes: Box[]; routes: Record<string, Route>; ports: Port[]; lbls: Lbl[] };
+type Still = { toks: [string, number, string][]; busy: string[]; meter?: number };
+type Example = {
+  src: string;
+  info: Seg[];
+  aria: string;
+  txt: Record<string, Txt>;
+  wide: Layout;
+  narrow: Layout;
+  still: Still;
+  key: string[];
+};
+
+const L = (x: number, y: number, a: Lbl['a'], ...t: [string, string][]): Lbl => ({ x, y, a, t });
+const B = (k: string, x: number, y: number, w: number, h: number): Box => ({ k, x, y, w, h });
+const proc = (n: number, cls: string, does: Seg[]): Txt => ({ id: `pixDet-processor${n}`, cls, does });
+
+const EXAMPLES: Record<typeof ex, Example> = {
+  pixel: {
+    src: 'startFairMQPixel.sh',
+    info: ['3 processors, the default of ', { c: '-p' }],
+    aria:
+      'Topology of startFairMQPixel.sh. The sampler pixDet-sampler1 binds data-out on port 5406 and pushes each event to one of the processors pixDet-processor1, 2 and 3. At its first message, a processor asks pixDet-parmq-server for its parameters on the req channel param, port 5405. Then it runs PixelFindHits and pushes the result to the sink pixDet-sink1, which binds port 5407. With --command static, the sink pushes an ack for each event back to the sampler on port 5408.',
+    txt: {
+      v: { id: 'pixDet-parmq-server', cls: 'ParameterMQServer', does: ['1 request → 1 container'], srv: true },
+      s: { id: 'pixDet-sampler1', cls: 'FairMQPixelSampler', does: ['1 event → 1 message'] },
+      p0: proc(1, 'FairMQPixelTaskProcessor', ['runs ', { c: 'PixelFindHits' }]),
+      p1: proc(2, 'FairMQPixelTaskProcessor', ['runs ', { c: 'PixelFindHits' }]),
+      p2: proc(3, 'FairMQPixelTaskProcessor', ['runs ', { c: 'PixelFindHits' }]),
+      k: { id: 'pixDet-sink1', cls: 'FairMQPixelFileSink', does: ['fills the tree ', { c: 'cbmsim' }] },
+    },
+    wide: {
+      id: 'wide',
+      W: 660,
+      H: 348,
+      boxes: [B('v', 252, 8, 178, 58), B('s', 8, 178, 146, 58), B('p0', 252, 106, 178, 58), B('p1', 252, 178, 178, 58), B('p2', 252, 250, 178, 58), B('k', 508, 178, 144, 58)],
+      routes: {
+        'v-p0': { c: 'p', pts: [[252, 37], [234, 37], [234, 118], [252, 118]] },
+        'v-p1': { c: 'p', pts: [[252, 37], [234, 37], [234, 190], [252, 190]] },
+        'v-p2': { c: 'p', pts: [[252, 37], [234, 37], [234, 262], [252, 262]] },
+        'k-s': { c: 'a', dash: true, pts: [[580, 236], [580, 326], [81, 326], [81, 236]] },
+        's-p0': { c: 'd', pts: [[154, 207], [220, 207], [220, 135], [252, 135]] },
+        's-p1': { c: 'd', pts: [[154, 207], [252, 207]] },
+        's-p2': { c: 'd', pts: [[154, 207], [220, 207], [220, 279], [252, 279]] },
+        'p0-k': { c: 'd', pts: [[430, 135], [443, 135], [443, 207], [508, 207]] },
+        'p1-k': { c: 'd', pts: [[430, 207], [508, 207]] },
+        'p2-k': { c: 'd', pts: [[430, 279], [443, 279], [443, 207], [508, 207]] },
+      },
+      ports: [
+        [154, 207, 'd', true], [252, 135, 'd', false], [252, 207, 'd', false], [252, 279, 'd', false],
+        [430, 135, 'd', false], [430, 207, 'd', false], [430, 279, 'd', false], [508, 207, 'd', true],
+        [252, 37, 'p', true], [252, 118, 'p', false], [252, 190, 'p', false], [252, 262, 'p', false],
+        [580, 236, 'a', false], [81, 236, 'a', true],
+      ],
+      lbls: [
+        L(159, 200, 'start', ['nm', 'data-out']),
+        L(159, 223, 'start', ['ty', 'push']),
+        L(159, 237, 'start', ['ad', ':5406']),
+        L(248, 296, 'end', ['nm', 'data-in'], ['ty', ' pull']),
+        L(434, 296, 'start', ['nm', 'data-out'], ['ty', ' push']),
+        L(452, 200, 'start', ['nm', 'data-in']),
+        L(452, 223, 'start', ['ty', 'pull']),
+        L(452, 237, 'start', ['ad', ':5407']),
+        L(228, 33, 'end', ['nm', 'param'], ['ty', ' rep']),
+        L(228, 47, 'end', ['ad', ':5405']),
+        L(228, 114, 'end', ['nm', 'param'], ['ty', ' req']),
+        L(586, 256, 'start', ['nm', 'ack'], ['ty', ' push']),
+        L(87, 256, 'start', ['nm', 'ack'], ['ty', ' pull']),
+        L(87, 270, 'start', ['ad', ':5408']),
+        L(329, 342, 'middle', ['nt', 'only with --command static']), // below the line: the acks do not cover it
+      ],
+    },
+    narrow: {
+      id: 'narrow',
+      W: 320,
+      H: 482,
+      boxes: [B('v', 28, 8, 242, 56), B('s', 16, 94, 254, 56), B('p0', 48, 186, 222, 56), B('p1', 48, 254, 222, 56), B('p2', 48, 322, 222, 56), B('k', 16, 418, 254, 56)],
+      routes: {
+        'v-p0': { c: 'p', pts: [[270, 36], [290, 36], [290, 198], [270, 198]] },
+        'v-p1': { c: 'p', pts: [[270, 36], [290, 36], [290, 266], [270, 266]] },
+        'v-p2': { c: 'p', pts: [[270, 36], [290, 36], [290, 334], [270, 334]] },
+        'k-s': { c: 'a', dash: true, pts: [[16, 446], [6, 446], [6, 122], [16, 122]] },
+        's-p0': { c: 'd', pts: [[28, 150], [28, 214], [48, 214]] },
+        's-p1': { c: 'd', pts: [[28, 150], [28, 282], [48, 282]] },
+        's-p2': { c: 'd', pts: [[28, 150], [28, 350], [48, 350]] },
+        'p0-k': { c: 'd', pts: [[270, 214], [310, 214], [310, 446], [270, 446]] },
+        'p1-k': { c: 'd', pts: [[270, 282], [310, 282], [310, 446], [270, 446]] },
+        'p2-k': { c: 'd', pts: [[270, 350], [310, 350], [310, 446], [270, 446]] },
+      },
+      ports: [
+        [28, 150, 'd', true], [48, 214, 'd', false], [48, 282, 'd', false], [48, 350, 'd', false],
+        [270, 214, 'd', false], [270, 282, 'd', false], [270, 350, 'd', false], [270, 446, 'd', true],
+        [270, 36, 'p', true], [270, 198, 'p', false], [270, 266, 'p', false], [270, 334, 'p', false],
+        [16, 446, 'a', false], [16, 122, 'a', true],
+      ],
+      lbls: [
+        L(284, 79, 'end', ['nm', 'param'], ['ty', ' rep'], ['ad', ' :5405']),
+        L(20, 89, 'start', ['nm', 'ack'], ['ty', ' pull'], ['ad', ' :5408']),
+        L(36, 165, 'start', ['nm', 'data-out'], ['ty', ' push'], ['ad', ' :5406']),
+        L(52, 181, 'start', ['nm', 'data-in'], ['ty', ' pull']),
+        L(284, 181, 'end', ['nm', 'param'], ['ty', ' req']),
+        L(302, 393, 'end', ['nm', 'data-out'], ['ty', ' push']),
+        L(302, 412, 'end', ['nm', 'data-in'], ['ty', ' pull'], ['ad', ' :5407']),
+        L(20, 412, 'start', ['nm', 'ack'], ['ty', ' push']),
+      ],
+    },
+    still: { toks: [['s-p0', 0.62, 'msg'], ['p0-k', 0.3, 'msg'], ['v-p2', 0.55, 'par'], ['k-s', 0.2, 'ack']], busy: ['p2'] },
+    key: ['bind', 'conn', 'msg', 'par', 'ack', 'dash'],
+  },
+
+  split: {
+    src: 'test-splitMQ.sh',
+    info: ['1 transporter, ', { c: '--chunk-size 10' }],
+    aria:
+      'Topology of test-splitMQ.sh. generator pushes each event in 10 chunks on primariesChannel to transporter. transporter simulates each chunk and pushes the branches on data#all# to merger. merger collects the 10 chunks of an event and pushes the event on dataOut to filesink. filesink pushes an ack for each event on ack to generator. At the start, transporter gets the run ID from parmq-server on updateChannel (req and rep) and sends its parameter containers there.',
+    txt: {
+      v: { id: 'parmq-server', cls: 'ParameterMQServer', does: ['run ID, stores containers'], srv: true },
+      g: { id: 'generator', cls: 'FairMQPrimaryGeneratorDevice', does: ['1 event → 10 chunks'] },
+      t: { id: 'transporter', cls: 'FairMQTransportDevice', does: ['simulates each chunk'] },
+      m: { id: 'merger', cls: 'FairMQChunkMerger', does: ['10 chunks → 1 event'], meter: true },
+      k: { id: 'filesink', cls: 'FairMQPixelFileSink', does: ['fills ', { c: 'cbmsim' }, ', sends an ack'] },
+    },
+    wide: {
+      id: 'wide',
+      W: 660,
+      H: 290,
+      boxes: [B('v', 420, 8, 180, 56), B('g', 24, 100, 220, 56), B('t', 420, 100, 180, 56), B('m', 420, 208, 180, 72), B('k', 24, 216, 220, 56)],
+      routes: {
+        'v-t': { c: 'p', pts: [[510, 64], [510, 100]] },
+        'k-g': { c: 'a', pts: [[134, 216], [134, 156]] },
+        'g-t': { c: 'd', pts: [[244, 128], [420, 128]] },
+        't-m': { c: 'd', pts: [[510, 156], [510, 208]] },
+        'm-k': { c: 'd', pts: [[420, 244], [244, 244]] },
+      },
+      ports: [
+        [244, 128, 'd', true], [420, 128, 'd', false], [510, 156, 'd', false], [510, 208, 'd', true],
+        [420, 244, 'd', true], [244, 244, 'd', false], [510, 64, 'p', true], [510, 100, 'p', false],
+        [134, 216, 'a', false], [134, 156, 'a', true],
+      ],
+      lbls: [
+        L(332, 120, 'middle', ['nm', 'primariesChannel']),
+        L(249, 142, 'start', ['ty', 'push']),
+        L(415, 142, 'end', ['ty', 'pull']),
+        L(518, 87, 'start', ['nm', 'updateChannel']),
+        L(504, 78, 'end', ['ty', 'rep']),
+        L(504, 96, 'end', ['ty', 'req']),
+        L(518, 186, 'start', ['nm', 'data#all#']),
+        L(504, 171, 'end', ['ty', 'push']),
+        L(504, 203, 'end', ['ty', 'pull']),
+        L(332, 236, 'middle', ['nm', 'dataOut']),
+        L(415, 262, 'end', ['ty', 'push']),
+        L(249, 262, 'start', ['ty', 'pull']),
+        L(142, 190, 'start', ['nm', 'ack']),
+        L(128, 171, 'end', ['ty', 'pull']),
+        L(128, 211, 'end', ['ty', 'push']),
+      ],
+    },
+    narrow: {
+      id: 'narrow',
+      W: 320,
+      H: 478,
+      boxes: [B('v', 26, 8, 268, 56), B('g', 26, 98, 268, 56), B('t', 26, 198, 268, 56), B('m', 26, 298, 268, 72), B('k', 26, 414, 268, 56)],
+      routes: {
+        'v-t': { c: 'p', pts: [[294, 36], [310, 36], [310, 226], [294, 226]] },
+        'k-g': { c: 'a', pts: [[26, 442], [10, 442], [10, 126], [26, 126]] },
+        'g-t': { c: 'd', pts: [[160, 154], [160, 198]] },
+        't-m': { c: 'd', pts: [[160, 254], [160, 298]] },
+        'm-k': { c: 'd', pts: [[160, 370], [160, 414]] },
+      },
+      ports: [
+        [160, 154, 'd', true], [160, 198, 'd', false], [160, 254, 'd', false], [160, 298, 'd', true],
+        [160, 370, 'd', true], [160, 414, 'd', false], [294, 36, 'p', true], [294, 226, 'p', false],
+        [26, 442, 'a', false], [26, 126, 'a', true],
+      ],
+      lbls: [
+        L(168, 181, 'start', ['nm', 'primariesChannel']),
+        L(152, 168, 'end', ['ty', 'push']),
+        L(152, 193, 'end', ['ty', 'pull']),
+        L(168, 281, 'start', ['nm', 'data#all#']),
+        L(152, 268, 'end', ['ty', 'push']),
+        L(152, 293, 'end', ['ty', 'pull']),
+        L(168, 397, 'start', ['nm', 'dataOut']),
+        L(152, 384, 'end', ['ty', 'push']),
+        L(152, 409, 'end', ['ty', 'pull']),
+        L(304, 79, 'end', ['nm', 'updateChannel'], ['ty', ' rep']),
+        L(304, 193, 'end', ['ty', 'req']),
+        L(30, 93, 'start', ['nm', 'ack'], ['ty', ' pull']),
+        L(30, 409, 'start', ['nm', 'ack'], ['ty', ' push']),
+      ],
+    },
+    still: { toks: [['g-t', 0.3, 'chunk'], ['g-t', 0.72, 'chunk'], ['t-m', 0.5, 'chunk'], ['m-k', 0.25, 'evt'], ['k-g', 0.5, 'ack']], busy: ['t'], meter: 6 },
+    key: ['bind', 'conn', 'chunk', 'evt', 'par', 'ack'],
+  },
+
+  serialization: {
+    src: 'startSerializationEx.sh',
+    info: ['2 processors'],
+    aria:
+      'Topology of startSerializationEx.sh. sampler1 binds data1 on port 5565 and pushes each message to processor1 or processor2. Each processor pushes its result on data2 to sink1, which binds port 5570. A message has two parts: an ExHeader as a Boost archive, then the digis as a ROOT TMessage, or after the processor the hits as a Boost archive.',
+    txt: {
+      s: { id: 'sampler1', cls: 'ex-serialization-sampler', does: ['sends ', { c: 'ExHeader' }, ' + ', { c: 'MyDigi' }] },
+      p0: { id: 'processor1', cls: 'ex-serialization-processor', does: ['makes ', { c: 'MyHit' }, ' from ', { c: 'MyDigi' }] },
+      p1: { id: 'processor2', cls: 'ex-serialization-processor', does: ['makes ', { c: 'MyHit' }, ' from ', { c: 'MyDigi' }] },
+      k: { id: 'sink1', cls: 'ex-serialization-sink', does: ['fills ', { c: 'SerializationEx' }] },
+    },
+    wide: {
+      id: 'wide',
+      W: 660,
+      H: 180,
+      boxes: [B('s', 8, 78, 178, 56), B('p0', 248, 40, 190, 56), B('p1', 248, 116, 190, 56), B('k', 500, 78, 152, 56)],
+      routes: {
+        's-p0': { c: 'd', pts: [[186, 106], [234, 106], [234, 68], [248, 68]] },
+        's-p1': { c: 'd', pts: [[186, 106], [234, 106], [234, 144], [248, 144]] },
+        'p0-k': { c: 'd', pts: [[438, 68], [450, 68], [450, 106], [500, 106]] },
+        'p1-k': { c: 'd', pts: [[438, 144], [450, 144], [450, 106], [500, 106]] },
+      },
+      ports: [
+        [186, 106, 'd', true], [248, 68, 'd', false], [248, 144, 'd', false],
+        [438, 68, 'd', false], [438, 144, 'd', false], [500, 106, 'd', true],
+      ],
+      lbls: [
+        L(190, 99, 'start', ['nm', 'data1']),
+        L(190, 122, 'start', ['ty', 'push']),
+        L(190, 136, 'start', ['ad', ':5565']),
+        L(244, 62, 'end', ['nm', 'data1'], ['ty', ' pull']),
+        L(442, 62, 'start', ['nm', 'data2'], ['ty', ' push']),
+        L(496, 99, 'end', ['nm', 'data2']),
+        L(496, 122, 'end', ['ty', 'pull']),
+        L(496, 136, 'end', ['ad', ':5570']),
+      ],
+    },
+    narrow: {
+      id: 'narrow',
+      W: 320,
+      H: 332,
+      boxes: [B('s', 12, 8, 296, 56), B('p0', 44, 104, 232, 56), B('p1', 44, 172, 232, 56), B('k', 12, 268, 296, 56)],
+      routes: {
+        's-p0': { c: 'd', pts: [[26, 64], [26, 132], [44, 132]] },
+        's-p1': { c: 'd', pts: [[26, 64], [26, 200], [44, 200]] },
+        'p0-k': { c: 'd', pts: [[276, 132], [294, 132], [294, 268]] },
+        'p1-k': { c: 'd', pts: [[276, 200], [294, 200], [294, 268]] },
+      },
+      ports: [
+        [26, 64, 'd', true], [44, 132, 'd', false], [44, 200, 'd', false],
+        [276, 132, 'd', false], [276, 200, 'd', false], [294, 268, 'd', true],
+      ],
+      lbls: [
+        L(38, 79, 'start', ['nm', 'data1'], ['ty', ' push'], ['ad', ' :5565']),
+        L(48, 99, 'start', ['nm', 'data1'], ['ty', ' pull']),
+        L(282, 243, 'end', ['nm', 'data2'], ['ty', ' push']),
+        L(282, 262, 'end', ['nm', 'data2'], ['ty', ' pull'], ['ad', ' :5570']),
+      ],
+    },
+    still: { toks: [['s-p0', 0.68, 'ser1'], ['s-p1', 0.86, 'ser1'], ['p1-k', 0.46, 'ser2']], busy: ['p0'] },
+    key: ['bind', 'conn', 'root', 'boost'],
+  },
+};
+
+const E = EXAMPLES[ex];
+const KEY: Record<string, string> = {
+  bind: 'binds',
+  conn: 'connects',
+  msg: 'message',
+  chunk: 'chunk',
+  evt: 'event',
+  par: 'request, reply',
+  ack: 'ack (empty message)',
+  dash: 'only with',
+  root: 'ROOT TMessage',
+  boost: 'Boost archive',
+};
+const geo = (l: Layout) => JSON.stringify(Object.fromEntries(Object.entries(l.routes).map(([k, r]) => [k, r.pts])));
+const d = (pts: P[]) => 'M' + pts.map((p) => p.join(' ')).join(' L');
+---
+
+<figure class="fr-mqt not-content" data-example={ex} data-still={JSON.stringify(E.still)}>
+  <div class="mq-head">
+    <div class="mq-ctl">
+      <button type="button" data-act="pause">Pause</button>
+      <button type="button" data-act="restart">Restart</button>
+    </div>
+    <span><code>{E.src}</code> · {E.info.map((s) => (typeof s === 'string' ? s : <code>{s.c}</code>))}</span>
+  </div>
+  {
+    [E.wide, E.narrow].map((l) => (
+      <svg class={`mq mq-${l.id}`} viewBox={`0 0 ${l.W} ${l.H}`} role="img" aria-label={E.aria} data-geo={geo(l)}>
+        <g class="wires">
+          {Object.values(l.routes)
+            .filter((r) => r.c !== 'd')
+            .map((r) => <path class={`w w-${r.c}${r.dash ? ' dash' : ''}`} d={d(r.pts)} />)}
+          {Object.values(l.routes)
+            .filter((r) => r.c === 'd')
+            .map((r) => <path class="halo" d={d(r.pts)} />)}
+          {Object.values(l.routes)
+            .filter((r) => r.c === 'd')
+            .map((r) => <path class="w w-d" d={d(r.pts)} />)}
+        </g>
+        {l.boxes.map((b) => {
+          const t = E.txt[b.k];
+          const top = b.h > 57 ? 18 : 17;
+          return (
+            <g class={`dev${t.srv ? ' srv' : ''}`} data-dev={b.k}>
+              <rect class="bx" x={b.x} y={b.y} width={b.w} height={b.h} rx="3" />
+              <text class="id" x={b.x + 10} y={b.y + top}>{t.id}</text>
+              <text class="cls" x={b.x + 10} y={b.y + top + 15}>{t.cls}</text>
+              <text class="does" x={b.x + 10} y={b.y + top + 30}>{t.does.map((s) => (typeof s === 'string' ? <tspan>{s}</tspan> : <tspan class="c">{s.c}</tspan>))}</text>
+              {t.meter && [...Array(10).keys()].map((i) => <rect class="slot" data-slot={i} x={b.x + 10 + i * 12} y={b.y + b.h - 17} width="9" height="9" />)}
+            </g>
+          );
+        })}
+        <g class="ports">
+          {l.ports.map(([x, y, c, bind]) => (
+            <circle class={`pt pt-${c}${bind ? ' bind' : ''}`} cx={x} cy={y} r="3.5" />
+          ))}
+        </g>
+        <g class="lbls">
+          {l.lbls.map((b) => (
+            <text class="lbl" x={b.x} y={b.y} text-anchor={b.a}>{b.t.map(([c, s]) => <tspan class={c}>{s}</tspan>)}</text>
+          ))}
+        </g>
+        <g class="toks" />
+      </svg>
+    ))
+  }
+  <ul class="mq-key">
+    {
+      E.key.map((k) => (
+        <li class={`k-${k}`}>
+          <svg viewBox="0 0 16 12" aria-hidden="true">
+            {k === 'bind' && <circle class="pt pt-d bind" cx="8" cy="6" r="3.5" />}
+            {k === 'conn' && <circle class="pt pt-d" cx="8" cy="6" r="3.5" />}
+            {(k === 'msg' || k === 'root') && <rect class="tk-root" x="3.5" y="1.5" width="9" height="9" />}
+            {k === 'chunk' && <rect class="tk-root" x="5" y="3" width="6" height="6" />}
+            {k === 'evt' && <rect class="tk-root" x="2.5" y="0.5" width="11" height="11" />}
+            {k === 'boost' && <rect class="tk-boost" x="3.5" y="1.5" width="9" height="9" />}
+            {k === 'par' && <rect class="tk-par" x="5" y="3" width="6" height="6" />}
+            {k === 'ack' && <rect class="tk-ack" x="4.5" y="2.5" width="7" height="7" />}
+            {k === 'dash' && <path class="w w-a dash" d="M0 6 H16" />}
+          </svg>
+          {KEY[k]}
+          {k === 'dash' && (
+            <>
+              {' '}
+              <code>--command static</code>
+            </>
+          )}
+        </li>
+      ))
+    }
+  </ul>
+  <figcaption class="mq-cap">
+    {
+      ex === 'pixel' && (
+        <>
+          The sampler sends the events to the processors in turn. At its first message, a processor gets its parameter containers from the server, then it runs{' '}
+          <code>PixelFindHits</code> on each message. With <code>--command static</code>, the sink sends an ack for each event, and the sampler ends only after the last ack.
+        </>
+      )
+    }
+    {
+      ex === 'split' && (
+        <>
+          The generator sends each event as 10 chunks. A chunk message has all primaries and a header with the range of 10 primaries to simulate. The transporter
+          simulates each chunk, and the merger sends the event when it has all 10 chunks. At the start, the transporter gets the run ID from the parameter server and
+          sends its parameter containers there.
+        </>
+      )
+    }
+    {
+      ex === 'serialization' && (
+        <>
+          Each message has two parts. On <code>data1</code>: an <code>ExHeader</code> as a Boost archive and the <code>MyDigi</code> array as a ROOT <code>TMessage</code>.
+          On <code>data2</code>: the same header part and the <code>MyHit</code> objects as a Boost archive.
+        </>
+      )
+    }
+  </figcaption>
+</figure>
+
+<script>
+  type P = [number, number];
+  type Path = { pts: P[]; seg: number[]; len: number };
+  type Still = { toks: [string, number, string][]; busy: string[]; meter?: number };
+  type Tok = { r: string; t0: number; d: number; look: string; els: SVGGElement[]; park: number; done?: (t: Tok) => void };
+  const NS = 'http://www.w3.org/2000/svg';
+  const SPEED = 150; // units per second along a route
+  const FAST = new Set(['ack', 'par']); // small messages move faster
+  // Look of a message: size of one part, and the class of each part.
+  const LOOK: Record<string, [number, string[]]> = {
+    msg: [9, ['tk-root']],
+    chunk: [6, ['tk-root']],
+    evt: [11, ['tk-root']],
+    par: [6, ['tk-par']],
+    ack: [7, ['tk-ack']],
+    ser1: [7, ['tk-boost', 'tk-root']],
+    ser2: [7, ['tk-boost', 'tk-boost']],
+  };
+  const width = (look: string) => {
+    const [s, parts] = LOOK[look];
+    return parts.length * s + (parts.length - 1) * 2;
+  };
+  const measure = (pts: P[]): Path => {
+    const seg = pts.slice(1).map((q, i) => Math.hypot(q[0] - pts[i][0], q[1] - pts[i][1]));
+    return { pts, seg, len: seg.reduce((a, b) => a + b, 0) };
+  };
+  // The point at the distance s from the start of a path.
+  const point = (p: Path, s: number): P => {
+    let r = Math.max(0, Math.min(s, p.len));
+    for (let i = 0; i < p.seg.length; i++) {
+      if (r <= p.seg[i] || i === p.seg.length - 1) {
+        const f = p.seg[i] ? Math.min(1, r / p.seg[i]) : 0;
+        const [a, b] = [p.pts[i], p.pts[i + 1]];
+        return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+      }
+      r -= p.seg[i];
+    }
+    return p.pts[p.pts.length - 1];
+  };
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-mqt')) {
+    const ex = root.dataset.example!;
+    const still = JSON.parse(root.dataset.still!) as Still;
+    const svgs = [...root.querySelectorAll<SVGSVGElement>('svg.mq')];
+    // For each layout: the paths by name, and the reversed paths as '~name'.
+    const paths = svgs.map((s) => {
+      const m: Record<string, Path> = {};
+      for (const [k, pts] of Object.entries(JSON.parse(s.dataset.geo!) as Record<string, P[]>)) {
+        m[k] = measure(pts);
+        m['~' + k] = measure([...pts].reverse());
+      }
+      return m;
+    });
+    const layers = svgs.map((s) => s.querySelector<SVGGElement>('.toks')!);
+    const btnPause = root.querySelector<HTMLButtonElement>('[data-act=pause]')!;
+    const btnRestart = root.querySelector<HTMLButtonElement>('[data-act=restart]')!;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let vis = 0; // index of the visible layout
+    const pickVis = () => {
+      const i = svgs.findIndex((s) => s.getBoundingClientRect().width > 0);
+      vis = i < 0 ? 0 : i;
+    };
+
+    // ---- Simulation: tokens move along routes; events run at a time.
+    let now = 0;
+    let clock = 0; // the time of the arrival or event that runs now
+    let toks: Tok[] = [];
+    let evs: { t: number; f: () => void }[] = [];
+    const later = (dt: number, f: () => void) => evs.push({ t: clock + dt, f });
+    const send = (r: string, look: string, done?: (t: Tok) => void) => {
+      const els = layers.map((layer) => {
+        const g = document.createElementNS(NS, 'g');
+        const [s, parts] = LOOK[look];
+        const w = width(look);
+        parts.forEach((c, i) => {
+          const e = document.createElementNS(NS, 'rect');
+          e.setAttribute('class', c);
+          e.setAttribute('x', String(-w / 2 + i * (s + 2)));
+          e.setAttribute('y', String(-s / 2));
+          e.setAttribute('width', String(s));
+          e.setAttribute('height', String(s));
+          g.appendChild(e);
+        });
+        layer.appendChild(g);
+        return g;
+      });
+      const t: Tok = { r, t0: clock, d: Math.max(0.3, paths[vis][r].len / (FAST.has(look) ? 1.7 * SPEED : SPEED)), look, els, park: -1, done };
+      toks.push(t);
+      return t;
+    };
+    const drop = (t: Tok) => {
+      t.els.forEach((e) => e.remove());
+      toks = toks.filter((x) => x !== t);
+    };
+    // Busy devices: a counter for each device, the class 'busy' while it is above 0.
+    const busyN: Record<string, number> = {};
+    const busy = (k: string, n: number) => {
+      busyN[k] = Math.max(0, (busyN[k] || 0) + n);
+      root.querySelectorAll(`[data-dev="${k}"]`).forEach((g) => g.classList.toggle('busy', busyN[k] > 0));
+    };
+    const flash = (k: string, dt = 0.3) => {
+      busy(k, 1);
+      later(dt, () => busy(k, -1));
+    };
+    // Queues: messages that wait at the input of a device.
+    const Q: Record<string, Tok[]> = {};
+    const park = (k: string, t: Tok) => {
+      (Q[k] ||= []).push(t);
+      t.park = Q[k].length - 1;
+    };
+    const take = (k: string) => {
+      const t = (Q[k] ||= []).shift();
+      if (t) drop(t);
+      Q[k].forEach((x, i) => (x.park = i));
+      return t;
+    };
+    const meter = (n: number) => root.querySelectorAll('[data-slot]').forEach((e) => e.classList.toggle('on', Number((e as SVGElement).dataset.slot) < n));
+
+    // ---- The three topologies.
+    const programs: Record<string, () => void> = {
+      pixel: () => {
+        const N = 3;
+        const st = [...Array(N)].map(() => ({ busy: false, pars: false }));
+        let rr = 0;
+        // One request and one reply for each container: FairGeoParSet, PixelDigiParameters.
+        const ask = (i: number, n: number, then: () => void) => {
+          if (n === 0) return then();
+          send(`~v-p${i}`, 'par', () => {
+            flash('v', 0.25);
+            later(0.12, () => send(`v-p${i}`, 'par', () => ask(i, n - 1, then)));
+          });
+        };
+        const run = (i: number) => {
+          const p = st[i];
+          if (p.busy || !(Q['p' + i] || []).length) return;
+          take('p' + i);
+          p.busy = true;
+          busy('p' + i, 1);
+          const work = () =>
+            later(0.55, () => {
+              p.busy = false;
+              busy('p' + i, -1);
+              send(`p${i}-k`, 'msg', () => {
+                flash('k');
+                send('k-s', 'ack');
+              });
+              run(i);
+            });
+          if (p.pars) work();
+          else
+            ask(i, 2, () => {
+              p.pars = true;
+              work();
+            });
+        };
+        const sample = () => {
+          const i = rr;
+          rr = (rr + 1) % N;
+          send(`s-p${i}`, 'msg', (t) => {
+            park('p' + i, t);
+            run(i);
+          });
+          later(0.6, sample);
+        };
+        later(0.2, sample);
+      },
+      split: () => {
+        const NCH = 10;
+        const T = { busy: true, ready: false };
+        let got = 0;
+        // PreRun(): "ReportSimDevice" and its reply, then the parameter containers.
+        const report = (n: number) => {
+          if (n === 0) {
+            T.ready = true;
+            T.busy = false;
+            busy('t', -1);
+            return run();
+          }
+          send('~v-t', 'par', () => {
+            flash('v', 0.25);
+            later(0.12, () => send('v-t', 'par', () => report(n - 1)));
+          });
+        };
+        const run = () => {
+          if (T.busy || !T.ready || !(Q.t || []).length) return;
+          take('t');
+          T.busy = true;
+          busy('t', 1);
+          later(0.22, () => {
+            T.busy = false;
+            later(0.12, () => busy('t', -1)); // no flicker between two chunks
+            // The meter keeps all 10 slots on until the first chunk of the next event.
+            send('t-m', 'chunk', () => {
+              got = (got % NCH) + 1;
+              meter(got);
+              if (got < NCH) return;
+              flash('m', 0.3);
+              later(0.15, () =>
+                send('m-k', 'evt', () => {
+                  flash('k');
+                  send('k-g', 'ack');
+                })
+              );
+            });
+            run();
+          });
+        };
+        const gen = () => {
+          send('g-t', 'chunk', (t) => {
+            park('t', t);
+            run();
+          });
+          later(0.34, gen);
+        };
+        busy('t', 1);
+        later(0.15, () => report(2));
+        later(0.3, gen);
+      },
+      serialization: () => {
+        const st = [{ busy: false }, { busy: false }];
+        let rr = 0;
+        const run = (i: number) => {
+          const p = st[i];
+          if (p.busy || !(Q['p' + i] || []).length) return;
+          take('p' + i);
+          p.busy = true;
+          busy('p' + i, 1);
+          later(0.6, () => {
+            p.busy = false;
+            busy('p' + i, -1);
+            send(`p${i}-k`, 'ser2', () => flash('k'));
+            run(i);
+          });
+        };
+        const sample = () => {
+          const i = rr;
+          rr = (rr + 1) % 2;
+          send(`s-p${i}`, 'ser1', (t) => {
+            park('p' + i, t);
+            run(i);
+          });
+          later(0.7, sample);
+        };
+        later(0.2, sample);
+      },
+    };
+
+    const clear = () => {
+      toks.forEach((t) => t.els.forEach((e) => e.remove()));
+      toks = [];
+      evs = [];
+      for (const k in Q) delete Q[k];
+      for (const k in busyN) busy(k, -busyN[k]);
+      meter(0);
+      now = clock = 0;
+    };
+    const render = () => {
+      for (const t of toks) {
+        const w = width(t.look);
+        t.els.forEach((g, j) => {
+          const p = paths[j][t.r];
+          // A long queue stops before the start of the route, so it does not cover the port of the sender.
+          const s = t.park >= 0 ? Math.max(w / 2 + 6, p.len - w / 2 - 6 - t.park * (w * 0.6 + 2)) : (Math.min(1, (now - t.t0) / t.d) || 0) * p.len;
+          const [x, y] = point(p, s);
+          g.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+        });
+      }
+    };
+    // Run all arrivals and events up to the time `to`, in time order.
+    const advance = (to: number) => {
+      for (;;) {
+        let tok: Tok | null = null;
+        let ta = Infinity;
+        for (const t of toks)
+          if (t.park < 0 && t.t0 + t.d < ta) {
+            ta = t.t0 + t.d;
+            tok = t;
+          }
+        let ei = -1;
+        let te = Infinity;
+        evs.forEach((e, i) => {
+          if (e.t < te) {
+            te = e.t;
+            ei = i;
+          }
+        });
+        if (Math.min(ta, te) > to) break;
+        if (tok && ta <= te) {
+          // Arrived: the callback can park the message in a queue; else it goes away.
+          clock = ta;
+          tok.park = -2;
+          const f = tok.done;
+          tok.done = undefined;
+          if (f) f(tok);
+          if (tok.park === -2) drop(tok);
+        } else {
+          clock = te;
+          evs.splice(ei, 1)[0].f();
+        }
+      }
+      now = clock = to;
+    };
+    // The static picture: some messages on their way.
+    const showStill = () => {
+      clear();
+      pickVis();
+      for (const [r, u, look] of still.toks) {
+        const t = send(r, look);
+        t.t0 = -u * t.d;
+      }
+      still.busy.forEach((k) => busy(k, 1));
+      if (still.meter) meter(still.meter);
+      render();
+    };
+
+    let playing = !reduce;
+    let visible = !('IntersectionObserver' in window);
+    let running = false;
+    let fresh = true; // the static picture shows; the next start begins at time 0
+    let raf = 0;
+    let last = 0;
+    const frame = (ts: number) => {
+      if (!running) return;
+      const dt = Math.min(0.05, (ts - (last || ts)) / 1000);
+      last = ts;
+      advance(now + dt);
+      render();
+      raf = requestAnimationFrame(frame);
+    };
+    const start = () => {
+      if (running || !playing || !visible) return;
+      if (fresh) {
+        clear();
+        pickVis();
+        programs[ex]();
+        fresh = false;
+      }
+      running = true;
+      last = 0;
+      raf = requestAnimationFrame(frame);
+    };
+    const stop = () => {
+      running = false;
+      cancelAnimationFrame(raf);
+    };
+    const label = () => {
+      btnPause.textContent = playing ? 'Pause' : 'Play';
+    };
+    btnPause.addEventListener('click', () => {
+      playing = !playing;
+      if (playing) start();
+      else stop();
+      label();
+    });
+    btnRestart.addEventListener('click', () => {
+      stop();
+      playing = true;
+      fresh = true;
+      start();
+      label();
+    });
+    showStill();
+    label();
+    if ('ResizeObserver' in window) new ResizeObserver(pickVis).observe(root);
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver(
+        (es) => {
+          for (const e of es) {
+            visible = e.isIntersecting;
+            if (visible && playing && !running) {
+              fresh = true;
+              start();
+            } else if (!visible && running) stop();
+          }
+        },
+        { threshold: 0.2 }
+      ).observe(root);
+    } else start();
+  }
+</script>
+
+<style>
+  .fr-mqt {
+    container-type: inline-size;
+    min-width: 0;
+    margin: 1.5rem 0;
+    border: 1px solid var(--fr-rule);
+    background: var(--fr-paper);
+    border-radius: 6px;
+    padding: 0.75rem 0.75rem 0.6rem;
+  }
+  .mq-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.4rem 0.75rem;
+    flex-wrap: wrap;
+    font-size: 0.78rem;
+    color: var(--fr-ink-3);
+    text-wrap: pretty; /* no code name alone on the last line on phones */
+  }
+  .mq-ctl {
+    display: inline-flex;
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .mq-ctl button {
+    font: 600 0.78rem/1 var(--fr-font-body);
+    border: 0;
+    background: var(--fr-paper);
+    color: var(--fr-ink-2);
+    padding: 0.5rem 0.85rem;
+    min-width: 4.6rem;
+    cursor: pointer;
+  }
+  .mq-ctl button + button {
+    border-inline-start: 1px solid var(--fr-rule-strong);
+  }
+  .mq-ctl button:hover {
+    background: var(--fr-paper-2);
+    color: var(--fr-ink);
+  }
+  .mq-ctl button:focus-visible {
+    outline: 2px solid var(--fr-link);
+    outline-offset: -2px;
+  }
+  .fr-mqt code {
+    font-family: var(--fr-font-mono);
+    font-size: 0.92em;
+    color: var(--fr-ink);
+    background: var(--fr-paper-2);
+    border: 1px solid var(--fr-rule);
+    border-radius: 3px;
+    padding: 0.02em 0.3em;
+    overflow-wrap: anywhere;
+  }
+  svg.mq {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-top: 0.6rem;
+  }
+  svg.mq-narrow {
+    display: none;
+    max-width: 420px;
+    margin-inline: auto;
+  }
+  @container (max-width: 599.98px) {
+    svg.mq-wide {
+      display: none;
+    }
+    svg.mq-narrow {
+      display: block;
+    }
+  }
+
+  /* Wires and ports */
+  .w {
+    fill: none;
+    stroke-width: 1.3;
+    stroke-linejoin: round;
+  }
+  .w-d {
+    stroke: var(--fr-ink-3);
+  }
+  .w-p {
+    stroke: var(--fr-sky);
+  }
+  .w-a {
+    stroke: var(--fr-teal);
+  }
+  .w-a.dash {
+    stroke-dasharray: 5 4;
+  }
+  .halo {
+    fill: none;
+    stroke: var(--fr-paper);
+    stroke-width: 7;
+  }
+  .pt {
+    fill: var(--fr-paper);
+    stroke-width: 1.4;
+  }
+  .pt-d {
+    stroke: var(--fr-ink-2);
+  }
+  .pt-p {
+    stroke: var(--fr-sky);
+  }
+  .pt-a {
+    stroke: var(--fr-teal);
+  }
+  .pt-d.bind {
+    fill: var(--fr-ink-2);
+  }
+  .pt-p.bind {
+    fill: var(--fr-sky);
+  }
+  .pt-a.bind {
+    fill: var(--fr-teal);
+  }
+
+  /* Devices */
+  .dev .bx {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-2);
+    stroke-width: 1.2;
+    transition:
+      fill 0.2s,
+      stroke 0.2s;
+  }
+  .dev:global(.busy) .bx {
+    fill: var(--fr-saffron-tint);
+    stroke: var(--fr-bar);
+  }
+  .dev.srv:global(.busy) .bx {
+    fill: var(--fr-sky-tint);
+    stroke: var(--fr-sky);
+  }
+  /* ink-3 on the dark saffron tint is 4.4:1; ink-2 keeps the class name above 4.5:1. */
+  .dev:global(.busy) .cls {
+    fill: var(--fr-ink-2);
+  }
+  .id {
+    font: 600 12px var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .cls {
+    font: 400 11px var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .does {
+    font: 400 11.5px var(--fr-font-body);
+    fill: var(--fr-ink-2);
+    white-space: pre;
+  }
+  .does .c {
+    font-family: var(--fr-font-mono);
+    font-size: 11px;
+    fill: var(--fr-ink);
+  }
+  .slot {
+    fill: var(--fr-paper-2);
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1;
+    transition: fill 0.15s;
+  }
+  .slot:global(.on) {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+
+  /* Labels on the wires */
+  .lbl {
+    font: 400 11px var(--fr-font-mono);
+    white-space: pre;
+    paint-order: stroke;
+    stroke: var(--fr-paper);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .lbl .nm {
+    font-weight: 600;
+    fill: var(--fr-ink-2);
+  }
+  .lbl .ty,
+  .lbl .ad {
+    fill: var(--fr-ink-3);
+  }
+  .lbl .nt {
+    font-family: var(--fr-font-body);
+    font-size: 11.5px;
+    fill: var(--fr-teal);
+  }
+  .mq-narrow .cls,
+  .mq-narrow .does .c,
+  .mq-narrow .lbl {
+    font-size: 11.5px;
+  }
+
+  /* Messages */
+  .toks :global(rect),
+  .mq-key rect {
+    stroke-width: 1;
+  }
+  .fr-mqt :global(.tk-root) {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+  .fr-mqt :global(.tk-boost) {
+    fill: var(--fr-ruby);
+    stroke: var(--fr-ruby);
+  }
+  .fr-mqt :global(.tk-par) {
+    fill: var(--fr-sky);
+    stroke: var(--fr-sky);
+  }
+  .fr-mqt :global(.tk-ack) {
+    fill: var(--fr-paper);
+    stroke: var(--fr-teal);
+    stroke-width: 1.6;
+  }
+
+  /* Key and caption */
+  .mq-key {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 1rem;
+    margin: 0.55rem 0.15rem 0;
+    padding: 0;
+    font-size: 0.78rem;
+    color: var(--fr-ink-3);
+  }
+  .mq-key li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+  }
+  .mq-key svg {
+    width: 16px;
+    height: 12px;
+    flex: none;
+  }
+  .mq-key code {
+    font-size: 0.95em;
+  }
+  .mq-head code,
+  .mq-key code,
+  .mq-cap code {
+    white-space: nowrap;
+  }
+  /* The wide picture labels the dashed line itself. */
+  @container (min-width: 600px) {
+    .mq-key .k-dash {
+      display: none;
+    }
+  }
+  .mq-cap {
+    margin: 0.45rem 0.15rem 0;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--fr-ink-2);
+    text-wrap: pretty;
+  }
+  @media (max-width: 30rem) {
+    .fr-mqt {
+      padding: 0.6rem 0.4rem 0.5rem;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-mqt * {
+      transition: none !important;
+    }
+  }
+</style>

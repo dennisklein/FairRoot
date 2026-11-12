@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 * No streamer is generated for `FairRootManager` any more
 
+### Other Notable Changes
+
+* Added a documentation site in `docs/`: guides, the API reference and a
+  source browser
+
 ## 19.0.0 - 2024-05-17
 
 ### Breaking Changes

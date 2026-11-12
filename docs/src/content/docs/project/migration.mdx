@@ -1,0 +1,438 @@
+---
+title: 'Migrate to a new release'
+description: 'The steps to update a project from FairRoot 18.6 to 18.8, 19.0 and the development version: CMake changes, C++ API changes, removed classes and headers, and build options.'
+sidebar:
+  order: 3
+code:
+  [
+    fairroot/base/steer/FairRun.h,
+    fairroot/base/steer/FairRunAna.h,
+    fairroot/base/steer/FairRootManager.h,
+    fairroot/base/event/FairTimeStamp.h,
+    fairroot/base/steer/FairRunSim.h,
+    examples/simulation/Tutorial1/macros/run_tutorial1.C,
+    examples/MQ/pixelDetector/macros/run_dBinSource.C,
+  ]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+A new release of FairRoot can change the CMake code, the C++ API and the build options. This page
+gives the steps to update a project that uses FairRoot. Each step shows the old form and the new
+form. The new form comes from the current code of FairRoot.
+
+Do the steps of each release between your version and the new one. The
+[Release notes](/project/release-notes/) list all changes. The
+[Deprecated APIs](/reference/deprecations/) page lists the APIs that still work, but that a later
+release removes.
+
+## Steps for each release
+
+| Update | Steps |
+| --- | --- |
+| 19.0 to the development version | [Do not write FairRootManager to a file](#do-not-write-fairrootmanager-to-a-file) |
+| 18.8 to 19.0 | CMake: [package of ROOT](#use-the-cmake-package-of-root), [`ROOT::` prefix](#add-the-root-prefix-to-root-targets), [`ROOT_VERSION`](#compare-root-versions-with-root_version), [FairCMakeModules](#get-faircmakemodules), [`fair_pad()`](#replace-pad-with-fair_pad), [dictionary macro](#rename-root_generate_dictionary), [removed functions](#replace-the-removed-cmake-functions). C++: [event header](#access-the-event-header-with-geteventheader), [`unique_ptr` for the event header](#give-the-event-header-as-a-unique_ptr), [time stamps](#compare-time-stamps-by-reference), [`RunSingleEntry()`](#run-a-single-entry-with-runsingleentry). Removed: [BaseMQ headers](#basemq-headers), [other items](#other-removed-classes-and-functions). [Build options](#build-options). |
+| 18.8.0 to 18.8.1 | [Output folder](#read-the-output-folder-without-a-suffix), [unpackers](#return-the-status-of-the-unpackers), [`InitContainers()`](#other-removed-classes-and-functions) |
+| Before 18.8 to 18.8.0 | CMake: [CheckCXX11Features](#remove-checkcxx11features), [removed functions](#replace-the-removed-cmake-functions), [exported targets](#link-the-exported-fairroot-targets). C++: [simulation configuration](#give-the-simulation-configuration-as-a-unique_ptr), [tree and folder names](#do-not-delete-the-tree-and-folder-names), [Boost serialization](#include-the-boost-serialization-support). [Build options](#build-options). |
+
+The changelog of 18.8.0 also says that some headers include fewer other headers now. If the
+compiler does not find a class after the update, add the `#include` for it to your file.
+
+## CMake
+
+### Use the CMake package of ROOT
+
+FairRoot 19.0.0 removed its own `FindROOT.cmake`. FairRoot now uses the CMake package that ROOT
+installs. See the [ROOT manual about CMake projects](https://root.cern/manual/integrate_root_into_my_cmake_project/).
+
+1. Find ROOT with `find_package2()`.
+2. Include `ROOTMacros` after the call. Since 19.0.0, you must do this yourself.
+3. Optionally, call `fairroot_check_root_cxxstd_compatibility()`.
+
+The project template does these three steps:
+
+<Snippet file="templates/project_root_containers/CMakeLists.txt" start="find_package2(PUBLIC ROOT REQUIRED)" end="fairroot_check_root_cxxstd_compatibility()" />
+
+[`fairroot_check_root_cxxstd_compatibility()`](/reference/cmake/#fairroot_check_root_cxxstd_compatibility)
+writes a CMake warning when the target `ROOT::Core` does not have the C++ standard of your project in
+its compile features. It does nothing when `CMAKE_CXX_STANDARD` is not set
+([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L286-L304)).
+
+The CMake variable `ROOTSYS` is gone too. Use the ROOT targets in its place.
+
+### Add the ROOT:: prefix to ROOT targets
+
+Since 19.0.0, the names of the ROOT libraries in your CMake code must have the prefix `ROOT::`. This
+applies to `target_link_libraries()` and to the `DEPENDENCIES` of `GENERATE_LIBRARY()`. See the
+[full example in the ROOT manual](https://root.cern/manual/integrate_root_into_my_cmake_project/#full-example-event-project).
+
+```cmake title="Before"
+Set(DEPENDENCIES
+    # ...
+    EG
+    Physics
+    Core)
+```
+
+After:
+
+<Snippet file="templates/project_root_containers/MyProjData/CMakeLists.txt" start="Set(DEPENDENCIES" end="ROOT::Core)" />
+
+### Compare ROOT versions with ROOT_VERSION
+
+FairRoot 19.0.0 removed the variable `ROOT_VERSION_NUMBER`. Use `ROOT_VERSION`, which is the dotted
+version number. Compare it with the
+[version comparisons](https://cmake.org/cmake/help/latest/command/if.html#version-comparisons) of
+`if()`, such as `VERSION_GREATER`. FairRoot does this in its own `CMakeLists.txt`:
+
+<Snippet file="CMakeLists.txt" start="if(ROOT_VERSION VERSION_GREATER_EQUAL 6.32 AND BUILD_PROOF_SUPPORT)" end="endif()" />
+
+### Get FairCMakeModules
+
+FairRoot 19.0.0 moved some CMake macros to
+[FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/). FairRoot needs this
+package. FairSoft `apr21` and later include it. For other ways to install it, see the
+[installation methods](https://fairrootgroup.github.io/FairCMakeModules/latest/installation.html).
+
+`find_package2()` is in the module
+[`FairFindPackage2`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFindPackage2.html)
+now. Find FairCMakeModules and include the module before the first call of `find_package2()`. The
+project template does it like this:
+
+<Snippet file="templates/project_root_containers/CMakeLists.txt" start="find_package(FairCMakeModules 0.2 QUIET REQUIRED)" end="find_package2(PUBLIC FairRoot VERSION 19.0 REQUIRED)" />
+
+The changelog shows `find_package(FairCMakeModules 1.0 REQUIRED)`. FairRoot itself asks for
+version 0.2. It uses the module `FairProjectConfig` only with version 1.0 or later
+([CMakeLists.txt](/repo/CMakeLists.txt#L78-L96)). Use version 1.0 or later. With an older version,
+the CMake package of FairRoot does not record its dependencies
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L13-L18)).
+[Find the dependencies](/start/cmake/#find-the-dependencies) shows the setup of a project.
+
+### Replace pad() with fair_pad()
+
+FairRoot 19.0.0 removed its color codes and its function `pad()`. Use the module
+[`FairFormattedOutput`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFormattedOutput.html)
+of FairCMakeModules, with `include(FairFormattedOutput)`. Its function
+[`fair_pad()`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFormattedOutput.html#fair-pad)
+is different from `pad()` in two points:
+
+- Give a width that is 1 larger than the width that you gave to `pad()`.
+- The option `COLOR` takes no argument.
+
+FairRoot uses `fair_pad()` in its configuration summary:
+
+<Snippet file="cmake/private/FairRootSummary.cmake" start='fair_pad(${dep} 21 " " dep_padded)' end="version_padded COLOR)" />
+
+### Rename ROOT_GENERATE_DICTIONARY()
+
+FairRoot 19.0.0 renamed its macro `ROOT_GENERATE_DICTIONARY()` to `FAIRROOT_GENERATE_DICTIONARY()`:
+
+```cmake title="Before"
+ROOT_GENERATE_DICTIONARY()
+```
+
+```cmake title="After"
+FAIRROOT_GENERATE_DICTIONARY()
+```
+
+The macro takes no arguments. It reads `LINKDEF`, `DICTIONARY`, `LIBRARY_NAME`, `HDRS`,
+`INCLUDE_DIRECTORIES`, `SYSTEM_INCLUDE_DIRECTORIES` and `DEFINITIONS` from the calling scope. It
+stops with an error if `FAIRROOTPATH` is not set. `FindFairRoot.cmake` sets this variable
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L46-L119)).
+
+`GENERATE_LIBRARY()` calls the macro when `LINKDEF` is set
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L202-L213)). A project that only uses
+`GENERATE_LIBRARY()` needs no change. The libraries of FairRoot and of the examples use the
+function [`fairroot_target_root_dictionary()`](/reference/cmake/#fairroot_target_root_dictionary) on a
+target.
+
+### Replace the removed CMake functions
+
+| Removed | Release | What to do |
+| --- | --- | --- |
+| `Generate_Exe_Script()` | 19.0.0 | Remove the call. It was never meant for external use. |
+| `GENERATE_TEST_SCRIPT()` | 19.0.0 | Write your own script. The changelog suggests that the script sources `@FairRoot_BINDIR@/FairRootConfig.sh`. |
+| `Generate_Version_Info()` | 19.0.0 | Use the CMake command [`configure_file()`](https://cmake.org/cmake/help/latest/command/configure_file.html) to write the version into files. Or make a [CMake package](https://cmake.org/cmake/help/latest/manual/cmake-packages.7.html#creating-packages) with `configure_package_config_file()` and `write_basic_package_version_file()`. For the Git version, add [`fair_get_git_version()`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairProjectConfig.html#fair-get-git-version). |
+| `CHECK_EXTERNAL_PACKAGE_INSTALL_DIR` | 18.8.0 | Remove it from your `CMakeLists.txt`. |
+| `ROOT_GENERATE_ROOTMAP` | 18.8.0 | It was for ROOT 5. Change your build system if you still use it. |
+
+About `GENERATE_TEST_SCRIPT()`: FairRoot installs its environment script as `FairRootConfig.sh` in
+the `bin` folder, and the package sets `FairRoot_BINDIR` to this folder
+([FairRootConfig.cmake.in](/repo/cmake/private/FairRootConfig.cmake.in#L12)). The changelog adds
+the argument `-p`, but the script reads no arguments
+([config.sh.in](/repo/cmake/scripts/config.sh.in)). For ROOT macros, the macro
+`GENERATE_ROOT_TEST_SCRIPT()` of `ROOTMacros.cmake` still exists. It writes a shell script that
+runs the macro ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L122-L162)).
+
+To get the Git version, include the module `FairProjectConfig` and call the function. FairRoot does
+this when CMake finds FairCMakeModules 1.0 or later ([CMakeLists.txt](/repo/CMakeLists.txt#L82-L96)):
+
+```cmake
+include(FairProjectConfig)
+fair_get_git_version()
+```
+
+### Remove CheckCXX11Features
+
+FairRoot 18.8.0 removed the module `CheckCXX11Features`. The releases 18.6.8 and 18.4.8 removed it
+too. FairRoot needs a compiler with full C++17 support
+([CMakeLists.txt](/repo/CMakeLists.txt#L10)). Remove these lines from your `CMakeLists.txt`:
+
+```cmake title="Remove"
+Set(CheckSrcDir "${FAIRROOTPATH}/share/fairbase/cmake/checks")
+include(CheckCXX11Features)
+IF(HAS_CXX11_SHAREDPOINTER)
+  Add_Definitions(-DHAS_SHAREDPOINTER)
+ENDIF(HAS_CXX11_SHAREDPOINTER)
+```
+
+- If your C++ code needs the macro `HAS_SHAREDPOINTER`, change the code.
+- If your CMake code needs one of the variables `HAS_CXX11_*`, change the code.
+- If your code needs specific C++ features, use the CMake command `target_compile_features()`.
+
+### Link the exported FairRoot targets
+
+Since 18.8.0, FairRoot exports a CMake target for each library, with the namespace `FairRoot::`.
+Link these targets. For most libraries, the target is the library name with the prefix
+`FairRoot::`, for example `FairRoot::Base`. These targets have a library file with another name:
+
+| Target | Library file |
+| --- | --- |
+| `FairRoot::TrackBase` | `TrkBase` |
+| `FairRoot::DataMatch` | `FairDataMatch` |
+| `FairRoot::Tools` | `FairTools` |
+| `FairRoot::FastSim` | `FairFastSim` |
+| `FairRoot::MCStepLogger` | `FairMCStepLogger` |
+| `FairRoot::Generators` | `Gen` |
+
+The changelog of 18.8.0 does not list `FairRoot::Generators`. The file name comes from
+[fairroot/generators/CMakeLists.txt](/repo/fairroot/generators/CMakeLists.txt#L28).
+
+18.8.0 also moved [`FairRunOnline`](/api/FairRunOnline/) and the MBS and LMD sources from the
+library `Base` to the new library `Online`. If your code uses one of these classes, link
+`FairRoot::Online`. The MBS tutorial does this:
+
+<Snippet file="examples/advanced/MbsTutorial/CMakeLists.txt" start="target_link_libraries(${target}" end="FairRoot::Online" />
+
+For the list of all libraries, see [Libraries and headers](/reference/libraries/).
+
+## C++ API
+
+### Access the event header with GetEventHeader()
+
+Since 19.0.0, `fEvtHeader` is a private `std::unique_ptr` of [`FairRun`](/api/FairRun/). A class
+derived from `FairRun` cannot use it. Call the public function
+[`GetEventHeader()`](/api/FairRun/#GetEventHeader):
+
+```cpp title="MyRun.cxx"
+// Before: fEvtHeader->SetRunId(fRunId);
+GetEventHeader()->SetRunId(fRunId);
+```
+
+If you set no event header, `GetEventHeader()` makes a `FairEventHeader`:
+
+<Snippet file="fairroot/base/steer/FairRun.cxx" start="FairEventHeader* FairRun::GetEventHeader()" />
+
+### Give the event header as a unique_ptr
+
+19.0.0 deprecated [`SetEventHeader(FairEventHeader*)`](/api/FairRun/#SetEventHeader-2). Give the
+event header as a `std::unique_ptr`. The run owns it.
+
+```cpp title="Before"
+run.SetEventHeader(new PixelEventHeader());
+```
+
+After:
+
+<Snippet file="examples/MQ/pixelDetector/macros/run_dBinSource.C" start="FairRunAna run{};" end="run.SetEventHeader(" />
+
+### Compare time stamps by reference
+
+19.0.0 changed the comparison operator of [`FairTimeStamp`](/api/FairTimeStamp/). It takes a
+reference now, not a pointer, and it is not virtual any more.
+
+```cpp title="Before"
+virtual bool operator<(const FairTimeStamp* rValue) const
+```
+
+After:
+
+<Snippet file="fairroot/base/event/FairTimeStamp.h" start="bool operator<(const FairTimeStamp& rValue) const" />
+
+- If you compare two time stamps through pointers, compare the objects: `*a < *b`.
+- If a class derived from `FairTimeStamp` overrides the old operator, remove that override. The new
+  operator is not virtual, so a derived class cannot override it.
+
+### Run a single entry with RunSingleEntry()
+
+19.0.0 deprecated [`FairRunAna::Run(Long64_t entry)`](/api/FairRunAna/#Run-3). The changelog says
+that the meaning of `Run(int)` and `Run(long)` was unclear. Call
+[`RunSingleEntry()`](/api/FairRunAna/#RunSingleEntry). The event display does this:
+
+<Snippet file="fairroot/eventdisplay/FairEventManager.cxx" start="void FairEventManager::GotoEvent(Int_t event)" />
+
+### Give the simulation configuration as a unique_ptr
+
+Since 18.8.0, [`FairRunSim::SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig) takes a
+`std::unique_ptr<FairGenericVMCConfig>`. The run owns the configuration. Old code in the comments of
+the propagator example still has the raw pointer
+([runMC.C](/source/examples/advanced/propagator/macros/runMC.C/#L60-L60)):
+
+```cpp title="Before"
+run.SetSimulationConfig(new FairVMCConfig());
+```
+
+After:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="auto config = std::make_unique" end="run->SetSimulationConfig(std::move(config));" />
+
+### Do not delete the tree and folder names
+
+Since 18.8.0, [`FairRootManager::GetTreeName()`](/api/FairRootManager/#GetTreeName) and
+[`GetFolderName()`](/api/FairRootManager/#GetFolderName) return `const char*`. Do not `delete`
+the pointer.
+
+<Snippet file="fairroot/base/steer/FairRootManager.h" start="const static char* GetTreeName();" end="const static char* GetFolderName();" />
+
+When you set a name, or when the file `rootmanager.dat` gives one, the functions return the result
+of ROOT's `Form()`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L961)). `Form()` uses
+a circular buffer, so a later call can overwrite the string. To keep the name, copy it, for
+example into a `std::string`.
+
+### Include the Boost serialization support
+
+Since 18.8.0, `FairRoot::Base` does not depend on Boost.Serialization. The Boost serialization
+support for [`FairTimeStamp`](/api/FairTimeStamp/), [`FairHit`](/api/FairHit/) and
+[`FairMCPoint`](/api/FairMCPoint/) is in the target `FairRoot::BaseMQ`. To use it, include the
+support header of the class and link `FairRoot::BaseMQ`:
+
+<Snippet file="examples/MQ/serialization/data/MyHit.h" start='#include "FairHit.h"' end="FairHitBoostSerializationSupport.h" />
+
+<Snippet file="examples/MQ/serialization/CMakeLists.txt" start="target_link_libraries(${target} PUBLIC" end="^\)" />
+
+The header `FairBoostSerializationSupport.h` includes the support headers of all three classes.
+
+### Read the output folder without a suffix
+
+Since 18.8.1, the output folder has the name from `FairRootManager::GetFolderName()`, without the
+suffix `_0`. In the multithreaded mode of Geant4, the folders with the suffixes `_1` and `_2` are
+gone too. With the default names, the folder of a simulation is `cbmroot` now, not `cbmroot_0`. If your code
+or your macros get the folder by its name, remove the suffix.
+
+<Snippet file="fairroot/base/sink/FairRootFileSink.cxx" start="void FairRootFileSink::WriteFolder()" />
+
+### Return the status of the unpackers
+
+Since 18.8.1, [`FairRunOnline`](/api/FairRunOnline/) checks the return value of
+[`InitUnpackers()`](/api/FairSource/#InitUnpackers) and
+[`ReInitUnpackers()`](/api/FairSource/#ReInitUnpackers) of the source. If the value is `false`, the
+run writes a fatal log message:
+
+<Snippet file="fairroot/online/steer/FairRunOnline.cxx" start="if (!GetSource()->InitUnpackers())" />
+
+The fatal message stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does). Without a handler, `Init()` returns
+before the `Init()` of the tasks, and `Run()` does not check this. A failed `ReInitUnpackers()` ends
+the event loop ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L351-L354)).
+[What Init() does](/online/run-online/#what-init-does) lists the steps of `Init()`.
+
+[`FairOnlineSource`](/api/FairOnlineSource/#InitUnpackers) returns `false` when the `Init()` of
+one of its unpackers returns `false`. Make sure that the `Init()` and `ReInit()` of your unpackers
+return `kTRUE` when they succeed.
+
+18.8.1 also fixed [`SetContainerStatic()`](/api/FairRunOnline/#SetContainerStatic) of
+`FairRunOnline`. When it is on, the run does not initialize the parameter containers again when the
+run ID changes.
+
+### Do not write FairRootManager to a file
+
+In the development version, [`FairRootManager`](/api/FairRootManager/) has the class version 0, so
+ROOT generates no streamer for it:
+
+<Snippet file="fairroot/base/steer/FairRootManager.h" start="ClassDefOverride(FairRootManager, 0);" end="^};" />
+
+With the class version 0, ROOT does not store the object in a file. If your code writes a
+`FairRootManager` object to a file or reads one, remove that code.
+
+## Removed classes and headers
+
+### BaseMQ headers
+
+FairRoot 19.0.0 removed these headers of the BaseMQ library. FairRoot has no replacement for them:
+
+- `basemq/baseMQtools/baseMQtools.h`
+- `basemq/policies/Sampler/FairMQFileSource.h`
+- `basemq/policies/Sampler/FairSourceMQInterface.h`
+- `basemq/policies/Sampler/SimpleTreeReader.h`
+- `basemq/policies/Serialization/BinaryBaseClassSerializer.h`
+- `basemq/policies/Serialization/IOPolicy.h`
+- `basemq/policies/Storage/BinaryOutFileManager.h`
+- `basemq/policies/Storage/BoostDataSaver.h`
+- `basemq/policies/Storage/RootOutFileManager.h`
+- `basemq/policies/Storage/TriviallyCopyableDataSaver.h`
+
+19.0.0 moved four headers to Tutorial 3, the example that uses them, and renamed the classes. If you
+need one of them, copy the code into your project:
+
+| Old header | New file | New class |
+| --- | --- | --- |
+| `basemq/devices/FairMQProcessor.h` | [`examples/advanced/Tutorial3/MQ/processor.cxx`](/source/examples/advanced/Tutorial3/MQ/processor.cxx/) | `Processor` |
+| `basemq/devices/FairMQSampler.h` | [`examples/advanced/Tutorial3/MQ/sampler.cxx`](/source/examples/advanced/Tutorial3/MQ/sampler.cxx/) | `Sampler` |
+| `basemq/tasks/FairMQProcessorTask.h` | [`examples/advanced/Tutorial3/MQ/processorTask/ProcessorTask.h`](/source/examples/advanced/Tutorial3/MQ/processorTask/ProcessorTask.h/) | `ProcessorTask` |
+| `basemq/tasks/FairMQSamplerTask.h` | [`examples/advanced/Tutorial3/MQ/samplerTask/SamplerTask.h`](/source/examples/advanced/Tutorial3/MQ/samplerTask/SamplerTask.h/) | `SamplerTask` |
+
+`FairRoot::BaseMQ` is now a library with headers only: the Boost serialization support, the
+serializers `BoostSerializer.h` and `RootSerializer.h`, and the devices `FairMQLmdSampler.h` and
+`FairMQUnpacker.h` ([fairroot/basemq/CMakeLists.txt](/repo/fairroot/basemq/CMakeLists.txt)).
+
+### Other removed classes and functions
+
+| Removed | Release | What to do |
+| --- | --- | --- |
+| `FairModule::svList` | 19.0.0 | Remove the use. It was never meant as a public API. |
+| `FairRunOnline::InitContainers()` | 18.8.1 | Remove the call. FairRoot did not use the function. |
+
+## Build options
+
+These options control the build of FairRoot itself. Set them with `-D` when you configure FairRoot,
+for example `-DBUILD_MBS=ON`.
+
+| Option | Default | Change | Release |
+| --- | --- | --- | --- |
+| `BUILD_TESTING` | `ON` | Replaces `BUILD_UNITTESTS`, which was in conflict with the standard option of the [CTest module](https://cmake.org/cmake/help/latest/module/CTest.html) | 19.0.0 |
+| `BUILD_MBS` | `OFF` | Off by default. It builds the deprecated MbsAPI and the MBS sources. | 19.0.0 |
+| `BUILD_PROOF_SUPPORT` | `OFF` | Builds the deprecated PROOF classes. Not possible with ROOT 6.32 or later. | 19.0.0 |
+| `BUILD_EVENT_BUILDER` | `OFF` | Builds the deprecated `FairEventBuilder` and `FairEventBuilderManager` | 19.0.0 |
+| `BUILD_BASEMQ` | `ON` | New. It builds `FairRoot::BaseMQ`, `FairRoot::FairMQ` and `FairRoot::ParMQ`, and requires FairMQ 1.4.0 or later and Boost. | 18.8.0 |
+| `ENABLE_GEANT3_TESTING` | `OFF` | The tests with Geant3 are off by default, because they can fail by chance. Set `ON` to run them. | 18.8.0 |
+| `USE_PATH_INFO` | Removed | Do not use it. The changelog calls it an anti-pattern. | 18.8.0 |
+
+The options are in the top-level [`CMakeLists.txt`](/repo/CMakeLists.txt#L121-L131). `BUILD_TESTING`
+comes from `include(CTest)`. FairRoot adds its tests only when the option is on:
+
+<Snippet file="CMakeLists.txt" start="/^if\(BUILD_TESTING\)/" end="endif()" />
+
+If you do not need FairMQ, set `-DBUILD_BASEMQ=OFF`. With the option on, CMake stops when it does not
+find FairMQ 1.4.0 or Boost 1.67 ([CMakeLists.txt](/repo/CMakeLists.txt#L202-L240)).
+
+## Prepare for later releases
+
+The code and the changelog announce these changes:
+
+- FairRoot 20 is to remove the APIs whose comment says "will be removed in v20".
+- The MbsAPI is to go away in the next major release.
+- The comment of the protected member [`FairRunSim::fGen`](/api/FairRunSim/#fGen) plans its removal
+  in 19.2.
+- The changelog of 18.8.0 plans new library file names in 19.2, in the style `fairroot-trackbase`.
+  If you link the `FairRoot::` targets, this change does not affect you.
+
+Replace the deprecated calls now. The [Deprecated APIs](/reference/deprecations/) page gives the
+replacement for each one.
+
+## Related pages
+
+- [Release notes](/project/release-notes/): all changes of each release.
+- [Deprecated APIs](/reference/deprecations/): the APIs that a later release removes.
+- [Use FairRoot in a CMake project](/start/cmake/): the CMake setup of a project.
+- [CMake reference](/reference/cmake/): the CMake functions and macros of FairRoot.

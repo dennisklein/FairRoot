@@ -1,0 +1,365 @@
+---
+title: 'Templates'
+description: 'The templates in the FairRoot source tree: two projects, two detectors, a task, a parameter container and time-based classes. What each one contains, its rename.sh, and the template tests.'
+sidebar:
+  order: 4
+code: [templates/NewDetector_root_containers/NewDetector.cxx, templates/NewDetector_stl_containers/NewDetectorPoint.cxx, templates/NewTask/NewTask.cxx, templates/NewParameterContainer/NewParameterContainer.cxx, templates/TimeBased/MySorterTask.cxx, templates/TimeBased/MyWriteoutBuffer.cxx]
+---
+
+import { Steps, FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+The folder `templates/` of the FairRoot source tree has starting points for a new project and for
+single classes. Each template has a script `rename.sh` that replaces the placeholder names with your
+names. FairRoot does not install the templates, so copy them from the source tree of your FairRoot
+version.
+
+## The templates
+
+The folder [`templates/`](/repo/templates/) has seven templates:
+
+| Template | Contents | Arguments of `rename.sh` |
+| --- | --- | --- |
+| [`project_root_containers`](/repo/templates/project_root_containers/) | A complete project: stack, MC track, a detector that stores its MC points in a `TClonesArray`, passive modules, field, Pythia generators, engine configuration and two macros | Project name, prefix, detector name |
+| [`project_stl_containers`](/repo/templates/project_stl_containers/) | The same project. The detector stores its MC points in a `std::vector`, and the stack keeps all tracks. | Project name, prefix, detector name |
+| [`NewDetector_root_containers`](/repo/templates/NewDetector_root_containers/) | A detector for an existing project: detector class, MC point, geometry classes, container factory and `CMakeLists.txt` | Detector name, project name, prefix |
+| [`NewDetector_stl_containers`](/repo/templates/NewDetector_stl_containers/) | The same detector with a `std::vector` | Detector name, project name, prefix |
+| [`NewTask`](/repo/templates/NewTask/) | A task with the main hooks of `FairTask` | Task name |
+| [`NewParameterContainer`](/repo/templates/NewParameterContainer/) | A parameter container derived from `FairParGenericSet` | Container name |
+| [`TimeBased`](/repo/templates/TimeBased/) | A ring sorter, a sorter task and a writeout buffer for one data class | Name of the data class |
+
+These rules apply to all scripts:
+
+- Copy the template folder first. Run the script inside the copy: it renames or copies the files in
+  the current folder and changes them.
+- The scripts of the detector, task and parameter container templates change all `.h` and `.cxx`
+  files below the current folder. Run them in a folder that holds only the new files.
+- The scripts know only Linux and macOS. On other systems, they print `Platform not supported` and
+  stop.
+- The scripts do not check the names. Check the result before you build.
+
+## Which template to start from
+
+| Goal | Template |
+| --- | --- |
+| Software for a new experiment | `project_root_containers`. See [Start a project from a template](/start/new-project/). |
+| A new project with MC points in `std::vector` | `project_stl_containers`. Its stack keeps all tracks and does not update the track IDs in the MC points. |
+| One more detector in a project from a project template | `NewDetector_root_containers`, plus the manual steps in [Detector templates](#detector-templates) |
+| A task that makes digis or hits | `NewTask`. See [Your first task](/start/first-task/). |
+| Parameters in the runtime database | `NewParameterContainer`, plus a container factory |
+| Data in time order instead of event order | `TimeBased` |
+
+`NewDetector_stl_containers` does not compile as it is. Fix it first, as the caution in
+[Detector templates](#detector-templates) shows.
+
+## Project templates
+
+The two project templates are complete CMake projects. They find an installed FairRoot through the
+environment variable `FAIRROOTPATH`, build up to five libraries and write `config.sh`.
+[Start a project from a template](/start/new-project/) shows the build, the macros and the first
+changes.
+
+`rename.sh` of a project template takes three arguments
+([rename.sh](/repo/templates/project_root_containers/rename.sh#L6-L29)):
+
+```sh
+./rename.sh Panda Pnd stt
+```
+
+- The project name in upper case (`PANDA`) becomes the name of the CMake project.
+- The prefix, with only the first letter in upper case (`Pnd`), replaces `MyProj` and `My`. This gives
+  for example the classes `PndStack` and `PndCave` and the library `PndData`.
+- The detector name in lower case (`stt`) becomes the folder of the detector. The prefix plus the
+  capitalized detector name (`PndStt`) becomes the detector class.
+
+Do not use a prefix or a detector name that starts with `My`. The script then changes these names
+twice, see [Copy and rename the template](/start/new-project/#copy-and-rename-the-template).
+
+The two project templates differ only in the stack (`MyProjStack.cxx`) and in the classes `NewDetector`
+and `NewDetectorPoint` with their LinkDef file. Apart from one comment, all other files are the same.
+
+## Detector templates
+
+The two detector templates add a detector to an existing project. `NewDetector_root_containers` has
+the classes of the folder `NewDetector` in `project_root_containers`; only the lines in `Initialize()`
+that get `NewDetectorGeoPar` differ. The MC point of `NewDetector_stl_containers` also has an event ID,
+which the project template does not have.
+
+<FileTree>
+- NewDetector_root_containers/
+  - CMakeLists.txt builds the library NewDetector
+  - NewDetector.h the detector: geometry, ProcessHits(), branch registration
+  - NewDetector.cxx
+  - NewDetectorPoint.h the MC point
+  - NewDetectorPoint.cxx
+  - NewDetectorGeo.h the geometry set for ASCII geometry files
+  - NewDetectorGeo.cxx
+  - NewDetectorGeoPar.h parameter container with the sensitive and passive geometry nodes
+  - NewDetectorGeoPar.cxx
+  - NewDetectorContFact.h container factory for NewDetectorGeoPar
+  - NewDetectorContFact.cxx
+  - NewDetectorLinkDef.h
+  - rename.sh
+</FileTree>
+
+<Steps>
+
+1. Copy the template into the top-level source folder of your project. The script uses the name of the
+   copy for the include folder `${CMAKE_SOURCE_DIR}/mvd` in `CMakeLists.txt`:
+
+   ```sh
+   cp -RP path/to/FairRoot/templates/NewDetector_root_containers mvd
+   ```
+
+2. Go into the copy:
+
+   ```sh
+   cd mvd
+   ```
+
+3. Run the script with the detector class name, the project name and the class prefix:
+
+   ```sh
+   ./rename.sh PndMvd Panda Pnd
+   ```
+
+</Steps>
+
+The script does these changes
+([rename.sh](/repo/templates/NewDetector_root_containers/rename.sh#L23-L61)):
+
+- It renames the files `NewDetector*` to `PndMvd*`.
+- In all `.h` and `.cxx` files and in `CMakeLists.txt`, it replaces `NewDetector` with `PndMvd` and
+  `NEWDETECTOR` with `PNDMVD`. So the detector ID becomes `kPndMvd`, and the branch becomes
+  `PndMvdPoint`.
+- In `CMakeLists.txt`, it replaces the include folder `tutorial/NewDetector` with the name of the
+  current folder, here `mvd`.
+- It replaces `FairDetectorList` and `FairStack` with `PndDetectorList` and `PndStack`. The template
+  code does not contain these names, so this step changes nothing.
+- It puts the project name into two variables, but it does not use them. So the second argument has
+  no effect.
+
+At the end, the script prints three hints. Do these steps and some more by hand:
+
+<Steps>
+
+1. In `PndMvd.cxx`, replace `MyProjDetectorList.h`, `MyProjStack.h` and `MyProjStack` with the names of
+   your project ([NewDetector.cxx](/source/templates/NewDetector_root_containers/NewDetector.cxx/#L18-L19)).
+   For example, use `PndDetectorList.h`, `PndStack.h` and `PndStack`.
+
+2. Add `kPndMvd` to the enum `DetectorId`, before `kSTOPHERE`.
+
+3. In `CMakeLists.txt`, add the folder of the detector list and the stack to `INCLUDE_DIRECTORIES`.
+
+4. In `CMakeLists.txt`, replace the dependency `Base` with the dependencies that the project template
+   uses for its detector. The snippet below shows them.
+
+5. Add the folder to the top-level `CMakeLists.txt` with `add_subdirectory(mvd)`.
+
+6. Give the detector its own volumes in `ConstructGeometry()` and its own rule in `IsSensitive()`.
+
+7. Add the detector to the run in `run_sim.C` with `AddModule()`.
+
+</Steps>
+
+<Snippet file="templates/project_root_containers/NewDetector/CMakeLists.txt" start="Set(DEPENDENCIES" end="GENERATE_LIBRARY()" title="project_root_containers/NewDetector/CMakeLists.txt" />
+
+Use the data library of your project instead of `MyProjData`, for example `PndData`.
+
+:::caution[Volumes and sensitive volumes]
+The detector template makes the same volumes at the same places as the detector of the project
+template: `Det1`, `Pass1`, `Det2` and `Det3`. Two copies of this code overlap. Also,
+`DefineSensitiveVolumes()` checks all volumes of the geometry, not only the volumes of this detector
+([NewDetector.cxx](/source/templates/NewDetector_root_containers/NewDetector.cxx/#L243-L262)). The volume
+list of FairRoot accepts each volume name only one time
+([FairVolumeList.cxx](/source/fairroot/base/sim/FairVolumeList.cxx/#L33-L46)). So the second detector
+gets none of the volumes `Det1`, `Det2` and `Det3`, and it logs `already defined` errors.
+
+One detector alone also logs these errors, because its `Initialize()` adds the sensitive volumes a
+second time. [Initialize()](/simulation/detectors/#initialize) of the detector page shows the fix.
+:::
+
+:::caution[NewDetector_stl_containers does not compile]
+`NewDetectorPoint.h` declares the constructor with seven parameters. `NewDetectorPoint.cxx` defines it
+with eight, because it adds `uint32_t evtId` as the second parameter
+([NewDetectorPoint.cxx](/source/templates/NewDetector_stl_containers/NewDetectorPoint.cxx/#L32-L41)).
+`NewDetector.cxx` calls the form with seven parameters. Make the declaration, the definition and the
+call agree before you build. No FairRoot test builds this template.
+:::
+
+For the detector class in detail, see [Write a detector](/simulation/detectors/).
+
+## NewTask
+
+`NewTask` derives from `FairTask` and has the hooks `SetParContainers()`, `Init()`, `ReInit()`,
+`Exec()` and `Finish()` ([NewTask.h](/source/templates/NewTask/NewTask.h/#L15-L53)). The script takes
+the class name:
+
+```sh
+./rename.sh MyDigitizer
+```
+
+The script renames `NewTask.h` and `NewTask.cxx`. It replaces `NewTask` and `NEWTASK` in all `.h` and
+`.cxx` files below the current folder ([rename.sh](/repo/templates/NewTask/rename.sh#L20-L51)).
+[Your first task](/start/first-task/) shows how to fill the hooks, build the class and run it.
+
+The commented-out `Register()` call in `Init()` uses the same text for the branch and the folder
+([NewTask.cxx](/source/templates/NewTask/NewTask.cxx/#L54-L59)). For equal names, `Register()` logs a
+`fatal` line ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L157-L161)).
+Change one of the two names, see [Register the output](/start/first-task/#register-the-output).
+
+:::caution[Exit code 1 on Linux]
+The scripts of `NewTask` and `NewParameterContainer` end with `Platform not supported` and exit code 1
+on Linux. Their last `case` block has no branch for Linux
+([rename.sh](/repo/templates/NewTask/rename.sh#L53-L61)). The renaming is complete at that point.
+Only the final hints do not show.
+:::
+
+## NewParameterContainer
+
+`NewParameterContainer` derives from `FairParGenericSet`
+([NewParameterContainer.h](/source/templates/NewParameterContainer/NewParameterContainer.h/#L15-L31)).
+Its constructor has the default name `NewParameterContainer`, the title
+`NewParameterContainer Parameters` and the context `TestDefaultContext`. `clear()`, `putParams()` and
+`getParams()` are empty.
+
+```sh
+./rename.sh PndSttDigiPar
+```
+
+The script renames the two files and replaces `NewParameterContainer` and `NEWPARAMETERCONTAINER`
+([rename.sh](/repo/templates/NewParameterContainer/rename.sh#L17-L43)). Its hints, which do not show
+on Linux, give the first three of these steps:
+
+<Steps>
+
+1. Add the container to a container factory.
+2. Give the container a clear title in its constructor.
+3. Add the class to `CMakeLists.txt` and to the LinkDef file.
+4. Write each parameter in [`putParams()`](/api/FairParGenericSet/#putParams) with `add()`. Read it in
+   [`getParams()`](/api/FairParGenericSet/#getParams) with `fill()`.
+
+</Steps>
+
+For step 1, take a container factory of your project, for example `NewDetectorContFact` of the project
+template. Add a `FairContainer` for your container to its constructor. Add a branch for the container
+name to its
+[`createContainer()`](/api/FairContFact/#createContainer)
+([NewDetectorContFact.cxx](/source/templates/project_root_containers/NewDetector/NewDetectorContFact.cxx/#L16-L43)).
+[The container factory](/simulation/detectors/#the-container-factory) shows this factory.
+[Container factories](/concepts/parameters/#container-factories) tells how the runtime database uses
+it. Tutorial 2 has a complete container with `putParams()` and `getParams()`
+([FairTutorialDet2DigiPar.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx/#L44-L102)).
+
+## TimeBased
+
+<FileTree>
+- TimeBased/
+  - MyRingSorter.h derives from FairRingSorter; CreateElement() copies one data object
+  - MyRingSorter.cxx
+  - MySorterTask.h derives from FairRingSorterTask; writes the sorted data to the output branch
+  - MySorterTask.cxx
+  - MyWriteoutBuffer.h derives from FairWriteoutBuffer; keeps data while they are active
+  - MyWriteoutBuffer.cxx
+  - rename.sh
+</FileTree>
+
+The template has no data class. All three classes include `MyDataClass.h`, which you write. The code
+uses these parts of the data class:
+
+| Part of the data class | Used by |
+| --- | --- |
+| Base class `FairTimeStamp` | All three classes cast `FairTimeStamp*` to the data class. |
+| Copy constructor | [`CreateElement()`](/api/FairRingSorter/#CreateElement) and both `AddNewDataToTClonesArray()` functions |
+| `operator<` | The `std::map` in the writeout buffer, which finds older data of the same object |
+| `operator<<` for `std::ostream` | The verbose output |
+| `GetCharge()` and `AddCharge()` | `Modify()` of the writeout buffer |
+
+The script takes the name of the data class:
+
+```sh
+./rename.sh CbmTrdDigi
+```
+
+The script copies each file `My*.cxx` and `My*.h` of the current folder to a new file, for example
+`CbmTrdDigiRingSorter.h` ([rename.sh](/repo/templates/TimeBased/rename.sh#L38-L55)). In the copies, it
+replaces `MyDataClass` with `CbmTrdDigi`, then `My` and `MY`. The original files stay. Move the new
+files into your source folder. Add them to `CMakeLists.txt` and to the LinkDef file.
+
+The constructor of `MySorterTask` takes the number of cells, the width of a cell, the input branch,
+the output branch and the folder ([MySorterTask.h](/source/templates/TimeBased/MySorterTask.h/#L29-L34)).
+
+Tutorial 3 has the same three classes for its digis. Its digitization task makes the writeout buffer
+in `Init()` and gives each digi to the buffer in `Exec()`. Its macro adds the sorter task after the
+digitization task. [Time-based simulation and reconstruction](/reconstruction/time-based/) shows this
+code and explains the method. See also [Tutorial 3](/examples/tutorial3/).
+
+:::caution[The buffer never calls Modify() of the template]
+`FairWriteoutBuffer` calls [`Modify()`](/api/FairWriteoutBuffer/#Modify) with
+`std::pair<double, FairTimeStamp*>` arguments
+([FairWriteoutBuffer.h](/source/fairroot/base/steer/FairWriteoutBuffer.h/#L109-L118)). The template
+declares `Modify()` with `std::pair<double, MyDataClass*>`
+([MyWriteoutBuffer.h](/source/templates/TimeBased/MyWriteoutBuffer.h/#L32-L33)). This is a second
+function, not an override. Use the signature of the base class. Cast to your data class inside the
+function.
+:::
+
+## How FairRoot tests the templates
+
+`templates/CMakeLists.txt` adds four CTest tests, two for each project template:
+
+<Snippet file="templates/CMakeLists.txt" start="foreach(container_type IN ITEMS root stl)" end="endforeach()" title="templates/CMakeLists.txt" />
+
+FairRoot adds the folder `templates` to each build, without an option
+([CMakeLists.txt](/repo/CMakeLists.txt#L289)). The tests run `test_project.sh`, which CMake makes from
+`test_project.sh.in`:
+
+<Snippet file="templates/test_project.sh.in" start='cd "$MYTMPDIR"' end='echo "Test successful."' lang="sh" title="templates/test_project.sh.in" />
+
+- The script copies the template into a temporary folder and runs `./rename.sh TestProj Tst det`.
+- It sets `SIMPATH` to the value of the FairRoot build, and `FAIRROOTPATH` to the install prefix of
+  FairRoot.
+- It configures the project with the C++ standard of the FairRoot build. If FairRoot has a
+  `CMAKE_OSX_SYSROOT`, the script passes it, too.
+- With `--double-configure`, it runs the configuration a second time in the same build folder.
+- It builds the project and prints `Test successful.`, the pass expression of the test. `set -e` stops
+  the script at the first command that fails
+  ([test_project.sh.in](/repo/templates/test_project.sh.in#L3)).
+
+The tests use the installed FairRoot. So install FairRoot before you run them. The CI script also
+builds the target `install` before the tests
+([FairRoot_build_test.cmake](/repo/FairRoot_build_test.cmake#L54-L56)).
+
+```sh
+cmake --build build --target install
+cd build
+ctest -R project_
+```
+
+To see each command of the script, set `DEBUG=1`
+([test_project.sh.in](/repo/templates/test_project.sh.in#L4)):
+
+```sh
+DEBUG=1 ctest -R project_root_containers -V
+```
+
+The tests have limits:
+
+- They cover only the two project templates. No test builds the detector, task, parameter container or
+  time-based templates.
+- They configure and build the projects, but they do not run `run_sim.C` or `eventDisplay.C`.
+- They build the generators folder only if the Pythia targets exist.
+
+[Tests](/tools/testing/) describes all tests of FairRoot.
+
+## Related pages
+
+- [Start a project from a template](/start/new-project/): copy, rename, build and run a project
+  template.
+- [Your first task](/start/first-task/): fill the `NewTask` template and run it.
+- [Write a detector](/simulation/detectors/): the detector class in detail.
+- [Parameters and the runtime database](/concepts/parameters/): parameter containers and container
+  factories.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): the writeout buffer and
+  the ring sorter.
+- [Tests](/tools/testing/): all tests of FairRoot and the CI.

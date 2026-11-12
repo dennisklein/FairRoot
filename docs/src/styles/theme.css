@@ -1,0 +1,694 @@
+/*
+ * FairRoot theme for Starlight. It shares the tokens of the FairMQ site.
+ * Tokens for the light and dark theme, the type, and the styles that all pages share.
+ * Starlight sets data-theme="dark" or data-theme="light" on <html>. Dark is the base.
+ */
+
+:root {
+  --fr-paper: #15171c;
+  --fr-paper-2: #1b1e24;
+  --fr-paper-3: #23272f;
+  --fr-rule: #2f343e;
+  --fr-rule-strong: #444a56;
+  --fr-ink: #eceef2;
+  --fr-ink-2: #b8bec9;
+  --fr-ink-3: #9198a5;
+  --fr-saffron: #fabe5d;
+  --fr-saffron-tint: #3a3121;
+  --fr-accent-ink: #fabe5d;
+  --fr-bar: #fabe5d;
+  --fr-on-saffron: #1a1a1a;
+  --fr-link: #7ab8ec;
+  --fr-link-tint: #16293b;
+  --fr-teal: #4cc3a5;
+  --fr-ruby: #f07aa8;
+  --fr-ruby-tint: #3a1d2a;
+  --fr-sky: #5cc0dd;
+  --fr-sky-tint: #15303a;
+  --fr-shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 14px 36px -16px rgb(0 0 0 / 0.75);
+  --fr-scrim: rgb(0 0 0 / 0.55);
+
+  /* Code, terminal and explainer stage are dark in both themes. */
+  --fr-code-bg: #0f1115;
+  --fr-code-rule: #2a2f38;
+  --fr-code-ink: #e6e8ec;
+  --fr-code-dim: #9aa1ad;
+  --fr-c-kw: #fabe5d;
+  --fr-c-type: #8cc8ef;
+  --fr-c-fn: #ffffff;
+  --fr-c-str: #a8d99b;
+  --fr-c-num: #f4a597;
+  --fr-c-com: #8d96a5;
+  --fr-c-pre: #e5b3d3;
+  --fr-c-op: #c3c8d1;
+  --fr-stage: #111318;
+  --fr-stage-2: #1a1d24;
+  --fr-stage-line: #4a515d;
+  --fr-stage-cell: #262b34;
+  --fr-stage-ink: #eceef2;
+  --fr-stage-dim: #9aa1ad;
+  --fr-stage-rule: #2a2e37;
+  --fr-sky-bright: #62c6e6;
+  --fr-mint: #5fd0ac;
+
+  --fr-font-body: 'Archivo Variable', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --fr-font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Starlight */
+  --sl-font: var(--fr-font-body);
+  --sl-font-mono: var(--fr-font-mono);
+  --sl-color-white: var(--fr-ink);
+  --sl-color-gray-1: #dde1e7;
+  --sl-color-gray-2: var(--fr-ink-2);
+  --sl-color-gray-3: var(--fr-ink-3);
+  --sl-color-gray-4: #6b7280;
+  --sl-color-gray-5: var(--fr-rule-strong);
+  --sl-color-gray-6: var(--fr-paper-2);
+  --sl-color-gray-7: var(--fr-paper-2);
+  --sl-color-black: var(--fr-paper);
+  --sl-color-accent-low: var(--fr-link-tint);
+  --sl-color-accent: #3d8fd6;
+  --sl-color-accent-high: var(--fr-link);
+  --sl-color-text: var(--fr-ink);
+  --sl-color-text-accent: var(--fr-link);
+  --sl-color-text-invert: var(--fr-paper);
+  --sl-color-bg: var(--fr-paper);
+  --sl-color-bg-nav: var(--fr-paper);
+  --sl-color-bg-sidebar: var(--fr-paper);
+  --sl-color-bg-inline-code: var(--fr-paper-3);
+  --sl-color-bg-accent: var(--fr-link);
+  --sl-color-hairline-light: var(--fr-rule);
+  --sl-color-hairline: var(--fr-rule);
+  --sl-color-hairline-shade: var(--fr-rule);
+  --sl-color-backdrop-overlay: var(--fr-scrim);
+  --sl-text-body: 1.0625rem;
+  --sl-text-code: 0.86rem;
+  --sl-text-code-sm: 0.86em;
+  --sl-line-height: 1.65;
+  --sl-line-height-headings: 1.15;
+  --sl-content-width: 46rem;
+  --sl-sidebar-width: 17.5rem;
+  --sl-nav-height: 3.5rem;
+
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  --fr-paper: #ffffff;
+  --fr-paper-2: #f5f6f8;
+  --fr-paper-3: #eceef2;
+  --fr-rule: #dcdfe5;
+  --fr-rule-strong: #c3c8d1;
+  --fr-ink: #1a1a1a;
+  --fr-ink-2: #464c57;
+  --fr-ink-3: #646b78;
+  --fr-saffron-tint: #fdf0d3;
+  --fr-accent-ink: #8a5a00;
+  --fr-bar: #b97800;
+  --fr-link: #005ea8;
+  --fr-link-tint: #e5eff8;
+  --fr-teal: #00775f;
+  --fr-ruby: #b10057;
+  --fr-ruby-tint: #fbe7ef;
+  --fr-sky: #0e8bae;
+  --fr-sky-tint: #e3f3f8;
+  --fr-shadow: 0 1px 2px rgb(20 24 33 / 0.06), 0 12px 32px -16px rgb(20 24 33 / 0.24);
+  --fr-scrim: rgb(21 23 28 / 0.36);
+  --fr-code-bg: #22262d;
+  --fr-code-rule: #353a44;
+
+  --sl-color-gray-1: #2b2f36;
+  --sl-color-gray-4: #8b919c;
+  --sl-color-gray-6: var(--fr-paper-3);
+  --sl-color-gray-7: var(--fr-paper-2);
+  --sl-color-accent: #005ea8;
+  --sl-color-accent-high: #004a85;
+  --sl-color-text-invert: #ffffff;
+
+  color-scheme: light;
+}
+
+@media (min-width: 50em) {
+  :root {
+    --sl-nav-height: 3.75rem;
+    --sl-text-h1: 2.625rem;
+    --sl-text-h2: 1.75rem;
+    --sl-text-h3: 1.3125rem;
+    --sl-text-h4: 1.125rem;
+  }
+}
+
+/* ---------- Base ---------- */
+
+body {
+  font-stretch: 100%;
+}
+
+/* No ligatures: code must show the characters that are in the file. The font shorthand
+   resets font-variant-ligatures, so the rule must be important. */
+*,
+*::before,
+*::after {
+  font-variant-ligatures: none !important;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--fr-font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--fr-link);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--fr-saffron) 45%, transparent);
+}
+
+.fr-label {
+  font: 600 0.75rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+  margin: 0;
+}
+
+/* Eyebrow above the page title: label, then a short saffron bar. */
+.fr-eyebrow {
+  font: 600 0.75rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+  margin: 1.25rem 0 0;
+}
+.fr-eyebrow::after {
+  content: '';
+  display: block;
+  width: 1.75rem;
+  height: 3px;
+  background: var(--fr-saffron);
+  margin: 0.6rem 0 0;
+}
+
+/* ---------- Content ---------- */
+
+.sl-markdown-content {
+  color: var(--fr-ink);
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6):not(:where(.not-content *)) {
+  color: var(--fr-ink);
+  text-wrap: balance;
+}
+.sl-markdown-content h2:not(:where(.not-content *)) {
+  font-weight: 750;
+  font-stretch: 108%;
+  letter-spacing: -0.012em;
+  margin-top: 2.25em;
+}
+.sl-markdown-content h3:not(:where(.not-content *)) {
+  font-weight: 700;
+  font-stretch: 104%;
+  margin-top: 1.75em;
+}
+.sl-markdown-content h4:not(:where(.not-content *)) {
+  font-weight: 650;
+}
+
+/* The first paragraph of a page is its lead. */
+.sl-markdown-content > p:first-child {
+  font-size: 1.1875rem;
+  line-height: 1.55;
+  color: var(--fr-ink-2);
+  max-width: 62ch;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--fr-link);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.sl-markdown-content a:hover:not(:where(.not-content *)) {
+  color: var(--fr-ink);
+}
+
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)),
+.fr-code-inline {
+  font-size: 0.86em;
+  background: var(--fr-paper-3);
+  border: 1px solid var(--fr-rule);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+  overflow-wrap: anywhere;
+}
+/* Short inline code does not break at a hyphen (scripts/nowrap-code.mjs). */
+.sl-markdown-content code.nw {
+  white-space: nowrap;
+}
+.sl-markdown-content :is(h1, h2, h3, h4, h5, h6) code {
+  font-size: 0.9em;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+
+/* Square bullets. */
+.sl-markdown-content ul:not(:where(.not-content *)) {
+  list-style: none;
+  padding-inline-start: 1.25rem;
+}
+.sl-markdown-content ul:not(:where(.not-content *)) > li {
+  position: relative;
+}
+.sl-markdown-content ul:not(:where(.not-content *)) > li::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -1.15rem;
+  top: 0.68em;
+  width: 6px;
+  height: 6px;
+  background: var(--fr-saffron);
+  outline: 1px solid var(--fr-bar);
+  outline-offset: -1px;
+}
+.sl-markdown-content ol:not(:where(.not-content *)) {
+  padding-inline-start: 1.5rem;
+}
+.sl-markdown-content ol:not(:where(.not-content *)) > li::marker {
+  font: 600 0.85em var(--fr-font-mono);
+  color: var(--fr-ink-3);
+}
+
+/* Tables */
+.sl-markdown-content table:not(:where(.not-content *)) {
+  font-size: 0.9375rem;
+  border-collapse: collapse;
+  width: 100%;
+}
+.sl-markdown-content th:not(:where(.not-content *)) {
+  text-align: start;
+  font: 600 0.7rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+  border-bottom: 1px solid var(--fr-rule-strong);
+  white-space: nowrap;
+}
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  padding: 0.55rem 0.75rem;
+  border-bottom-color: var(--fr-rule);
+  vertical-align: top;
+}
+.sl-markdown-content td:not(:where(.not-content *)) {
+  border-bottom: 1px solid var(--fr-rule);
+}
+.sl-markdown-content td:first-child code {
+  white-space: nowrap;
+}
+
+.sl-markdown-content hr:not(:where(.not-content *)) {
+  border: 0;
+  border-top: 1px solid var(--fr-rule);
+}
+
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 3px solid var(--fr-saffron);
+  color: var(--fr-ink-2);
+}
+
+.sl-markdown-content kbd,
+.fr-kbd {
+  font: 600 0.8em/1 var(--fr-font-mono);
+  border: 1px solid var(--fr-rule-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0.15em 0.4em;
+  background: var(--fr-paper);
+  color: var(--fr-ink);
+}
+
+/* Asides: square mark, quiet frame. */
+.starlight-aside {
+  border: 1px solid var(--fr-rule);
+  border-inline-start: 3px solid var(--sl-color-asides-border);
+  background: var(--fr-paper-2);
+  border-radius: 4px;
+  padding: 0.85rem 1rem;
+  font-size: 0.96875rem;
+}
+.starlight-aside--note {
+  --sl-color-asides-border: var(--fr-sky);
+  --sl-color-asides-text-accent: var(--fr-ink-2);
+}
+.starlight-aside--tip {
+  --sl-color-asides-border: var(--fr-teal);
+  --sl-color-asides-text-accent: var(--fr-ink-2);
+}
+.starlight-aside--caution {
+  --sl-color-asides-border: var(--fr-saffron);
+  --sl-color-asides-text-accent: var(--fr-ink-2);
+}
+.starlight-aside--danger {
+  --sl-color-asides-border: var(--fr-ruby);
+  --sl-color-asides-text-accent: var(--fr-ink-2);
+}
+.starlight-aside__title {
+  font: 600 0.7rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  gap: 0.5rem;
+}
+.starlight-aside__icon {
+  display: none;
+}
+.starlight-aside__title::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: var(--sl-color-asides-border);
+  flex: none;
+}
+
+/* Starlight badges */
+.sl-badge {
+  font: 600 0.65rem/1 var(--fr-font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 3px;
+}
+
+/* Our badge, for kinds, versions and states. */
+.fr-badge {
+  display: inline-flex;
+  align-items: center;
+  font: 600 0.66rem/1 var(--fr-font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--fr-rule-strong);
+  color: var(--fr-ink-2);
+  border-radius: 3px;
+  padding: 0.3em 0.45em;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.fr-badge.since {
+  border-color: var(--fr-teal);
+  color: var(--fr-teal);
+}
+.fr-badge.deprecated {
+  border-color: var(--fr-ruby);
+  color: var(--fr-ruby);
+}
+.fr-badge.mark {
+  border-color: var(--fr-bar);
+  color: var(--fr-accent-ink);
+}
+a.fr-badge:hover {
+  border-color: var(--fr-ink-3);
+  color: var(--fr-ink);
+}
+
+/* Starlight tabs: saffron mark under the active tab. */
+starlight-tabs .tab > [role='tab'] {
+  font-weight: 500;
+  color: var(--fr-ink-3);
+  border-bottom: 2px solid transparent;
+}
+starlight-tabs .tab [role='tab'][aria-selected='true'] {
+  color: var(--fr-ink);
+  font-weight: 600;
+  border-bottom-color: var(--fr-saffron);
+}
+starlight-tabs .tablist-wrapper {
+  border-bottom: 1px solid var(--fr-rule);
+}
+
+/* Steps */
+.sl-steps > li::before {
+  font-family: var(--fr-font-mono);
+  border-radius: 3px;
+  background: var(--fr-paper-2);
+  box-shadow: inset 0 0 0 1px var(--fr-rule-strong);
+  color: var(--fr-ink);
+}
+.sl-steps > li::after {
+  background: var(--fr-rule);
+}
+
+/* Cards */
+.card {
+  border-radius: 4px;
+  border-color: var(--fr-rule);
+  background: var(--fr-paper);
+}
+.sl-link-card {
+  border-radius: 4px;
+  border-color: var(--fr-rule);
+  box-shadow: none;
+}
+.sl-link-card:hover {
+  border-color: var(--fr-ink-3);
+  background: var(--fr-paper-2);
+}
+
+/* ---------- Expressive Code ---------- */
+
+.expressive-code {
+  margin-block: 1rem;
+}
+.expressive-code .frame .header {
+  font-family: var(--fr-font-mono);
+}
+.expressive-code .frame.is-terminal .header .title,
+.expressive-code .frame .header .title {
+  font-size: 0.75rem;
+  /* Long file paths break on phones instead of making the page scroll sideways. */
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.expressive-code .copy button {
+  border-radius: 3px;
+}
+
+/* ---------- Sidebar ---------- */
+
+#starlight__sidebar .sidebar-content {
+  padding-top: 0.75rem;
+}
+#starlight__sidebar summary .large {
+  font: 600 0.7rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+}
+#starlight__sidebar .top-level > li > a.large {
+  font-size: var(--sl-text-sm);
+  font-weight: 500;
+  color: var(--fr-ink-2);
+}
+#starlight__sidebar ul ul li {
+  border-inline-start: 0;
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+#starlight__sidebar a {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--fr-ink-2);
+  border-radius: 3px;
+  padding: 0.28em 0.5rem;
+  line-height: 1.35;
+}
+#starlight__sidebar a:hover,
+#starlight__sidebar a:focus-visible {
+  color: var(--fr-ink);
+  background: var(--fr-paper-2);
+}
+#starlight__sidebar a[aria-current='page'],
+#starlight__sidebar a[aria-current='page']:hover,
+#starlight__sidebar a[aria-current='page']:focus {
+  background: var(--fr-saffron-tint);
+  color: var(--fr-ink);
+  font-weight: 600;
+}
+#starlight__sidebar a[aria-current='page']::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--fr-saffron);
+  outline: 1px solid var(--fr-bar);
+  outline-offset: -1px;
+}
+/* Kind letters in the API tree: class, struct, enum, namespace. */
+#starlight__sidebar a[data-kind]::after {
+  content: attr(data-kind);
+  order: -1;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.15rem;
+  height: 1.15rem;
+  font: 600 0.62rem/1 var(--fr-font-mono);
+  color: var(--fr-ink-3);
+  border: 1px solid var(--fr-rule-strong);
+  border-radius: 2px;
+}
+#starlight__sidebar a[data-kind][aria-current='page']::before {
+  display: none;
+}
+#starlight__sidebar a[data-kind][aria-current='page']::after {
+  color: var(--fr-on-saffron);
+  background: var(--fr-saffron);
+  border-color: var(--fr-bar);
+}
+#starlight__sidebar a.fr-mono {
+  font-family: var(--fr-font-mono);
+  font-size: 0.8125rem;
+}
+
+/* ---------- Right column ---------- */
+
+.right-sidebar-panel h2 {
+  font: 600 0.7rem/1.2 var(--fr-font-body);
+  font-stretch: 88%;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fr-ink-3);
+}
+.right-sidebar-panel a {
+  color: var(--fr-ink-2);
+}
+.right-sidebar-panel a[aria-current='true'] {
+  color: var(--fr-ink);
+  font-weight: 600;
+}
+starlight-toc a[aria-current='true'],
+starlight-toc a[aria-current='true']:hover,
+starlight-toc a[aria-current='true']:focus {
+  color: var(--fr-ink);
+}
+
+/* ---------- Pagination ---------- */
+
+.pagination-links a {
+  border-radius: 4px;
+  border-color: var(--fr-rule);
+  box-shadow: none;
+  color: var(--fr-ink);
+}
+.pagination-links a:hover {
+  border-color: var(--fr-ink-3);
+}
+.pagination-links .link-title {
+  font-weight: 650;
+  font-size: 1rem;
+}
+
+/* ---------- Header ---------- */
+
+header.header {
+  border-bottom: 1px solid var(--fr-rule);
+  background: var(--fr-paper);
+}
+
+/* ---------- Search dialog ---------- */
+
+site-search dialog {
+  border-radius: 6px;
+  border: 1px solid var(--fr-rule-strong);
+  background: var(--fr-paper);
+  box-shadow: var(--fr-shadow);
+}
+#starlight__search {
+  --pagefind-ui-primary: var(--fr-link);
+  --pagefind-ui-text: var(--fr-ink);
+  --pagefind-ui-background: var(--fr-paper);
+  --pagefind-ui-border: var(--fr-rule-strong);
+  --pagefind-ui-tag: var(--fr-paper-3);
+  --pagefind-ui-font: var(--fr-font-body);
+}
+#starlight__search mark {
+  background: var(--fr-saffron-tint);
+  color: var(--fr-ink);
+  box-shadow: inset 0 -2px 0 var(--fr-saffron);
+}
+
+/* ---------- Print ---------- */
+
+@media print {
+  .fr-eyebrow::after {
+    background: #000;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+#starlight__sidebar a.fr-nested {
+  padding-inline-start: 1.6rem;
+  font-size: 0.78rem;
+}
+
+/* No rule between the title and the content. */
+.content-panel + .content-panel {
+  border-top: 0;
+}
+.content-panel:first-of-type:not(:only-of-type) {
+  padding-bottom: 0;
+}
+
+/* Source pages use the full width of the main column. */
+:root:has(.src-code) {
+  --sl-content-width: 76rem;
+}
+
+/* ---------- Home ---------- */
+
+html[data-has-hero] {
+  --sl-content-width: 74rem;
+}
+html[data-has-hero] .content-panel {
+  padding-top: 1rem;
+}
+
+/* Wide screens: Starlight lets the table of contents grow with the window, so a wide window
+   shows a large empty column at the right. Keep the table of contents narrow and center the
+   content in the space between the two sidebars. */
+@media (min-width: 72rem) {
+  .right-sidebar-container {
+    width: min(
+      max(var(--sl-sidebar-width), calc(var(--sl-sidebar-width) + (100% - var(--sl-content-width) - var(--sl-sidebar-width)) / 2)),
+      calc(var(--sl-sidebar-width) + 3rem)
+    );
+  }
+  [data-has-sidebar][data-has-toc] .main-pane {
+    --sl-content-margin-inline: auto;
+    width: calc(100% - min(
+      max(var(--sl-sidebar-width), calc(var(--sl-sidebar-width) + (100% - var(--sl-content-width) - var(--sl-sidebar-width)) / 2)),
+      calc(var(--sl-sidebar-width) + 3rem)
+    ));
+  }
+}
+@media (min-width: 110rem) {
+  :root { --sl-content-width: 52rem; }
+}

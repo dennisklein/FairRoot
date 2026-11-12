@@ -1,0 +1,1003 @@
+---
+// The calls that a simulation run makes on a detector, step by step: from AddModule() to FinishRun().
+// The detector is NewDetector of templates/project_root_containers/NewDetector (the detector of the page
+// "Write a detector"); its stack is MyProjStack of the same template.
+// Facts (current FairRoot code, paths relative to the repository):
+// - AddModule(): SetRunSim(this), ListOfModules->Add(Mod), Mod->SetModId(count++); count starts at 0
+//   (fairroot/base/steer/FairRunSim.cxx:127-133, FairRunSim.h:243, 260). The template macro adds NewDetector
+//   with run->AddModule(NewDet) (templates/project_root_containers/macro/run_sim.C:39-40). MyCave and MyPipe
+//   derive from FairModule (templates/project_root_containers/passive/MyCave.h:21, MyPipe.h:19).
+// - FairRunSim::Init() makes the MC application with ListOfModules (FairRunSim.cxx:172). Its constructor keeps
+//   the modules in list order in fListModules, and the active detectors in listActiveDetectors
+//   (fairroot/base/sim/FairMCApplication.cxx:108-123).
+// - Init() calls fApp->AddTask(fTask) (FairRunSim.cxx:188). AddTask() calls SetParTask() (FairMCApplication.cxx:1186):
+//   SetParTask() of the tasks if there are tasks, SetParContainers() of each module in fListModules, then
+//   fRTdb->initContainers(runId) (FairMCApplication.cxx:1202-1215).
+// - Init() then calls SetMCConfig() → fApp->InitMC() (FairRunSim.cxx:256, 311). InitMC() calls fMC->Init() and
+//   fMC->BuildPhysics() (FairMCApplication.cxx:267-268); in these calls the engine calls back ConstructGeometry()
+//   and InitGeometry(). InitGeometry() needs the state kInit (837-838): ConstructGeometry() sets it at its end
+//   (823), and InitMC() sets kPostInit at its end (284). So InitGeometry() comes after ConstructGeometry() and
+//   before the end of InitMC().
+// - ConstructGeometry(): for each module, InitParContainers(), then ConstructGeometry() (FairMCApplication.cxx:764-774).
+// - NewDetector::ConstructGeometry() makes the volume Det1 and calls AddSensitiveVolume(det1)
+//   (templates/project_root_containers/NewDetector/NewDetector.cxx:186-194). AddSensitiveVolume() adds a FairVolume
+//   with the volume name to the volume list, and RegisterSensitiveVolume() sets its module ID and module and puts
+//   it into fAllSensitiveVolumes (fairroot/base/sim/FairModule.cxx:217-223, 278-289). FairVolume::fMCid starts
+//   at -1 (fairroot/base/sim/FairVolume.h:63). For a ROOT or GDML file, ExpandNode() and ExpandNodeForGDML() call
+//   IsSensitive() of a detector (FairModule.cxx:461-465, 567-570). CheckIfSensitive() is deprecated; the default
+//   IsSensitive() calls it, and its default returns kFALSE (FairModule.h:108-114, FairModule.cxx:531-539). An ASCII geometry uses the
+//   sensitive flag of the node, only in an active module (FairModule.cxx:271-274).
+// - InitGeometry() → RegisterOutput() (FairMCApplication.cxx:874-879): for each active detector, Initialize(),
+//   then Register() (957-968). Then fVolMap gets a FairVolume for each entry of fAllSensitiveVolumes, with
+//   getMCid() as key (882-918; std::multimap<Int_t, FairVolume*>, FairMCApplication.h:295). A volume from an
+//   ASCII file goes in itself; for a volume without a geo node, like Det1, InitGeometry() puts in a new FairVolume
+//   with the same name, module, module ID and MC id, and the copy number 1 (one for each daughter node, if the
+//   volume has daughters). Det1 has the copy number 1 (NewDetector.cxx:192), so Stepping() finds this FairVolume.
+//   The diagram draws one FairVolume: the two have the same fModId and fMCid.
+// - FairDetector::Initialize(): for each sensitive volume of the module (getModId() == GetModId()),
+//   setMCid(VolId(name)) (fairroot/base/sim/FairDetector.cxx:103-117).
+// - NewDetector::Register(): Register("NewDetectorPoint", "NewDetector", fNewDetectorPointCollection, kTRUE)
+//   (NewDetector.cxx:150-151; MT: RegisterAny, 152-153). FairRootManager::Register() gives the object to the sink
+//   (fairroot/base/steer/FairRootManager.cxx:164-173), and the sink puts it into the output folder
+//   (fairroot/base/sink/FairRootFileSink.cxx:214-226). At the end of InitMC(), InitFinalizer() calls
+//   fRootManager->WriteFolder() (FairMCApplication.cxx:283, 939); the sink makes the tree from the folder
+//   (FairRootFileSink.cxx:238-249). The default tree name is cbmsim (FairRootManager.cxx:943).
+// - Run(n) → fApp->RunMC(n) → fMC->ProcessRun(n) (FairRunSim.cxx:322-324, FairMCApplication.cxx:290-305).
+// - BeginEvent(): BeginEvent() of each active detector (FairMCApplication.cxx:384-392).
+// - Stepping(): id = CurrentVolID(copyNo), fVolMap.find(id), the FairVolume with the same copy number,
+//   GetDetector(), ProcessHits(disvol) (FairMCApplication.cxx:513-534). fVolMap holds only sensitive volumes.
+// - NewDetector::ProcessHits(): at the entrance it sets fELoss = 0 and keeps the position; it adds Edep() of each
+//   step; when the track exits, stops or disappears and fELoss > 0, it calls AddHit() with the current track
+//   number of the stack (NewDetector.cxx:93-132). AddHit() makes the point in the TClonesArray (226-237).
+// - FinishEvent() (FairMCApplication.cxx:645-671): fStack->FillTrackArray(), fStack->UpdateTrackIndex(
+//   &fActiveDetectors), the tasks (not shown), FinishEvent() of each active detector, fRootManager->Fill(),
+//   EndOfEvent() of each active detector, fStack->Reset().
+// - UpdateTrackIndex() calls GetCollection(0, 1, …) of each active detector until it gets no array, and sets
+//   the track ID of each point to the index of its MC track (templates/project_root_containers/MyProjData/
+//   MyProjStack.cxx:286-331; the same in examples/common/mcstack/FairStack.cxx:245-300). SelectTracks() keeps
+//   the primaries and the secondaries with at least fMinPoints (1) points (MyProjStack.cxx:53, 433-475).
+// - NewDetector::EndOfEvent() logs the number of points and clears the array (NewDetector.cxx:134-140).
+//   FairRoot never calls Reset() of a detector: FairDetector.h:73 declares it, and no code in fairroot/ calls it.
+// - Fill(): FairRootManager::Fill() → fSink->Fill() → fOutTree->Fill() (FairRootManager.cxx:331-335,
+//   FairRootFileSink.cxx:302-309).
+// - After ProcessRun(), RunMC() calls FinishRun() (FairMCApplication.cxx:304): FinishRun() of each active
+//   detector, FinishTask() of the tasks, then fRootManager->Write() (308-381), which writes the tree to the
+//   file (FairRootManager.cxx:346-356, FairRootFileSink.cxx:311-332).
+// Example values, not from the code: the module list MyCave, MyPipe, NewDetector with the module IDs 0, 1, 2
+// (run_sim.C also adds MyMagnet after MyCave, so there NewDetector gets the ID 3); the volume ID 4 of Det1;
+// Run(3); the track 7 of the stack and its index 5 in the MCTrack array. The values of the track agree with
+// run_sim.C: FairBoxGenerator(13, 5) makes 5 primary muons per event (run_sim.C:57), the stack numbers the
+// tracks in the order of PushTrack() (MyProjStack.cxx:144-148), so the primaries are the tracks 0 … 4, and
+// SelectTracks() always keeps the primaries. Track 7 is a secondary; the secondaries 5 and 6 have no points
+// and are not kept. The drawing of the geometry is not to scale (NewDetector also makes Pass1, Det2 and Det3).
+// Not shown: tasks; BeginPrimary(), PreTrack(), PostTrack(), FinishPrimary() (empty in FairDetector);
+// SetSpecialPhysicsCuts(), RegisterAlignmentMatrices(), ConstructOpGeometry(); the extra DefineSensitiveVolumes()
+// in NewDetector::Initialize(); multithreaded Geant4 (CloneModule(), Initialize() and Register() on each worker).
+import Explainer from './Explainer.astro';
+
+const steps = [
+  {
+    cap: 'The macro adds the modules to the run with AddModule(), in this order. AddModule() gives each module the next module ID: 0, 1, 2.',
+    code: 'run->AddModule(NewDet);',
+  },
+  {
+    cap: 'The macro calls Init(), and the run makes the MC application with the module list. The application calls SetParContainers() on each module, in list order, and then the runtime database fills the containers.',
+    code: 'module->SetParContainers();',
+    set: { call: 'SetParTask()', pa: 'SetParContainers()', da: 'SetParContainers()', note: 'then fRTdb->initContainers()' },
+  },
+  {
+    cap: 'Init() calls InitMC(), and the transport engine asks for the geometry. Each module gets InitParContainers(), which can read the filled containers, and then ConstructGeometry().',
+    code: 'Mod->ConstructGeometry();',
+    set: {
+      call: 'ConstructGeometry()',
+      pa: 'InitParContainers()',
+      pb: 'ConstructGeometry()',
+      da: 'InitParContainers()',
+      db: 'ConstructGeometry()',
+    },
+  },
+  {
+    cap: 'NewDetector builds the volume Det1 and calls AddSensitiveVolume(): Det1 gets a FairVolume in the list of sensitive volumes. With a ROOT or GDML file, IsSensitive() selects the sensitive volumes.',
+    code: 'AddSensitiveVolume(det1);',
+    set: { call: 'ConstructGeometry()', da: 'ConstructGeometry()' },
+  },
+  {
+    cap: 'The engine calls InitGeometry(): each active detector gets Initialize(), then Register(). FairDetector::Initialize() writes the volume ID of the engine into the FairVolume, and Register() registers the collection as a branch.',
+    code: 'detector->Register();',
+    set: { call: 'InitGeometry()', da: 'Initialize()', db: 'Register()', note: 'then fVolMap: fMCid → FairVolume', tr: 'then WriteFolder()' },
+  },
+  {
+    cap: 'The macro calls Run(), and the engine starts the first event. The application calls BeginEvent() on each active detector.',
+    code: 'detectorPtr->BeginEvent();',
+    set: { call: 'BeginEvent()', da: 'BeginEvent()', ev: 'event 1 of 3' },
+  },
+  {
+    cap: 'The engine calls Stepping() after each step, and Stepping() calls ProcessHits(vol) for each step in Det1. NewDetector adds up the energy loss and makes a point when the track leaves Det1.',
+    code: 'disdet->ProcessHits(disvol);',
+    set: { call: 'Stepping()', da: 'ProcessHits(vol)', note: 'via fVolMap.find(id)', ev: 'event 1 of 3' },
+  },
+  {
+    cap: 'At the end of the event, the stack stores the MC tracks and writes their new indices into the points. The detector gets FinishEvent(), the sink fills the tree, and EndOfEvent(), not Reset(), clears the collection.',
+    code: 'detectorPtr->EndOfEvent();',
+    set: {
+      call: 'FinishEvent()',
+      da: 'FinishEvent()',
+      db: 'EndOfEvent()',
+      note: 'first FillTrackArray(), UpdateTrackIndex()',
+      tr: 'Fill()',
+      ev: 'event 1 of 3',
+    },
+  },
+  {
+    cap: 'Events 2 and 3 go through the same calls. After the last event, the detector gets FinishRun(), and the sink writes the tree to the file.',
+    code: 'detectorPtr->FinishRun();',
+    set: { call: 'FinishRun()', da: 'FinishRun()', tr: 'Write() → file', ev: '3 events' },
+  },
+];
+
+// Two layouts with the same three panels (each 328 wide): side by side, or stacked on a narrow stage.
+type Pt = [number, number];
+type Layout = { k: 'd' | 'm'; w: number; h: number; run: Pt; geo: Pt; col: Pt };
+const D: Layout = { k: 'd', w: 692, h: 246, run: [12, 10], geo: [352, 10], col: [352, 140] };
+const M: Layout = { k: 'm', w: 340, h: 474, run: [6, 6], geo: [6, 242], col: [6, 372] };
+const W = 328;
+
+// The module list. y: the middle of the first line of the row. The hooks of a row are on two lines
+// at HX: slot pa/pb for the passive modules, da/db for the detector.
+const mods = [
+  { n: 0, name: 'MyCave', kind: 'FairModule', w: 58, y: 96, det: false },
+  { n: 1, name: 'MyPipe', kind: 'FairModule', w: 58, y: 134, det: false },
+  { n: 2, name: 'NewDetector', kind: 'FairDetector, active', w: 98, y: 172, det: true },
+];
+const HX = 166;
+
+// The track crosses the panel of the geometry from x = 12 to x = 316. t: the time (s) at which the
+// track reaches a step in step 7. The steps in Det1 (x 190 … 226) call ProcessHits().
+const ty = (x: number) => +(96 - (40 / 304) * (x - 12)).toFixed(2);
+const DET = { x: 190, w: 36, y: 14, h: 74 };
+const hits = [
+  { x: 52, t: 0.4 },
+  { x: 100, t: 0.65 },
+  { x: 148, t: 0.89 },
+  { x: 190, t: 1.1, s: true },
+  { x: 208, t: 1.7, s: true },
+  { x: 226, t: 2.3, s: true },
+  { x: 262, t: 2.67 },
+  { x: 306, t: 2.94 },
+];
+const cells = [0, 1, 2];
+---
+
+<Explainer title="The hooks of a detector, in order" meta="FairRunSim · 3 modules · 3 events" steps={steps}>
+  <div class="dl-wrap">
+    <svg
+      class="dl"
+      data-stage
+      role="img"
+      aria-label="The run FairRunSim with its modules MyCave, MyPipe and NewDetector and the hooks that the MC application calls on them, the geometry with the sensitive volume Det1 and a track, and the point collection of NewDetector with the output tree cbmsim."
+    >
+      {
+        [D, M].map((g) => (
+          <svg class={`lay lay-${g.k}`} viewBox={`0 0 ${g.w} ${g.h}`} width="100%" height="100%">
+            {/* the run, its module list and the calls of the MC application */}
+            <g transform={`translate(${g.run[0]} ${g.run[1]})`}>
+              <rect class="box" x="0" y="0" width={W} height="226" rx="4" />
+              <text class="ttl" x="12" y="27">
+                FairRunSim
+              </text>
+              <g class="pill p-init">
+                <rect x="201" y="13" width="58" height="22" rx="11" />
+                <text x="230" y="28" text-anchor="middle">
+                  Init()
+                </text>
+              </g>
+              <g class="pill p-run">
+                <rect x="265" y="13" width="51" height="22" rx="11" />
+                <text x="290.5" y="28" text-anchor="middle">
+                  Run()
+                </text>
+              </g>
+              <text class="sub lom" x="12" y="64.5">
+                ListOfModules
+              </text>
+              <g class="app">
+                <rect class="node" x="12" y="48" width="144" height="24" rx="3" />
+                <text class="nname" x="84" y="64.5" text-anchor="middle">
+                  FairMCApplication
+                </text>
+              </g>
+              <text class="call" x={HX} y="64.5" data-slot="call" />
+              <path class="edge" d="M24 72V172" pathLength="1" />
+              {mods.map((m) => (
+                <g class={`row m${m.n}`}>
+                  <path class="tick" d={`M24 ${m.y}H34`} />
+                  <g class="badge">
+                    <rect x="34" y={m.y - 8.5} width="17" height="17" rx="2" />
+                    <text x="42.5" y={m.y + 4} text-anchor="middle">
+                      {m.n}
+                    </text>
+                  </g>
+                  <rect class={m.det ? 'node det' : 'node'} x="57" y={m.y - 12} width={m.w} height="24" rx="3" />
+                  <rect class="hl" x="57" y={m.y - 12} width={m.w} height="24" rx="3" />
+                  <text class="nname" x={57 + m.w / 2} y={m.y + 4.5} text-anchor="middle">
+                    {m.name}
+                  </text>
+                  <text class="kind" x={HX} y={m.y + 4.5}>
+                    {m.kind}
+                  </text>
+                  <text class="hk a" x={HX} y={m.y + 4.5} data-slot={m.det ? 'da' : 'pa'} />
+                  <text class="hk b" x={HX} y={m.y + 20.5} data-slot={m.det ? 'db' : 'pb'} />
+                </g>
+              ))}
+              <text class="note" x="12" y="214" data-slot="note" />
+            </g>
+
+            {/* the geometry: the cave, the pipe, the volume Det1 of NewDetector and a track */}
+            <g transform={`translate(${g.geo[0]} ${g.geo[1]})`}>
+              <rect class="box" x="0" y="0" width={W} height="120" rx="4" />
+              <text class="sub g-none" x={W / 2} y="64" text-anchor="middle">
+                no volumes yet
+              </text>
+              <g class="g-cave">
+                <rect class="cave" x="6" y="6" width="316" height="108" rx="3" />
+                <text class="sub" x="14" y="22">
+                  cave
+                </text>
+              </g>
+              <g class="g-pipe">
+                <rect class="pipe" x="6" y="102" width="316" height="10" />
+                <path class="axis" d="M6 107H322" />
+                <text class="sub" x="316" y="97" text-anchor="end">
+                  MyPipe
+                </text>
+              </g>
+              <g class="g-det">
+                <rect class="vol" x={DET.x} y={DET.y} width={DET.w} height={DET.h} />
+                <rect class="sens" x={DET.x} y={DET.y} width={DET.w} height={DET.h} />
+                <text class="vname" x={DET.x - 8} y="20" text-anchor="end">
+                  Det1
+                </text>
+                <text class="senst" x={DET.x - 8} y="35" text-anchor="end">
+                  sensitive
+                </text>
+              </g>
+              <g class="g-fv">
+                <rect class="fvhl" x="230" y="7" width="86" height="46" rx="3" />
+                <text class="fvt" x="236" y="20">
+                  FairVolume
+                </text>
+                <text class="fvk" x="236" y="35">
+                  fModId 2
+                </text>
+                <text class="fvk" x="236" y="50">
+                  fMCid
+                </text>
+                <text class="fvk mc0" x="279" y="50">
+                  -1
+                </text>
+                <text class="fvk mc1" x="279" y="50">
+                  4
+                </text>
+              </g>
+              <g class="g-trk">
+                <text class="tlab" x="14" y="80">
+                  track 7
+                </text>
+                <path class="trk seg-a" d={`M12 ${ty(12)}L${DET.x} ${ty(DET.x)}`} pathLength="1" />
+                <path class="trk seg-b" d={`M${DET.x} ${ty(DET.x)}L${DET.x + DET.w} ${ty(DET.x + DET.w)}`} pathLength="1" />
+                <path class="trk seg-c" d={`M${DET.x + DET.w} ${ty(DET.x + DET.w)}L316 ${ty(316)}`} pathLength="1" />
+                <path class="ptseg" d={`M${DET.x} ${ty(DET.x)}L${DET.x + DET.w} ${ty(DET.x + DET.w)}`} />
+                {hits.map((p) => (
+                  <>
+                    {p.s && <circle class="ring" cx={p.x} cy={ty(p.x)} r="3.2" style={`--t: ${p.t}s`} />}
+                    <circle class={p.s ? 'st in' : 'st'} cx={p.x} cy={ty(p.x)} r={p.s ? 3.2 : 2.2} style={`--t: ${p.t}s`} />
+                  </>
+                ))}
+              </g>
+            </g>
+
+            {/* the point collection of NewDetector and the output tree */}
+            <g transform={`translate(${g.col[0]} ${g.col[1]})`}>
+              <rect class="box" x="0" y="0" width={W} height="96" rx="4" />
+              <text class="ctitle" x="12" y="22">
+                fNewDetectorPointCollection
+              </text>
+              <text class="ev" x="316" y="22" text-anchor="end" data-slot="ev" />
+              <rect class="arr" x="12" y="32" width="104" height="26" rx="3" />
+              <g class="chip">
+                <rect class="chipr" x="16" y="36" width="96" height="18" rx="2" />
+                <text class="chipt c-stack" x="64" y="49" text-anchor="middle">
+                  fTrackID 7
+                </text>
+                <text class="chipt c-mc" x="64" y="49" text-anchor="middle">
+                  fTrackID 5
+                </text>
+              </g>
+              <text class="br" x="128" y="49">
+                <tspan class="brk">branch</tspan> NewDetectorPoint
+              </text>
+              <g class="tree">
+                <text class="sub" x="12" y="82">
+                  tree cbmsim
+                </text>
+                {cells.map((k) => (
+                  <>
+                    <rect class="tcell" x={100 + k * 26} y="68" width="22" height="18" rx="2" />
+                    <rect class={`tfill f${k}`} x={103 + k * 26} y="71" width="16" height="12" rx="1" />
+                  </>
+                ))}
+              </g>
+              <text class="tract" x="184" y="82" data-slot="tr" />
+            </g>
+          </svg>
+        ))
+      }
+    </svg>
+  </div>
+</Explainer>
+
+<style>
+  /* Two layouts in one stage: the wide one, and a narrow one when the stage is narrow. */
+  .dl-wrap {
+    container-type: inline-size;
+  }
+  .dl {
+    aspect-ratio: 692 / 246;
+  }
+  .lay-m {
+    display: none;
+  }
+  @container (max-width: 639px) {
+    .dl {
+      aspect-ratio: 340 / 474;
+      max-width: 440px;
+      margin-inline: auto;
+    }
+    .lay-d {
+      display: none;
+    }
+    .lay-m {
+      display: inline;
+    }
+  }
+
+  /* Parts */
+  .box {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .ttl {
+    fill: var(--fr-stage-ink);
+    font-size: 14.5px;
+    font-weight: 700;
+  }
+  .sub {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .pill rect {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    transition:
+      fill 0.4s,
+      stroke 0.4s;
+  }
+  .pill text {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+    font-weight: 600;
+    transition: fill 0.4s;
+  }
+  .edge,
+  .tick {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .edge {
+    stroke-dasharray: 1;
+  }
+  .node {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .node.det {
+    stroke: var(--fr-mint);
+  }
+  .nname {
+    fill: var(--fr-stage-ink);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .badge rect {
+    fill: var(--fr-stage-cell);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1;
+  }
+  .badge text {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .hl {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 2;
+  }
+  .call {
+    fill: var(--fr-stage-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .hk {
+    fill: var(--fr-saffron);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .kind {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .note {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+  }
+  .cave {
+    fill: var(--fr-stage);
+  }
+  .pipe {
+    fill: var(--fr-stage-cell);
+    stroke: var(--fr-stage-dim);
+    stroke-width: 1.2;
+  }
+  .axis {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1;
+    stroke-dasharray: 6 4;
+  }
+  .vol {
+    fill: var(--fr-stage-cell);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .sens {
+    fill: color-mix(in srgb, var(--fr-mint) 22%, var(--fr-stage));
+    stroke: var(--fr-mint);
+    stroke-width: 1.5;
+  }
+  .vname {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .senst {
+    fill: var(--fr-mint);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .fvhl {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 1.5;
+    opacity: 0;
+  }
+  .fvt {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .fvk {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .mc1 {
+    fill: var(--fr-stage-ink);
+    font-weight: 700;
+  }
+  .tlab {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .trk {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 1.5;
+    stroke-dasharray: 1;
+  }
+  .ptseg {
+    fill: none;
+    stroke: var(--fr-mint);
+    stroke-width: 5;
+    stroke-linecap: round;
+  }
+  .st {
+    fill: var(--fr-stage-ink);
+  }
+  .st.in {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-stage);
+    stroke-width: 1;
+  }
+  .ring {
+    fill: none;
+    stroke: var(--fr-saffron);
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+    transform-box: fill-box;
+    transform-origin: center;
+    opacity: 0;
+  }
+  .ctitle {
+    fill: var(--fr-stage-ink);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .ev {
+    fill: var(--fr-saffron);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .arr {
+    fill: var(--fr-stage);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 3;
+  }
+  .chipr {
+    fill: color-mix(in srgb, var(--fr-mint) 24%, var(--fr-stage-2));
+    stroke: var(--fr-mint);
+    stroke-width: 1.2;
+  }
+  .chipt {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .br {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .brk {
+    fill: var(--fr-stage-dim);
+    font-weight: 400;
+  }
+  .tcell {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 3;
+  }
+  .tfill {
+    fill: var(--fr-saffron);
+  }
+  .tract {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  /* Choreography. For step n the stage has the classes r1 … rn and now<n>. Each step has its own
+     keyframes, so that an animation plays again in the next step. --d: the delay of a row in a pass
+     over the module list. */
+  .m0 {
+    --d: 0.15s;
+  }
+  .m1 {
+    --d: 0.75s;
+  }
+  .m2 {
+    --d: 1.35s;
+  }
+
+  /* Step 1: AddModule() adds the rows one after the other. */
+  .dl.now1 .row {
+    animation: dl-a1 0.35s calc(var(--d) * 0.7) backwards;
+  }
+  .dl.now1 .edge {
+    animation: dl-draw 1.1s 0.1s backwards;
+  }
+  .kind {
+    opacity: 0;
+  }
+  .dl.now1 .kind {
+    opacity: 1;
+    animation: dl-a1 0.35s calc(var(--d) * 0.7 + 0.2s) backwards;
+  }
+
+  /* Init() and Run() */
+  .dl.r2 .p-init rect,
+  .dl.r6 .p-run rect {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-saffron);
+  }
+  .dl.r2 .p-init text,
+  .dl.r6 .p-run text {
+    fill: var(--fr-on-saffron);
+  }
+  .dl.r6 .p-init rect {
+    fill: none;
+    stroke: var(--fr-stage-line);
+  }
+  .dl.r6 .p-init text {
+    fill: var(--fr-stage-dim);
+  }
+
+  /* Step 2: Init() makes the MC application with the module list. */
+  .lom,
+  .app {
+    transition: opacity 0.4s;
+  }
+  .app {
+    opacity: 0;
+  }
+  .dl.r2 .lom {
+    opacity: 0;
+  }
+  .dl.r2 .app {
+    opacity: 1;
+  }
+
+  /* The call on the application, and the note below the list. */
+  .dl.now2 .call {
+    animation: dl-a2 0.4s 0.15s backwards;
+  }
+  .dl.now3 .call {
+    animation: dl-a3 0.4s 0.1s backwards;
+  }
+  .dl.now4 .call {
+    animation: dl-a4 0.4s 0.1s backwards;
+  }
+  .dl.now5 .call {
+    animation: dl-a5 0.4s 0.1s backwards;
+  }
+  .dl.now6 .call {
+    animation: dl-a6 0.4s 0.2s backwards;
+  }
+  .dl.now7 .call {
+    animation: dl-a7 0.4s 0.1s backwards;
+  }
+  .dl.now8 .call {
+    animation: dl-a8 0.4s 0.1s backwards;
+  }
+  .dl.now9 .call {
+    animation: dl-a9 0.4s 0.1s backwards;
+  }
+  .dl.now2 .note {
+    animation: dl-a2 0.4s 1.95s backwards;
+  }
+  .dl.now5 .note {
+    animation: dl-a5 0.4s 1.6s backwards;
+  }
+  .dl.now7 .note {
+    animation: dl-a7 0.4s 0.35s backwards;
+  }
+  .dl.now8 .note {
+    animation: dl-a8 0.4s 0.2s backwards;
+  }
+
+  /* The hooks. Steps 2 and 3 pass over all modules in list order; later steps call only the detector. */
+  .hl {
+    opacity: 0;
+  }
+  .dl:is(.now2, .now3) .hl,
+  .dl:is(.now4, .now5, .now6, .now7, .now8, .now9) .m2 .hl {
+    opacity: 1;
+  }
+  .dl.now2 :is(.hl, .hk.a) {
+    animation: dl-a2 0.45s var(--d) backwards;
+  }
+  .dl.now3 :is(.hl, .hk.a) {
+    animation: dl-a3 0.45s var(--d) backwards;
+  }
+  .dl.now3 .hk.b {
+    animation: dl-a3 0.45s calc(var(--d) + 0.35s) backwards;
+  }
+  .dl.now4 .m2 :is(.hl, .hk.a) {
+    animation: dl-a4 0.45s 0.2s backwards;
+  }
+  .dl.now5 .m2 :is(.hl, .hk.a) {
+    animation: dl-a5 0.45s 0.2s backwards;
+  }
+  .dl.now5 .m2 .hk.b {
+    animation: dl-a5 0.45s 0.9s backwards;
+  }
+  .dl.now6 .m2 :is(.hl, .hk.a) {
+    animation: dl-a6 0.45s 0.45s backwards;
+  }
+  .dl.now7 .m2 :is(.hl, .hk.a) {
+    animation: dl-a7 0.4s 1.05s backwards;
+  }
+  .dl.now8 .m2 :is(.hl, .hk.a) {
+    animation: dl-a8 0.45s 0.95s backwards;
+  }
+  .dl.now8 .m2 .hk.b {
+    animation: dl-a8 0.45s 2s backwards;
+  }
+  .dl.now9 .m2 :is(.hl, .hk.a) {
+    animation: dl-a9 0.45s 0.75s backwards;
+  }
+
+  /* Step 3: each module builds its volumes when its ConstructGeometry() comes. */
+  .g-none,
+  .g-cave,
+  .g-pipe,
+  .g-det {
+    transition: opacity 0.5s;
+  }
+  .dl.r3 .g-none {
+    opacity: 0;
+  }
+  .g-cave,
+  .g-pipe,
+  .g-det {
+    opacity: 0;
+  }
+  .dl.r3 :is(.g-cave, .g-pipe, .g-det) {
+    opacity: 1;
+  }
+  .dl.now3 .g-cave {
+    transition-delay: 0.6s;
+  }
+  .dl.now3 .g-pipe {
+    transition-delay: 1.2s;
+  }
+  .dl.now3 .g-det {
+    transition-delay: 1.8s;
+  }
+
+  /* Step 4: AddSensitiveVolume() makes Det1 sensitive and gives it a FairVolume. */
+  .sens,
+  .senst,
+  .g-fv {
+    opacity: 0;
+    transition: opacity 0.45s;
+  }
+  .dl.r4 :is(.sens, .senst, .g-fv) {
+    opacity: 1;
+  }
+  .dl.now4 .sens {
+    transition-delay: 0.45s;
+  }
+  .dl.now4 .senst {
+    transition-delay: 0.65s;
+  }
+  .dl.now4 .g-fv {
+    transition-delay: 1.1s;
+  }
+
+  /* Step 5: Initialize() writes the volume ID of the engine; Register() makes the branch; at the end of
+     InitMC(), WriteFolder() makes the tree. */
+  .mc0,
+  .mc1 {
+    transition: opacity 0.3s;
+  }
+  .mc1 {
+    opacity: 0;
+  }
+  .dl.r5 .mc0 {
+    opacity: 0;
+  }
+  .dl.r5 .mc1 {
+    opacity: 1;
+  }
+  .dl.now5 .mc0 {
+    transition-delay: 0.5s;
+  }
+  .dl.now5 .mc1 {
+    transition-delay: 0.6s;
+    fill: var(--fr-saffron);
+  }
+  .br,
+  .tree {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .dl.r5 :is(.br, .tree) {
+    opacity: 1;
+  }
+  .dl.now5 .br {
+    transition-delay: 1.2s;
+  }
+  .dl.now5 .tree {
+    transition-delay: 2.1s;
+  }
+  .dl.now5 .tract {
+    animation: dl-a5 0.4s 2.2s backwards;
+  }
+
+  /* Step 6: the first event. */
+  .dl.now6 .ev {
+    animation: dl-a6 0.4s 0.3s backwards;
+  }
+
+  /* Step 7: the track moves in steps. The steps in Det1 call ProcessHits(); at the exit, the point. */
+  .g-trk {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .dl.r7 .g-trk {
+    opacity: 1;
+  }
+  .dl.r8 .g-trk {
+    opacity: 0.4;
+  }
+  .dl.r9 .g-trk {
+    opacity: 0;
+  }
+  .dl.now7 .seg-a {
+    animation: dl-draw 0.9s 0.2s linear backwards;
+  }
+  .dl.now7 .seg-b {
+    animation: dl-draw 1.2s 1.1s linear backwards;
+  }
+  .dl.now7 .seg-c {
+    animation: dl-draw 0.55s 2.45s linear backwards;
+  }
+  .dl.now7 .st {
+    animation: dl-a7 0.15s var(--t) backwards;
+  }
+  .dl.now7 .ring {
+    animation: dl-ping 0.7s var(--t);
+  }
+  .dl.now7 .fvhl {
+    animation: dl-look 1.5s 1s;
+  }
+  .ptseg {
+    opacity: 0;
+  }
+  .dl.r7 .ptseg {
+    opacity: 1;
+  }
+  .dl.now7 .ptseg {
+    animation: dl-a7 0.3s 2.35s backwards;
+  }
+  .chip,
+  .c-mc {
+    opacity: 0;
+  }
+  .dl.now7 .chip {
+    opacity: 1;
+    animation: dl-a7 0.35s 2.55s backwards;
+  }
+
+  /* Step 8: UpdateTrackIndex() changes the track ID of the point, Fill() writes the event into the tree,
+     and EndOfEvent() clears the collection. */
+  .dl.now8 .chip {
+    animation: dl-gone 2.8s backwards;
+  }
+  .dl.now8 .c-stack {
+    opacity: 0;
+    animation: dl-hold 0.55s backwards;
+  }
+  .dl.now8 .c-mc {
+    opacity: 1;
+    fill: var(--fr-saffron);
+    animation: dl-a8 0.3s 0.55s backwards;
+  }
+  .tfill {
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .dl.r8 .f0,
+  .dl.r9 :is(.f1, .f2) {
+    opacity: 1;
+  }
+  .dl.now8 .f0 {
+    transition-delay: 1.5s;
+  }
+  .dl.now8 .tract {
+    animation: dl-a8 0.4s 1.5s backwards;
+  }
+
+  /* Step 9: the other events, then FinishRun() and Write(). */
+  .dl.now9 .f1 {
+    transition-delay: 0.2s;
+  }
+  .dl.now9 .f2 {
+    transition-delay: 0.4s;
+  }
+  .dl.now9 .ev {
+    animation: dl-a9 0.4s 0.4s backwards;
+  }
+  .dl.now9 .tract {
+    animation: dl-a9 0.4s 1.5s backwards;
+  }
+
+  @keyframes dl-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+  }
+  @keyframes dl-ping {
+    from {
+      opacity: 0.95;
+      transform: scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: scale(3.2);
+    }
+  }
+  @keyframes dl-look {
+    0%,
+    100% {
+      opacity: 0;
+    }
+    8%,
+    90% {
+      opacity: 1;
+    }
+  }
+  @keyframes dl-hold {
+    from,
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes dl-gone {
+    0%,
+    85% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a1 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a2 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a3 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a4 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a5 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a6 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a7 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a8 {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes dl-a9 {
+    from {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dl,
+    .dl * {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+</style>

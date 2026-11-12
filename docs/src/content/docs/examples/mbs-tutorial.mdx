@@ -1,0 +1,191 @@
+---
+title: 'MBS tutorial'
+description: 'The macro unpack_mbs.C reads an LMD file with FairLmdSource, unpacks one type of MBS subevent into FairMBSRawItem objects and fills histograms for the HTTP server of FairRunOnline.'
+sidebar:
+  order: 8
+code: [examples/advanced/MbsTutorial/unpack_mbs.C, examples/advanced/MbsTutorial/FairMBSUnpack.cxx, examples/advanced/MbsTutorial/FairMBSRawItem.h, examples/advanced/MbsTutorial/FairMBSTask.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The macro `unpack_mbs.C` of this example reads MBS events from an LMD file with `FairLmdSource`. An
+unpacker converts one type of subevent into `FairMBSRawItem` objects, and a task fills histograms
+from them. `FairRunOnline` runs the unpacker and the task, and gives the histograms to a web server.
+
+## Files
+
+| File | Content |
+| --- | --- |
+| [`unpack_mbs.C`](/source/examples/advanced/MbsTutorial/unpack_mbs.C/) | The macro: the source, the unpacker, the run, the task and the event loop |
+| [`FairMBSUnpack.h`](/source/examples/advanced/MbsTutorial/FairMBSUnpack.h/), [`FairMBSUnpack.cxx`](/source/examples/advanced/MbsTutorial/FairMBSUnpack.cxx/) | The unpacker. It converts the data of a subevent into `FairMBSRawItem` objects in the branch `MBSRawItem`. |
+| [`FairMBSRawItem.h`](/source/examples/advanced/MbsTutorial/FairMBSRawItem.h/), [`FairMBSRawItem.cxx`](/source/examples/advanced/MbsTutorial/FairMBSRawItem.cxx/) | The data class: eight `UShort_t` values for each pair of data words |
+| [`FairMBSTask.h`](/source/examples/advanced/MbsTutorial/FairMBSTask.h/), [`FairMBSTask.cxx`](/source/examples/advanced/MbsTutorial/FairMBSTask.cxx/) | The task. It fills four histograms and gives them to the HTTP server. |
+| [`MbsTutorialLinkDef.h`](/source/examples/advanced/MbsTutorial/MbsTutorialLinkDef.h/) | The ROOT dictionary of the three classes |
+| [`sample_data_2.lmd`](/repo/examples/advanced/MbsTutorial/sample_data_2.lmd) | The input file |
+| [`CMakeLists.txt`](/repo/examples/advanced/MbsTutorial/CMakeLists.txt) | The library `ExMbs` (`FairRoot::ExMbs`), the test script and the test |
+
+## Build and run
+
+CMake builds the example only if `BUILD_MBS` and `BUILD_ONLINE` are on
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L39-L41)). `BUILD_MBS` is off by default,
+and it turns on `BUILD_ONLINE` ([CMakeLists.txt](/repo/CMakeLists.txt#L125-L129)). The MBS code is
+deprecated, and the [changelog](/repo/CHANGELOG.md) plans to remove MbsAPI in the next major release.
+
+<Steps>
+
+1. Configure FairRoot with the option `-DBUILD_MBS=ON`, and build it. See
+   [Install FairRoot](/start/install/).
+
+2. Go to the build folder, and run the test of the example:
+
+   ```sh
+   ctest -R ex_unpack_mbs
+   ```
+
+</Steps>
+
+The test runs the script `unpack_mbs.sh`, which CMake writes to `<build>/examples/advanced/MbsTutorial`
+([CMakeLists.txt](/repo/examples/advanced/MbsTutorial/CMakeLists.txt#L55-L62)). The script sets
+the environment, goes to that folder and runs the macro with `root -q -b`
+([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in#L41-L44)). You can also start the script
+yourself. The test passes if the output contains `Macro finished successfully` within 30 seconds.
+
+The macro opens `sample_data_2.lmd` with a relative path. CMake copies the file into the build
+folder of the example, where the script starts the macro
+([CMakeLists.txt](/repo/examples/advanced/MbsTutorial/CMakeLists.txt#L9)). The macro writes
+`output.root` and `params.root` into the current folder.
+
+## The macro
+
+### The source and the unpacker
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="FairLmdSource* source = new FairLmdSource();" end="source->AddUnpacker(unpacker);" title="unpack_mbs.C" />
+
+`AddFile()` adds the file to the list of the source. The five values select the subevents for the
+unpacker. The subcrate is 0, not negative, so the source gives a subevent to the unpacker only if
+all five values agree.
+[Read MBS and LMD data](/online/mbs/#how-a-source-selects-the-unpackers) gives the rules.
+
+Always give the five values. The constructor of `FairMBSUnpack` has other default values: processor
+ID 10 and subcrate 1 ([FairMBSUnpack.h](/source/examples/advanced/MbsTutorial/FairMBSUnpack.h/#L25-L29)).
+
+### The run and the task
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="FairRunOnline* run = new FairRunOnline(source);" end="run->AddTask(task);" title="unpack_mbs.C" />
+
+- The run owns the source, and the source owns the unpacker.
+- `SetSink()` makes `output.root` the output file for the persistent branches.
+- [`ActivateHttpServer()`](/api/FairRunOnline/#ActivateHttpServer) starts a web server on port 8080.
+  See [Look at the histograms](#look-at-the-histograms).
+- With `SetAutoFinish(kFALSE)`, `Run()` does not call `Finish()` at the end.
+- The task gets a reference to the run. It calls `AddObject()` and `RegisterHttpCommand()` of the
+  run in its `Init()`.
+
+### Init and the event loop
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="run->Init();" end="rtdb->saveOutput();" title="unpack_mbs.C" />
+
+`Init()` calls `Init()` of the unpacker before `Init()` of the task. Thus the branch `MBSRawItem`
+exists when the task asks for it. The macro sets no run ID, and `FairLmdSource` gives none. Thus
+`Init()` makes a new run ID ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L136-L151)).
+
+The macro then sets `params.root` as the output of the [runtime database](/concepts/parameters/).
+After the event loop, [`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes the parameter
+containers into this file.
+
+`Run(0, 400)` reads events until the unpacker took data from 400 events, or until the file ends. An
+event without a subevent for the unpacker does not count. The source returns 2 for this event, and
+the run reads the next event ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L283-L293)).
+
+### The check at the end
+
+<Snippet file="examples/advanced/MbsTutorial/unpack_mbs.C" start="Int_t nHits = unpacker->GetNHitsTotal();" title="unpack_mbs.C" />
+
+The macro writes `Macro finished successfully.` only if the unpacker made 9086 raw items in all
+events. The test looks for this text.
+
+:::caution[The macro does not call Finish()]
+The macro turns off auto finish, and it does not call `Finish()`. Thus the run does not call
+`FinishTask()`, does not write the tree with `FairRootManager::Write()`, and does not close the
+source and the sink ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L307-L315)).
+To write the tree into `output.root`, add `run->Finish();` after `run->Run(0, 400);`.
+:::
+
+## The unpacker
+
+`FairMBSUnpack` derives from [`FairUnpack`](/api/FairUnpack/).
+[Write an unpacker](/online/run-online/#write-an-unpacker) tells when the run calls each function
+of an unpacker. The `Init()` of `FairMBSUnpack` calls `Register()`, which registers the
+`TClonesArray` as the persistent branch `MBSRawItem` in the folder `MBS`:
+
+<Snippet file="examples/advanced/MbsTutorial/FairMBSUnpack.cxx" start="void FairMBSUnpack::Register()" title="FairMBSUnpack.cxx" />
+
+`DoUnpack(data, size)` gets the data of the subevent and its size in 32-bit words. The data is a
+sequence of blocks. Each block has a header word and then pairs of data words:
+
+<Snippet file="examples/advanced/MbsTutorial/FairMBSUnpack.cxx" start="while (l_i < size) {" title="FairMBSUnpack.cxx" />
+
+| Word | Bits | Value | Getter of `FairMBSRawItem` |
+| --- | --- | --- | --- |
+| Header | 28–31 | SAM | `GetSam()` |
+| Header | 24–27 | GTB, the cable of the SAM | `GetGtb()` |
+| Header | 20–23 | `lec` | Not stored |
+| Header | 0–8 | Number of data words in the block | Not stored |
+| First data word | 27–31 | TAC address | `GetTacAddr()` |
+| First data word | 22–26 | TAC channel | `GetTacCh()` |
+| First data word | 18–21 | Calibration value | `GetCal()` |
+| First data word | 12–17 | Clock, stored as 63 minus the value | `GetClock()` |
+| First data word | 0–11 | TAC data, stored as 4095 minus the value | `GetTacData()` |
+| Second data word | 0–11 | QDC data | `GetQdcData()` |
+
+Before each event, `FairRootManager::ReadEvent()` calls `Reset()` of the source
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L409-L414)). The source
+calls `Reset()` of each unpacker
+([FairOnlineSource.cxx](/source/fairroot/online/source/FairOnlineSource.cxx/#L65-L70)).
+`FairMBSUnpack::Reset()` clears the array and sets the number of items of the event to 0. At the
+end of `DoUnpack()`, the unpacker adds this number to the total that `GetNHitsTotal()` returns. If
+one event has two subevents for the unpacker, the total thus counts the items of the first subevent
+twice.
+
+## The task
+
+`FairMBSTask` gets the branch, makes four histograms and gives them to the HTTP server:
+
+<Snippet file="examples/advanced/MbsTutorial/FairMBSTask.cxx" start="InitStatus FairMBSTask::Init()" title="FairMBSTask.cxx" />
+
+- If the branch `MBSRawItem` does not exist, `Init()` returns `kERROR`.
+- [`AddObject()`](/api/FairRunOnline/#AddObject) registers the histogram `hQdc` in the server
+  folder `HISTO`, the canvas in `CANVAS` and the folder `MbsDetFolder` in `/`.
+- [`RegisterHttpCommand()`](/api/FairRunOnline/#RegisterHttpCommand) adds the command
+  `/Reset_hQdc`. It executes `Reset()` of the histogram `hQdc`.
+- `Exec()` fills the histograms with the QDC data, the TAC data, the clock and the TAC channel of
+  each item ([FairMBSTask.cxx](/source/examples/advanced/MbsTutorial/FairMBSTask.cxx/#L57-L73)).
+
+## Look at the histograms
+
+The server listens on port 8080. Thus its address is `http://<host>:8080`, where `<host>` is the
+computer that runs the macro. The run calls `ProcessRequests()` of the server after each 10000th
+event, which is the default refresh rate
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L225-L227)). The macro reads
+400 events, so its event loop does not call it. For a longer run, give a smaller refresh rate as the
+first argument of `ActivateHttpServer()`.
+
+## Problems that can occur
+
+- **`FairLmdSource: not found: sample_data_2.lmd`, and then a crash in the first event:** the
+  current folder does not hold the file. CMake installs the macro into `macros/` and the file into
+  `data/` ([CMakeLists.txt](/repo/examples/advanced/MbsTutorial/CMakeLists.txt#L52-L53)). Start the
+  macro in a folder that holds the file.
+- **The test fails, but the macro ends without an error:** the total number of raw items is not
+  9086. Then the macro does not write the text that the test looks for. The test also fails if the
+  macro needs more than 30 seconds.
+- **`output.root` has no tree:** the macro does not call `Finish()`. See the caution above.
+
+## Related pages
+
+- [Process live data with FairRunOnline](/online/run-online/): the run, the event loop and the
+  HTTP server.
+- [Read MBS and LMD data](/online/mbs/): `FairLmdSource` and how a source selects the unpackers.
+- [MQ: LMD sampler and unpacker](/examples/mq-lmd/): the same file and the same decoding in FairMQ
+  devices.

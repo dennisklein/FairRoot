@@ -1,0 +1,286 @@
+---
+title: 'Run FairRoot tasks in FairMQ devices'
+description: 'Run FairRoot code in FairMQ devices: the main function of FairRunFairMQDevice.h, samplers that read events with a run, processors that run a task on each message, sinks and a simulation device.'
+sidebar:
+  order: 4
+code: [fairroot/fairmq/FairRunFairMQDevice.h, fairroot/fairmq/FairMQ.h,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQRunDevice.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQSimDevice.cxx, examples/MQ/pixelDetector/src/FairOnlineSink.cxx,
+  examples/advanced/Tutorial3/MQ/sampler.cxx, examples/advanced/Tutorial3/MQ/processor.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import MqTopology from '../../../components/diagrams/MqTopology.astro';
+
+A FairMQ device is a process that receives messages, processes them and sends the result. A device
+can run FairRoot code. A sampler reads events with a run and a source, and a processor runs a task
+on the data of each message. A run can also send its output event by event. FairRoot gives the
+headers and the serializers for this. The device classes are in the examples, and you copy them
+into your project.
+
+<MqTopology example="pixel" />
+
+## What FairRoot gives
+
+| Part | Content |
+| --- | --- |
+| `FairRoot::FairMQ` ([`fairroot/fairmq`](/repo/fairroot/fairmq/)) | `FairRunFairMQDevice.h` gives the `main()` function of a device executable. `FairMQ.h` includes the FairMQ classes. The target links `FairMQ::FairMQ`. |
+| `FairRoot::BaseMQ` ([`fairroot/basemq`](/repo/fairroot/basemq/)) | The serializers [`RootSerializer`](/api/RootSerializer/) and [`BoostSerializer`](/api/BoostSerializer/), Boost serialization support for some FairRoot classes, and the MBS devices `FairMQLmdSampler` and `FairMQUnpacker`. |
+| `FairRoot::ParMQ` and `parmq-server` ([`fairroot/parmq`](/repo/fairroot/parmq/)) | The parameter server, a device that gives parameter containers to other devices. |
+| Examples | The sampler, processor, sink, merger and simulation devices of this page. |
+
+The CMake option `BUILD_BASEMQ` (default `ON`) builds these targets. It requires FairMQ 1.4.0 or
+newer and Boost 1.67 or newer, see [Build options](/online/overview/#build-options). FairRoot 19.0.0 moved
+the general devices `FairMQSampler` and `FairMQProcessor` and their tasks from BaseMQ into Tutorial 3
+([CHANGELOG.md](/repo/CHANGELOG.md)).
+
+## Write the main function
+
+FairMQ gives a `main()` function in `fairmq/runDevice.h`. It calls two functions that you write:
+`addCustomOptions()` and `getDevice()` (see
+[Devices](https://fairrootgroup.github.io/FairMQ/concepts/devices/) in the FairMQ documentation).
+FairRoot code includes `FairRunFairMQDevice.h` instead. This header includes the FairMQ header that
+fits the installed FairMQ version, and defines `getDevice()`. You write `fairGetDevice()`:
+
+<Snippet file="fairroot/fairmq/FairRunFairMQDevice.h" start="// FairRoot API during transition period" end="^#endif$" />
+
+| FairMQ version | Included header | `getDevice()` |
+| --- | --- | --- |
+| Older than 1.4.34 | `fairmq/runFairMQDevice.h` | Takes `const ProgOptions&`, returns a raw pointer. |
+| 1.4.34 to 1.4.37 | `fairmq/runDevice.h` | Takes `const ProgOptions&`, returns a `std::unique_ptr`. |
+| 1.4.38 and newer | `fairmq/runDevice.h` | Takes `ProgOptions&`, returns a `std::unique_ptr`. |
+
+The header calculates the version number from `FAIRMQ_VERSION_MAJOR`, `_MINOR` and `_PATCH`
+([FairRunFairMQDevice.h](/source/fairroot/fairmq/FairRunFairMQDevice.h/#L12-L36)).
+[`fairGetDevice()`](/api/global/#fairGetDevice) has the same signature for all versions, thus one
+source file builds with each FairMQ version. The header defines `getDevice()`, and the FairMQ header
+defines `main()`. These functions are not `inline`, so include `FairRunFairMQDevice.h` in only one
+source file of a program. The main function of the pixel sampler shows the two functions:
+
+<Snippet file="examples/MQ/pixelDetector/run/runPixelSampler.cxx" start="void addCustomOptions" title="runPixelSampler.cxx" />
+
+<Snippet file="examples/MQ/pixelDetector/run/runPixelSampler.cxx" start="std::unique_ptr<fair::mq::Device> fairGetDevice" title="runPixelSampler.cxx" />
+
+- `addCustomOptions()` adds the options of the device. The device reads them with
+  `fConfig->GetValue<T>()`, mostly in `InitTask()`.
+- `fairGetDevice()` gets all options. Thus it can select the device class or a part of it: here
+  `--sampler-type` selects the source. The pixel processor selects the task class with
+  `--task-name`, and the Tutorial 3 devices select the data format with `--data-format`.
+- If `fairGetDevice()` returns `nullptr`, FairMQ logs an error and the program ends with the exit
+  code 1.
+
+Link the executable to `FairRoot::FairMQ` and to the library that has your devices:
+
+<Snippet file="examples/MQ/pixelDetector/run/CMakeLists.txt" start="set(exe_dependencies" end="target_link_libraries(pixel-sampler PRIVATE" />
+
+In the device classes, include `FairMQ.h` instead of the FairMQ headers. With FairMQ older than
+1.4.41, it defines `fair::mq::Device`, `Parts`, `Message`, `MessagePtr`, `Channel`, `ProgOptions`
+and `TransportFactory` as aliases of the old class names
+([FairMQ.h](/source/fairroot/fairmq/FairMQ.h/#L24-L43)). It also gives
+[`fairroot::GetFairMQDeviceChannels()`](/api/fairroot/#GetFairMQDeviceChannels), which returns the
+channels of a device for each FairMQ version.
+
+## Kinds of devices
+
+| Device | Class | What it does with FairRoot |
+| --- | --- | --- |
+| Sampler | `FairMQPixelSampler` | Reads events with a source, sends the objects of some branches. |
+| Task processor | `FairMQPixelTaskProcessor<T>` | Runs the task `T` on the objects of each message, sends the output objects. |
+| File sink | `FairMQPixelFileSink` | Writes the objects of each message into a ROOT tree. |
+| Run device | `FairMQSimDevice` with `FairOnlineSink` | Runs a `FairRunSim`. The sink sends the branches of each event. |
+| Payload sampler and processor | `Sampler<Task>` and `Processor<Task>` of Tutorial 3 | A task makes the message from an event, or processes the message. |
+
+The pixel devices are in
+[`examples/MQ/pixelDetector/src/devices`](/repo/examples/MQ/pixelDetector/src/devices/). The
+[pixel detector example](/examples/mq-pixel-detector/) shows how they work together. Most of them
+send ROOT objects, one object in each part of a multipart message. `RootSerializer` writes each
+object into a `TMessage`. [Serialize FairRoot data for messages](/online/serialization/) compares
+this with other formats.
+
+## Read events in a sampler
+
+`FairMQPixelSampler` prepares the input in `InitTask()`:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx" start="fRunAna = new FairRunAna();" end="fMaxIndex = fSource->CheckMaxEventNo();" title="FairMQPixelSampler.cxx" />
+
+1. The constructor of the run gets the [I/O manager](/concepts/io/#the-io-manager). The sampler
+   does not call `Init()` of the run.
+2. Without a source from the main function, the sampler makes a `FairFileSource` for the files of
+   `--file-name`. It calls `Init()` of the source itself.
+3. [`GetObject()`](/api/FairRootManager/#GetObject) gives the object of each branch of
+   `--branch-name`. If the name of a `TClonesArray` is not the branch name, the sampler renames the
+   array. The receiving task finds its input by name.
+4. Without `--max-index`, the sampler sends all events of the source.
+
+In each call of `ConditionalRun()`, the sampler reads the next event and sends one multipart
+message:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx" start="bool FairMQPixelSampler::ConditionalRun()" title="FairMQPixelSampler.cxx" />
+
+[`ReadEvent()`](/api/FairSource/#ReadEvent) returns 0 for a good event. At the end of the input,
+or after `--max-index` events, `ConditionalRun()` returns `false` and the device leaves `RUNNING`.
+
+:::caution[Give the source to the run]
+`FairMQPixelSampler` does not call [`SetSource()`](/api/FairRun/#SetSource) of the run. Thus the
+I/O manager has no source, and `GetObject()` does not call `ActivateObject()` of the source
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L746-L749)).
+`FairFileSource::Init()` itself connects only `EventHeader.` and `MCEventHeader.` to the input tree
+([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L255-L265)). In your own
+sampler, call `SetSource()` before you request the branches, as the Tutorial 3 sampler does
+([sampler.cxx](/source/examples/advanced/Tutorial3/MQ/sampler.cxx/#L92-L112)).
+:::
+
+## Run a task on each message
+
+`FairMQPixelTaskProcessor<T>` runs a FairRoot task on the objects of each message. It does not use a
+run or the I/O manager. Thus the task `T` needs three more functions:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelFindHits.h" start="virtual void GetParList(TList* tempList);" end="virtual void ExecMQ(TList* inputList, TList* outputList);" title="PixelFindHits.h" />
+
+| Function | Called | What it does |
+| --- | --- | --- |
+| `GetParList(TList*)` | Once, in the FairMQ state `INITIALIZING DEVICE` | Adds the parameter containers that the task needs to the list. |
+| `InitMQ(TList*)` | After each new set of parameters | Gets the containers from the list, makes the output arrays. |
+| `ExecMQ(TList* in, TList* out)` | For each message | Finds the input objects by name in `in`, runs `Exec()`, adds the output objects to `out`. |
+
+The processor makes the task in its `Init()` and calls
+[`SetStreamProcessing(kTRUE)`](/api/FairTask/#SetStreamProcessing) on it
+([FairMQPixelTaskProcessor.h](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h/#L152-L171)).
+This sets the protected flag `fStreamProcessing` of `FairTask`. A task can read it and skip the work
+that needs the I/O manager. For example, the reconstruction task of Tutorial 3 then adds no links
+to its hits
+([FairTestDetectorRecoTask.cxx](/source/examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx/#L78-L82)).
+The processor also adds a `FairGeoParSet` container to the parameter list. This container holds
+the geometry of the simulation.
+
+For each message, the processor deserializes each part and adds the objects to an input list. It
+takes the run ID from the event header, and gets new parameters when the run ID changes:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h" start="if (!fStaticParameters || fCurrentRunId == -1) {" end="fFairTask->ExecMQ(fInput, fOutput);" title="FairMQPixelTaskProcessor.h" />
+
+- `UpdateParameters()` sends the request `<container name>,<run ID>` for each container on the
+  channel `--par-channel` and waits for the reply of the parameter server
+  ([FairMQPixelTaskProcessor.h](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h/#L193-L217)).
+  [Parameters over FairMQ](/online/parameters/) describes the server.
+- With `--static-pars true`, the processor gets the parameters only once, for the first message.
+- `--keep-data <name>` copies one input object into the output. In the three-level topology, the
+  track finder keeps `PixelHits`, because the track fitter needs the hits and the tracks.
+- The processor sends the event header and all objects of the output list as one multipart message.
+
+The task finds its input by the name of the object. `PixelFindHits::ExecMQ()` shows the pattern:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelFindHits.cxx" start="void PixelFindHits::ExecMQ(TList* inputList, TList* outputList)" title="PixelFindHits.cxx" />
+
+### The payload tasks of Tutorial 3
+
+The Tutorial 3 devices use another pattern. The task itself makes or reads the message. The sampler
+has a `FairRunAna` with a source and one task, a `SamplerTask`. For each event, it calls
+[`RunMQ()`](/api/FairRunAna/#RunMQ) of the run, and the task serializes its input branch into a new
+message:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/sampler.cxx" start="void Run() override" title="sampler.cxx" />
+
+`RunMQ()` reads the event, runs the tasks, fills the event header, and calls `FinishTask()`. It
+writes no output ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L443-L454)).
+`FinishTask()` thus runs after each event, not once at the end of the run. The processor calls
+`InitTask()` of its `ProcessorTask` once, then gives each message to the task:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/processor.cxx" start="fProcessorTask->InitTask();" end="});" title="processor.cxx" />
+
+`MQRecoTask<T>` wraps the normal reconstruction task. For the format `tmessage`, its `Exec()`
+deserializes the digis, runs the task and serializes the hits into the same message
+([MQRecoTaskTMessage.h](/source/examples/advanced/Tutorial3/MQ/processorTask/MQRecoTaskTMessage.h/#L17-L23)).
+See [Tutorial 3](/examples/tutorial3/) for all formats.
+
+## Write the messages to a file
+
+`FairMQPixelFileSink` writes each message as one entry of the tree `cbmsim`. At the first message,
+it makes one branch for each part, with the name and the class of the object. It writes the tree
+and closes the file in `ResetTask()`
+([FairMQPixelFileSink.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx/#L57-L103)).
+The file has no folder and no `BranchList`, thus `FairFileSource` cannot read it as input.
+`FairMQPixelFileSinkBin` writes the folder `cbmout` and the `BranchList`
+([FairMQPixelFileSinkBin.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelFileSinkBin.cxx/#L69-L95)).
+
+## Send the output of a run
+
+A run fills its sink once for each event. `FairOnlineSink` is a sink that writes no file: its
+`Fill()` calls `SendBranches()` of a `FairMQRunDevice`
+([FairOnlineSink.cxx](/source/examples/MQ/pixelDetector/src/FairOnlineSink.cxx/#L47-L55)).
+`SendBranches()` selects the branches for each channel by the name of the channel:
+
+<Snippet file="examples/MQ/pixelDetector/src/devices/FairMQRunDevice.cxx" start="for (auto& mi : fairroot::GetFairMQDeviceChannels(*this)) {" end="if (mi.first.find(modifiedBranchName)" title="FairMQRunDevice.cxx" />
+
+- A channel with `#<branch name>#` in its name gets this branch. A channel with `#all#` gets all
+  branches of [`GetBranchNameList()`](/api/FairRootManager/#GetBranchNameList).
+- The device clones each object, serializes it with `RootSerializer` and sends all parts of a
+  channel as one multipart message. It does not delete the clones
+  ([FairMQRunDevice.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQRunDevice.cxx/#L102-L108)),
+  thus the memory of the device grows with each event. In your own device, serialize the object
+  without a clone.
+- Of the branches registered with `RegisterAny()`, the device sends only `MCTrack`. For the others,
+  it logs a warning.
+
+`FairMQSimDevice` uses this sink to run a simulation in a device. The main function
+[`runMQSim.cxx`](/source/examples/MQ/pixelDetector/run/runMQSim.cxx/#L46-L117) makes the device, the
+sink, the modules and the primary generator. The device then works in these steps:
+
+1. `InitTask()` makes a `FairRunSim`, moves the sink into it, and adds the modules.
+2. The first `PreRun()` sends `ReportSimDevice` on the update channel. The parameter server replies
+   with `<run ID>_<device index>`. See
+   [Store the containers of a simulation](/online/parameters/#store-the-containers-of-a-simulation).
+3. The device sets the first event number of the primary generator to `<device index>` times
+   `--nof-events`. Then it sets the run ID and calls `Init()` of the run.
+4. In `ConditionalRun()`, the device with index 0 sends all parameter containers to the server.
+   Then each device simulates `--nof-events` events and returns `false`.
+
+If a transition is pending, `SendBranches()` of the device calls
+[`StopMCRun()`](/api/FairRunSim/#StopMCRun)
+([FairMQSimDevice.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQSimDevice.cxx/#L167-L173)).
+[Split a simulation over devices](/online/sim-split/) shows a split of the simulation into a
+generator, transport devices and a merger.
+
+## Start a topology
+
+The examples start their devices with shell scripts, for example
+[`startFairMQPixel.sh.in`](/repo/examples/MQ/pixelDetector/run/scripts/startFairMQPixel.sh.in). CMake
+writes the paths into the scripts. Each script builds one command line for each device, with the
+FairMQ options (`--id`, `--transport`, `--channel-config`) and the options of the main function:
+
+<Snippet file="examples/MQ/pixelDetector/run/scripts/startFairMQPixel.sh.in" start="start SAMPLER" end="--branch-name EventHeader." lang="sh" />
+
+| `--command` | What the script does |
+| --- | --- |
+| `print` | Prints the command lines. |
+| `interactive` (default) | Starts each device in an `xterm` window. |
+| `static` | Starts the devices in the background with `--control static`, writes a log file for each device, and checks the result. |
+
+In static mode, the sampler and the sink get one more channel, `ack`. The sink sends an empty
+message on it for each stored message. The sampler counts these messages in a thread and ends
+`PostRun()` after one acknowledgment for each event
+([FairMQPixelSampler.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx/#L125-L147)).
+Thus the sampler process ends after the sink stored all data. The script waits for this, stops the
+other devices with `kill`, and compares the number of entries in the input and the output tree.
+
+## Things to keep in mind
+
+- A run is a singleton. The constructor of a second `FairRun` calls `Fatal()` of ROOT, which stops
+  the program ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L58)). A device that makes its run
+  in `InitTask()` must delete it in `ResetTask()`, or it cannot initialize a second time.
+- A processor waits in `Receive()` until the parameter server replies. Make sure that a parameter
+  server runs, and that its runtime database can give each requested container.
+- Sender and receiver must agree on the names of the objects. A task of the processor finds its
+  input by name, not by branch.
+
+## Related pages
+
+- [Online processing and FairMQ](/online/overview/): the online parts of FairRoot.
+- [Serialize FairRoot data for messages](/online/serialization/): `RootSerializer`, Boost and
+  binary payloads.
+- [Parameters over FairMQ](/online/parameters/): the parameter server and its requests.
+- [MQ: pixel detector](/examples/mq-pixel-detector/): all pixel devices, scripts and the test.
+- [Tutorial 3](/examples/tutorial3/): the sampler and processor with payload tasks.
+- [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/): devices, channels and states.

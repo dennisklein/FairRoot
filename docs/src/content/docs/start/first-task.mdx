@@ -1,0 +1,355 @@
+---
+title: 'Your first task'
+description: 'Write a task that reads MC points and writes digis: start from the NewTask template, get and register branches, build a library with a ROOT dictionary, and run the task in a macro.'
+sidebar:
+  order: 4
+code: [templates/NewTask/NewTask.h, templates/NewTask/NewTask.cxx, examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.h, examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx, examples/advanced/Tutorial3/macro/run_digi.C, examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx, fairroot/base/steer/FairRootManager.h]
+---
+
+import { Steps, FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+A task does one processing step for each event. This page shows a task that reads the MC points of a
+detector and makes digis from them. You start from a template, build the task into a library with a
+ROOT dictionary, and run it in a macro. The digitization task of Tutorial 3,
+`FairTestDetectorDigiTask`, is the working example.
+
+## What you need
+
+- FairRoot, installed: see [Install FairRoot](/start/install/).
+- The output of a simulation: a file with MC points and a parameter file. See
+  [Your first simulation](/start/first-simulation/).
+- A CMake project that finds FairRoot: see [Use FairRoot in a CMake project](/start/cmake/).
+
+## Start from the template
+
+The folder `templates/NewTask` has three files:
+
+<FileTree>
+- templates/NewTask/
+  - NewTask.h the class with all hooks
+  - NewTask.cxx empty hooks, with comments that show what goes into them
+  - rename.sh replaces the name NewTask with your class name
+</FileTree>
+
+The templates are only in the source tree of FairRoot. The installation does not copy them
+([templates/CMakeLists.txt](/repo/templates/CMakeLists.txt)).
+
+<Steps>
+
+1. Copy the folder `templates/NewTask` into the source folder of your library.
+2. Go into the copy. The script changes all `.h` and `.cxx` files below the current folder.
+3. Run the script with the name of your class:
+
+   ```sh
+   ./rename.sh MyDigitizer
+   ```
+
+   The script renames the files to `MyDigitizer.h` and `MyDigitizer.cxx`. In the files, it replaces
+   `NewTask` with the new name and `NEWTASK` with the new name in capital letters.
+
+4. Add the class to the LinkDef file and to the CMake target of your library. The sections below
+   show both.
+
+</Steps>
+
+:::caution
+On Linux, `rename.sh` prints `Platform not supported` and ends with exit code 1
+([rename.sh](/repo/templates/NewTask/rename.sh#L53-L61)). The renaming is complete at that point.
+Only the last hint of the script does not show: edit the CMakeLists.txt and the LinkDef file.
+:::
+
+## Write the class
+
+The template has the old style: the hooks are public, they have no `override`, and the class uses
+`ClassDef` ([NewTask.h](/source/templates/NewTask/NewTask.h/#L15-L53)). `FairTask` itself declares
+`Init()`, `ReInit()`, `SetParContainers()` and `Finish()` as protected
+([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L108-L131)). `Exec()` comes from ROOT's `TTask`
+and is public. A header in the current style:
+
+```cpp title="MyDigitizer.h"
+#ifndef MYDIGITIZER_H
+#define MYDIGITIZER_H
+
+#include <FairTask.h>
+
+class TClonesArray;
+
+class MyDigitizer : public FairTask
+{
+  public:
+    MyDigitizer();
+
+    void Exec(Option_t* option) override;
+
+  protected:
+    InitStatus Init() override;
+    void Finish() override;
+
+  private:
+    TClonesArray* fPoints{nullptr};   //! input: MC points
+    TClonesArray* fDigis{nullptr};    //! output: digis
+
+    ClassDefOverride(MyDigitizer, 1);
+};
+
+#endif
+```
+
+- Override only the hooks that you need. By default, `Init()` and `ReInit()` return `kSUCCESS`, and
+  the other hooks do nothing ([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L113-L131)).
+- Keep the hooks protected. The run calls them through public functions of `FairTask`; see
+  [Tasks](/concepts/tasks/).
+- `FairTask` deletes its copy and move operations
+  ([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L51-L54)). Your class needs no private copy
+  constructor, unlike the template.
+- `ClassDefOverride` is the form of ROOT's `ClassDef` for classes that mark their functions with
+  `override`. The second argument is the class version for ROOT I/O. See
+  [Dictionary macros](/concepts/data-classes/#dictionary-macros).
+- The comment `//!` tells ROOT not to stream the member.
+
+The constructor gives the task its name:
+
+```cpp title="MyDigitizer.cxx"
+#include "MyDigitizer.h"
+
+#include <FairRootManager.h>
+#include <TClonesArray.h>
+#include <fairlogger/Logger.h>
+
+MyDigitizer::MyDigitizer()
+    : FairTask("MyDigitizer")
+{}
+```
+
+The name shows in the log messages of the framework, and
+[`FairRun::GetTask()`](/api/FairRun/#GetTask) finds a task by its name. The second argument of the
+constructor `FairTask(name, iVerbose)` is the verbosity level, with the default 1
+([FairTask.h](/source/fairroot/base/steer/FairTask.h/#L45-L49)).
+
+## Get the input in Init()
+
+The run calls `Init()` once, before the first event. Get the input branches there:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="InitStatus FairTestDetectorDigiTask::Init()" title="FairTestDetectorDigiTask.cxx" />
+
+- [`FairRootManager::Instance()`](/api/FairRootManager/#Instance) gives the
+  [I/O manager](/concepts/io/#the-io-manager). It never returns `nullptr`, because it returns a
+  static object
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L66-L72)). So the first
+  check in the example has no effect.
+- [`GetObject()`](/api/FairRootManager/#GetObject) looks for the branch in two places: first in the
+  branches that earlier tasks registered, then in the input
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L723-L753)). For an input
+  branch, the source then fills the same object for each event.
+- If the branch does not exist, `GetObject()` logs `Branch: <name> not found in Tree.` at the level
+  info and returns `nullptr`.
+- Return `kERROR` if the task cannot work: the run makes the task inactive and continues without it.
+- Return `kFATAL` if the run makes no sense without the task. The run then logs a fatal line. This
+  line stops the program only if FairLogger has a fatal handler, see
+  [What a fatal line does](/tools/logging/#what-a-fatal-line-does). `run_digi.C` gets the handler with
+  `FairLogger::GetLogger()` at its start
+  ([run_digi.C](/source/examples/advanced/Tutorial3/macro/run_digi.C/#L19)).
+- [Return values of Init() and ReInit()](/concepts/tasks/#return-values-of-init-and-reinit) explains
+  all return values.
+
+Call `GetObject()` in `Init()`, not in `Exec()`. Keep the pointer in a data member, and use it in
+`Exec()`.
+
+### Read a branch of any type
+
+[`InitObjectAs<T const*>()`](/api/FairRootManager/#InitObjectAs) gets a branch of any type, for
+example a `std::vector`. Tutorial 2 reads a vector of `CustomClass`:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx" start="fCustomData = ioman->InitObjectAs" end="^        }" title="FairTutorialDet2Digitizer.cxx" />
+
+- The type must be a pointer to const. The compiler checks this
+  ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L471-L477)). You read the data,
+  but you do not change it.
+- `InitObjectAs()` returns `nullptr` if the branch does not exist or has another type.
+- A branch in the input file needs a ROOT dictionary for its type
+  ([FairFileSourceBase.cxx](/source/fairroot/base/source/FairFileSourceBase.cxx/#L98-L112)).
+- The I/O manager owns the object. Do not delete it.
+
+## Register the output
+
+`Init()` of the example makes a `TClonesArray` for the digis and registers it with
+[`FairRootManager::Register()`](/api/FairRootManager/#Register-2):
+
+| Parameter | In the example | Meaning |
+| --- | --- | --- |
+| `name` | `"FairTestDetectorDigi"` | The name of the branch. Later tasks get the branch with this name. |
+| `Foldername` | `"FairTestDetector"` | The folder of the branch in the output, often the detector name. It must not be equal to `name`. |
+| `obj` | `fDigiArray` | The object: a `TCollection`, for example a `TClonesArray`, or a `TNamed`. |
+| `toFile` | `kTRUE` | `kTRUE`: the sink writes the branch. `kFALSE`: the branch exists only in memory. |
+
+If `name` and `Foldername` are equal, `Register()` logs a fatal line
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L154-L162)). As with
+`kFATAL`, this line stops the program only with a fatal handler. Without one, `Register()` registers
+the branch anyway. The commented-out `Register()` call in `NewTask.cxx` uses the same text for both,
+so change one of them ([NewTask.cxx](/source/templates/NewTask/NewTask.cxx/#L54-L59)).
+
+### The persistence flag
+
+The last argument, `toFile`, decides if the branch goes into the output file:
+
+- With `kTRUE`, `Register()` gives the object the branch name and passes it to the sink
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L171)). The sink
+  writes the branch for each event. Without a sink, `Register()` logs a warning.
+- With `kFALSE`, the branch exists only in memory. Later tasks of the same run get it with
+  `GetObject()`, but the output file does not contain it. Use this for intermediate data.
+
+In both cases, the I/O manager keeps the object as a memory branch
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L172-L173)). A task gets a
+memory branch only from a task that ran `Init()` before it. So add the tasks in the order of the
+data flow.
+
+Register all branches in `Init()`. The run makes the output tree after `Init()` of all tasks
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L237-L251)).
+
+:::tip
+The overload [`Register(branchName, className, folderName, toFile)`](/api/FairRootManager/#Register-3)
+makes the `TClonesArray` for you and returns it
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L209-L221)).
+:::
+
+### Register a branch of any type
+
+[`RegisterAny(name, obj, toFile)`](/api/FairRootManager/#RegisterAny) registers a branch of any type.
+The detector of Tutorial 2 registers a `TClonesArray` and a vector:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2.cxx" start="void FairTutorialDet2::Register()" title="FairTutorialDet2.cxx" />
+
+- The I/O manager keeps the address of your pointer, not the address of the object
+  ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L452-L466)). Keep the pointer
+  in a data member.
+- A persistent branch needs a ROOT dictionary for its type. Without one, the sink logs a fatal line
+  when it makes the output tree, and it makes no more `RegisterAny()` branches
+  ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L261-L289)). For this
+  reason, the LinkDef file of Tutorial 2 lists `std::vector<CustomClass>`.
+- With `toFile` = `kTRUE` and no sink, `RegisterAny()` logs a fatal line, and the branch stays in
+  memory only. `Register()` logs a warning in this case.
+- The sink makes the persistent branches of `RegisterAny()` together with the output tree. A later
+  `RegisterAny()` logs a warning, and the sink does not write the branch
+  ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L228-L236)).
+
+## Fill the output in Exec()
+
+The run calls `Exec()` once for each event:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="void FairTestDetectorDigiTask::Exec" title="FairTestDetectorDigiTask.cxx" />
+
+- `fDigiArray->Delete()` empties the output array at the start of each event. The task uses the same
+  array for all events. Without this line, the array can keep digis of the last event.
+- `new ((*fDigiArray)[ipnt]) FairTestDetectorDigi(...)` makes a digi in place in the `TClonesArray`.
+- `AddLink()` stores a link from the digi to its MC point. See
+  [Links between data levels](/concepts/links/).
+- After `Exec()` of all tasks, the run fills the output tree with the event
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L326-L327)).
+
+The run calls `Finish()` once after the last event, and only if the task is active
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L98-L105)). Use it for a summary of the
+run, for example the number of digis.
+
+## Add the class to the LinkDef file
+
+ROOT needs a dictionary for each class that a macro uses or that goes into a file. The LinkDef file
+tells `rootcling` which classes get a dictionary. The LinkDef file of Tutorial 2:
+
+<Snippet file="examples/simulation/Tutorial2/src/Tutorial2LinkDef.h" start="#ifdef __CINT__" end="#endif" title="Tutorial2LinkDef.h" />
+
+Add one line for your task:
+
+```cpp
+#pragma link C++ class MyDigitizer+;
+```
+
+The `+` at the end tells `rootcling` to make a streamer with support for schema evolution.
+
+## Build the library and the dictionary
+
+Tutorial 2 builds its library and its dictionary like this:
+
+<Snippet file="examples/simulation/Tutorial2/src/CMakeLists.txt" start="set(target ExSimulation2)" end="install(FILES" title="examples/simulation/Tutorial2/src/CMakeLists.txt" />
+
+- `fair_change_extensions_if_exists()` makes the list of headers from the list of sources. It keeps
+  only the headers that exist ([FairMacros.cmake](/repo/cmake/modules/FairMacros.cmake#L111-L118)).
+- The library links `FairRoot::Base`, the library of `FairTask` and `FairRootManager`.
+- `fairroot_target_root_dictionary()` adds the dictionary to the target. Its arguments are the
+  target, the headers of the classes (`HEADERS`) and the LinkDef file (`LINKDEF`).
+
+At build time, the function runs `rootcling`. It makes the dictionary source `G__<name>.cxx`, the
+file `G__<name>_rdict.pcm` and the rootmap file `lib<name>.rootmap`. `<name>` is the `OUTPUT_NAME`
+of the target, or else the target name
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L89-L106)).
+With the rootmap file, ROOT finds the library of a class and loads it when a macro uses the class.
+[Make a ROOT dictionary](/start/cmake/#make-a-root-dictionary) gives all arguments and the rules for
+the call.
+
+In your own project, include the CMake module first. FairRoot installs its CMake modules into
+`share/fairbase/cmake/modules` ([cmake/CMakeLists.txt](/repo/cmake/CMakeLists.txt#L9-L14)). Its
+package configuration gives this folder in the variable `FairRoot_CMAKE_MODULES_DIR`
+([FairRootConfig.cmake.in](/repo/cmake/private/FairRootConfig.cmake.in#L13)). Add the folder to
+`CMAKE_MODULE_PATH` and call `include(FairRootTargetRootDictionary)`, as FairRoot does in its own
+[CMakeLists.txt](/repo/CMakeLists.txt#L14-L23). [A complete project](/start/cmake/#a-complete-project)
+shows a whole `CMakeLists.txt` for one task. The project templates use the older macro
+`GENERATE_LIBRARY()` instead; see [Start a project from a template](/start/new-project/).
+
+## Run the task in a macro
+
+Tutorial 3 runs its digitization task with this part of `run_digi.C`:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="FairRunAna run{};" end="run.Run();" title="run_digi.C" />
+
+| Code | What it does |
+| --- | --- |
+| `FairRunAna run{}` | Makes the run for reconstruction and analysis. |
+| `FairFileSource`, `SetSource()` | Reads the MC points from the output file of the simulation. |
+| `SetSink()` with a `FairRootFileSink` | Writes the persistent branches into a new file. |
+| `SetUseFairLinks()`, `FairLinkManager`, `SetGenerateRunInfo()` | Optional settings for links and for information about the run. |
+| `GetRuntimeDb()`, `FairParRootFileIo`, `setFirstInput()` | Read the parameters from the parameter file of the simulation. |
+| `AddTask()` | Adds the task to the run. The run owns the task now. |
+| `Init()` | Calls `SetParContainers()` and `Init()` of all tasks and makes the output tree. |
+| `Run()` | Processes all events of the input. |
+
+`Run()` without arguments processes all entries of the input. `Run(n)` processes the entries 0 to
+n−1. `Run(a, b)` processes the entries a to b−1, and stops at the last entry of the input
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L269-L319)).
+[Run the events](/reconstruction/run-macro/#run-the-events) shows the other forms of `Run()`.
+
+The macro uses FairRoot classes without `#include` lines: ROOT finds them through the rootmap files.
+So ROOT must find your library. A project from the project template writes a `config.sh` into its
+build folder ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L149)). Source
+it before you start ROOT: it puts the library folder of the build into `LD_LIBRARY_PATH`
+([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L21-L26)).
+
+The tests of the examples start the macros in batch mode
+([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in#L43-L44)):
+
+```sh
+root -q -b 'run_digi.C("TGeant4")'
+```
+
+## Check the output
+
+The output file has a tree with the default name `cbmsim`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L932-L944)). The tree has a
+branch for each branch that a task registered with `toFile` = `kTRUE`, here `FairTestDetectorDigi`.
+The run also registers the event header as the branch `EventHeader.`
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L193-L194)). The MC points of the
+input are not in this file. To see the branches, open the file in ROOT:
+
+```cpp
+TFile f("data/testdigi_TGeant4.root");
+TTree* tree = nullptr;
+f.GetObject("cbmsim", tree);
+tree->Print();
+```
+
+## Related pages
+
+- [Tasks](/concepts/tasks/): all hooks, their order and the return values of `Init()`.
+- [Branches, sources and sinks](/concepts/io/): how branches go from task to task and into files.
+- [Write a reconstruction macro](/reconstruction/run-macro/): the settings of `FairRunAna`.
+- [From MC points to digis](/reconstruction/digitization/): digitization in more detail.
+- [Tutorial 3](/examples/tutorial3/): the complete example.

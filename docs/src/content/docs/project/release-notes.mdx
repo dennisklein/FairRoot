@@ -1,0 +1,295 @@
+---
+title: 'Release notes'
+description: 'The changes of each FairRoot release from 18.8.0 to the development version, newest first: breaking changes, deprecations, bug fixes and other notable changes.'
+sidebar:
+  order: 2
+---
+
+This page shows the changelog of FairRoot, newest release first. The source is
+[`CHANGELOG.md`](/repo/CHANGELOG.md) in the repository. Its format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+For the steps to update a project, see [Migrate to a new release](/project/migration/). For each
+deprecated API with its replacement, see [Deprecated APIs](/reference/deprecations/).
+
+## Unreleased (dev)
+
+### Breaking changes
+
+- ROOT generates no streamer for [`FairRootManager`](/api/FairRootManager/) any more.
+
+### Other notable changes
+
+- Added this documentation site in `docs/`: guides, the API reference and a source browser.
+
+## 19.0.0 (2024-05-17)
+
+### Breaking changes
+
+#### CMake
+
+- Dropped [our custom `FindROOT.cmake`](https://github.com/FairRootGroup/FairRoot/commit/764b2c66432d2e63f765df6f6d328aa4b61dba10).
+  - FairRoot uses the native CMake package of ROOT. See the
+    [ROOT manual about CMake projects](https://root.cern/manual/integrate_root_into_my_cmake_project/).
+  - ROOT targets **must** have the prefix `ROOT::` now. See the
+    [full example of the ROOT manual](https://root.cern/manual/integrate_root_into_my_cmake_project/#full-example-event-project).
+  - Explicitly add `include(ROOTMacros)` after your `find_package2(... ROOT ...)` now.
+  - Dropped `ROOT_VERSION_NUMBER`. Use `ROOT_VERSION` (the dotted version number) and
+    [`VERSION_GREATER` and the other version comparisons](https://cmake.org/cmake/help/latest/command/if.html#version-comparisons)
+    instead.
+  - Dropped `ROOTSYS`. Use the ROOT CMake targets instead.
+- Some CMake macros moved to the [FairCMakeModules](https://github.com/FairRootGroup/FairCMakeModules)
+  project. FairRoot requires it.
+  - FairSoft `apr21` and later ship it. See the alternative
+    [installation methods](https://fairrootgroup.github.io/FairCMakeModules/latest/installation.html).
+  - `find_package2` moved to
+    [`FairFindPackage2`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFindPackage2.html).
+    To use it in your code, do something like this:
+    ```cmake
+    find_package(FairCMakeModules 1.0 REQUIRED)
+    include(FairFindPackage2)
+    ```
+  - Dropped the color codes and `pad()`. Use
+    [`FairFormattedOutput` from FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFormattedOutput.html)
+    instead.
+    - [`fair_pad()`](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairFormattedOutput.html#fair-pad)
+      needs a width argument that is larger by 1, and the `COLOR` option takes no argument.
+- Dropped `Generate_Exe_Script()`. It was never meant for external use.
+- Dropped `GENERATE_TEST_SCRIPT()`. Replace it with a solution that you keep in your project.
+  - Consider using `source @FairRoot_BINDIR@/FairRootConfig.sh -p`. The current script reads no
+    arguments, see [Replace the removed CMake functions](/project/migration/#replace-the-removed-cmake-functions).
+- Dropped `Generate_Version_Info()`.
+  - If you only need to generate some files with your version number in them, use the standard
+    CMake command [`configure_file`](https://cmake.org/cmake/help/latest/command/configure_file.html).
+  - Alternatively, consider making a
+    [proper CMake package](https://cmake.org/cmake/help/latest/manual/cmake-packages.7.html#creating-packages)
+    with `configure_package_config_file()` and `write_basic_package_version_file()`.
+  - If you need the "git version", also use
+    [`fair_get_git_version()` from FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/module/FairProjectConfig.html#fair-get-git-version).
+- Renamed our `ROOT_GENERATE_DICTIONARY()` to `FAIRROOT_GENERATE_DICTIONARY()`.
+- Dropped the build switch `BUILD_UNITTESTS`. It was in conflict with the CMake standard switch
+  [`BUILD_TESTING` from the CTest module](https://cmake.org/cmake/help/latest/module/CTest.html).
+
+#### C++
+
+- The member variable `fEvtHeader` is now a private unique pointer that [`FairRun`](/api/FairRun/)
+  owns. To get the event header, use the public member function
+  [`GetEventHeader()`](/api/FairRun/#GetEventHeader).
+- Dropped headers:
+  - `basemq/baseMQtools/baseMQtools.h`
+  - `basemq/policies/Sampler/FairMQFileSource.h`
+  - `basemq/policies/Sampler/FairSourceMQInterface.h`
+  - `basemq/policies/Sampler/SimpleTreeReader.h`
+  - `basemq/policies/Serialization/BinaryBaseClassSerializer.h`
+  - `basemq/policies/Storage/BinaryOutFileManager.h`
+  - `basemq/policies/Storage/BoostDataSaver.h`
+  - `basemq/policies/Storage/RootOutFileManager.h`
+  - `basemq/policies/Storage/TriviallyCopyableDataSaver.h`
+  - `basemq/policies/Serialization/IOPolicy.h`
+- These files and classes moved to the example that uses them, and have new names:
+  - `basemq/devices/FairMQProcessor.h` to
+    [`examples/advanced/Tutorial3/MQ/processor.cxx`](/source/examples/advanced/Tutorial3/MQ/processor.cxx/)
+  - `basemq/devices/FairMQSampler.h` to
+    [`examples/advanced/Tutorial3/MQ/sampler.cxx`](/source/examples/advanced/Tutorial3/MQ/sampler.cxx/)
+  - `basemq/tasks/FairMQProcessorTask.h` to
+    [`examples/advanced/Tutorial3/MQ/processorTask/ProcessorTask.h`](/source/examples/advanced/Tutorial3/MQ/processorTask/ProcessorTask.h/)
+  - `basemq/tasks/FairMQSamplerTask.h` to
+    [`examples/advanced/Tutorial3/MQ/samplerTask/SamplerTask.h`](/source/examples/advanced/Tutorial3/MQ/samplerTask/SamplerTask.h/)
+- [`FairTimeStamp`](/api/FairTimeStamp/):
+  - `virtual bool operator<(const FairTimeStamp* rValue) const` changed to
+    [`bool operator<(const FairTimeStamp& rValue) const`](/api/FairTimeStamp/#operator-lt).
+- `svList` of [`FairModule`](/api/FairModule/) is gone. It was never intended as a public API.
+
+### Deprecations
+
+If you require a deprecated API,
+[file an issue](https://github.com/FairRootGroup/FairRoot/issues/new).
+
+- Deprecated MbsAPI.
+  - We plan to remove it completely in the next major release.
+  - Disabled by default. Enable it with `-DBUILD_MBS=ON`.
+- Deprecated the classes for PROOF.
+  - [ROOT deprecated PROOF in ROOT 6.26](https://github.com/root-project/root/commit/40c3e85970f83b52d6e29bb3c509498bf15fe9e5).
+  - Disabled by default. Enable them with `-DBUILD_PROOF_SUPPORT=ON`.
+- Deprecated [`FairEventBuilder`](/api/FairEventBuilder/) and
+  [`FairEventBuilderManager`](/api/FairEventBuilderManager/)
+  ([pull request 1414](https://github.com/FairRootGroup/FairRoot/pull/1414)).
+  - Disabled by default. Enable them with `-DBUILD_EVENT_BUILDER=ON`.
+- Deprecated [`FairRun::SetEventHeader(FairEventHeader*)`](/api/FairRun/#SetEventHeader-2). Use
+  [`FairRun::SetEventHeader(std::unique_ptr<FairEventHeader> EvHeader)`](/api/FairRun/#SetEventHeader)
+  instead.
+  - This makes the ownership clear.
+- Deprecated [`FairRunAna::Run(Long64_t entry)`](/api/FairRunAna/#Run-3). Use
+  [`FairRunAna::RunSingleEntry(Long64_t entry)`](/api/FairRunAna/#RunSingleEntry) instead.
+  - The meaning was unclear, because of the doubtful `Run(int)` and `Run(long)`.
+
+### Other notable changes
+
+- Changed the structure of the source tree: all public components moved to the new folder
+  [`fairroot`](/repo/fairroot/).
+- Consider calling `fairroot_check_root_cxxstd_compatibility()` in your `CMakeLists.txt`.
+- `fairsoft-config` is not needed any more. The changelog also says that it is not searched for.
+  The current `CheckCompiler.cmake` still looks for it when no C++ standard is set
+  ([CheckCompiler.cmake](/repo/cmake/modules/CheckCompiler.cmake#L32-L46)).
+
+### Example changes in experiment repositories
+
+- [R3BRoot pull request 413](https://github.com/R3BRootGroup/R3BRoot/pull/413)
+
+## 18.8.2 (2024-03-01)
+
+### Bug fixes
+
+- Fixed a wrong order of initialization in the event display.
+- Fixed the bounding box of geometry assemblies after the alignment
+  ([FairAlignmentHandler.cxx](/source/fairroot/alignment/FairAlignmentHandler.cxx/#L103-L124)):
+  - Use the patch of a ROOT expert.
+- Fixed how `FairRunSim` takes the initial random seed from `TRandom::GetSeed()`
+  ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L246-L246)):
+  - Replaced `TRandom3::GetSeed()` with the `GetSeed()` of the base class.
+- Adopted new software versions:
+  - Fixed `FindROOT.cmake` to work with ROOT v6.30.00.
+  - Adopted the CMake policies up to 3.27.
+  - Support for yaml-cpp 0.8 and later.
+  - Fixed a run-time error with Xcode 13.3 and later.
+
+### Other notable changes
+
+- Software recognition:
+  - Added the fair-software.eu badges.
+  - Added `codemeta.json` in accordance with ESCAPE.
+  - Added a configuration for zenodo.org.
+
+## 18.8.1 (2024-02-24)
+
+### Breaking changes
+
+- The name of the output folder changed from `folderName_0` to `folderName`. In the multithreaded
+  mode of Geant4, the folder names changed from `folderName_1` and `folderName_2` to `folderName`.
+- Removed the function `FairRunOnline::InitContainers()`. FairRoot did not use it. Tested with
+  R3BRoot.
+
+### Bug fixes
+
+- [`FairRunOnline`](/api/FairRunOnline/) checks the return value of
+  [`InitUnpackers()`](/api/FairSource/#InitUnpackers) and
+  [`ReInitUnpackers()`](/api/FairSource/#ReInitUnpackers) of the source. It stops the run if the
+  value is `false`. The current code logs a `fatal` line, which stops the program only if FairLogger
+  has a fatal handler, see [Return the status of the unpackers](/project/migration/#return-the-status-of-the-unpackers).
+- Removed the sink from
+  [`Tutorial3/MQ/sampler.cxx`](/source/examples/advanced/Tutorial3/MQ/sampler.cxx/).
+- Fixed the broken `StaticContainer` function in `FairRunOnline`: do not initialize again
+  (`ReInit`) when the `RunId` changes.
+
+### Other notable changes
+
+- You can run without an output sink. Then FairRoot does not store even the persistent branches.
+
+## 18.8.0 (2022-12-16)
+
+### Breaking changes
+
+- Moved the online code into the new library Online.
+  - The special steering class [`FairRunOnline`](/api/FairRunOnline/) moved from the Base library
+    into the Online library.
+  - The source classes for MBS and LMD also moved to the new Online library.
+  - If your code uses one of these classes, link against the new target `FairRoot::Online`.
+- Dropped `CheckCXX11Features`. This was also released in 18.6.8 and 18.4.8.
+  - FairRoot needs a recent compiler that fully supports C++17.
+  - Remove these lines from your `CMakeLists.txt`:
+    ```cmake
+    Set(CheckSrcDir "${FAIRROOTPATH}/share/fairbase/cmake/checks")
+    include(CheckCXX11Features)
+    IF(HAS_CXX11_SHAREDPOINTER)
+      Add_Definitions(-DHAS_SHAREDPOINTER)
+    ENDIF(HAS_CXX11_SHAREDPOINTER)
+    ```
+  - If your C++ code depends on `HAS_SHAREDPOINTER`, rewrite it.
+  - If your CMake code depends on one of the `HAS_CXX11_*` variables, rewrite it.
+  - If your code has specific C++ needs, consider the CMake command `target_compile_features()`.
+- Dropped `CHECK_EXTERNAL_PACKAGE_INSTALL_DIR`.
+  - Remove it from your `CMakeLists.txt`.
+- Dropped the CMake option `USE_PATH_INFO`. It was an anti-pattern. Do not use it.
+- Dropped `ROOT_GENERATE_ROOTMAP`. It was for ROOT 5.x.
+  - Rewrite your build system if you still use it.
+- [`FairRootManager::GetTreeName()`](/api/FairRootManager/#GetTreeName) and
+  [`GetFolderName()`](/api/FairRootManager/#GetFolderName) return `const char*` now. Do **not**
+  `delete` the returned pointer.
+- [`FairRunSim::SetSimulationConfig()`](/api/FairRunSim/#SetSimulationConfig) takes a `unique_ptr`
+  now, not a raw pointer with unknown ownership.
+- Some headers include fewer other headers now. You might have to add some `#include` lines to your
+  code.
+- Added the new build switch `BUILD_BASEMQ`. It controls whether `FairRoot::BaseMQ` and the targets
+  that depend on it (`FairRoot::FairMQ` and `FairRoot::ParMQ`) are built. It is on by default, and
+  it now **requires** its external packages FairMQ and Boost.
+- The Boost serialization support for [`FairTimeStamp`](/api/FairTimeStamp/),
+  [`FairHit`](/api/FairHit/) and [`FairMCPoint`](/api/FairMCPoint/) moved to the target
+  `FairRoot::BaseMQ`, so that `FairRoot::Base` does not depend on Boost.Serialization. To get the
+  Boost serialization support of before, include one of the new headers, for example for `FairHit`:
+  ```cpp
+  #include <FairHit.h>
+  #include <FairHitBoostSerializationSupport.h>
+  ```
+  The header `FairBoostSerializationSupport.h` includes all support headers for the classes.
+
+### Deprecations
+
+This release of FairRoot deprecates many APIs for different reasons. If you require some API, file
+an issue, so that we can see how to handle this.
+
+- Deprecated MbsAPI.
+  - This release deprecates MbsAPI.
+    - FairRoot 19 disables it by default.
+    - We plan to remove it completely in FairRoot 20.
+  - If you need it, speak up NOW.
+- Deprecated some APIs that work like singletons:
+  - [`FairRunAnaProof::Instance()`](/api/FairRunAnaProof/#Instance): keep a pointer to the object
+    after you make it in your code.
+  - [`FairRadGridManager::Instance()`](/api/FairRadGridManager/#Instance): consider the method
+    [`GetRadGridMan()`](/api/FairMCApplication/#GetRadGridMan) of [`FairMCApplication`](/api/FairMCApplication/).
+  - [`FairRadMapManager::Instance()`](/api/FairRadMapManager/#Instance),
+    [`FairRadLenManager::Instance()`](/api/FairRadLenManager/#Instance)
+  - [`FairGeaneApplication::Instance()`](/api/FairGeaneApplication/#Instance)
+- Deprecated some other APIs:
+  - [`FairGeoVector::round`](/api/FairGeoVector/#round) did not work and never did anything.
+  - `FairTask::*InputPersistance` ([`SetInputPersistance()`](/api/FairTask/#SetInputPersistance),
+    [`CheckInputPersistance()`](/api/FairTask/#CheckInputPersistance)): there is no getter for
+    `fInputPersistance`, no other code in FairRoot uses the setters, and we know of nobody who uses
+    it.
+  - [`FairFieldFactory::fCreator`](/api/FairFieldFactory/#fCreator) points to `this`. The current
+    code sets it to `nullptr`
+    ([FairFieldFactory.cxx](/source/fairroot/base/field/FairFieldFactory.cxx/#L19-L23)).
+  - [`FairRootManager::FillEventHeader`](/api/FairRootManager/#FillEventHeader) only calls
+    [`FairSource::FillEventHeader`](/api/FairSource/#FillEventHeader).
+  - [`FairModule::ConstructASCIIGeometry(T*, TString, U*)`](/api/FairModule/#ConstructASCIIGeometry-2):
+    use [`FairModule::ConstructASCIIGeometry(TString)`](/api/FairModule/#ConstructASCIIGeometry-3)
+    instead.
+- Many items were already deprecated in earlier versions. This release marks them with C++14
+  deprecation warnings, and schedules their removal for v20.
+- Deprecated the DataMatch library.
+  - Contact the developers if you need it.
+  - It is scheduled for removal, without a replacement, in a future major release of FairRoot.
+
+### Other notable changes
+
+- FairRoot now exports CMake [targets](https://cmake.org/cmake/help/latest/manual/cmake-buildsystem.7.html)
+  for its libraries. Some targets have names that are different from the library file name.
+
+  | Old library name | Target name |
+  | --- | --- |
+  | TrkBase | `FairRoot::TrackBase` |
+  | FairDataMatch | `FairRoot::DataMatch` |
+  | FairTools | `FairRoot::Tools` |
+  | FairFastSim | `FairRoot::FastSim` |
+  | FairMCStepLogger | `FairRoot::MCStepLogger` |
+
+  For all other libraries, the target name is the library name with the prefix `FairRoot::`. The
+  current code also has the target `FairRoot::Generators` with the library file `Gen`
+  ([fairroot/generators/CMakeLists.txt](/repo/fairroot/generators/CMakeLists.txt#L28)).
+- The library file names are scheduled to change in 19.2 to names in the style
+  `fairroot-trackbase`. If you use the targets, you do not see this change.
+- The tests that use Geant3 are off by default, because these tests can fail by chance. To run
+  them, give `-DENABLE_GEANT3_TESTING=ON` to CMake.
+- [`FairRootManager::GetOutFile()`](/api/FairRootManager/#GetOutFile) and
+  [`GetOutTree()`](/api/FairRootManager/#GetOutTree) are not deprecated any more. They were
+  deprecated since 18.0.0.

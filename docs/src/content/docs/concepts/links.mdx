@@ -1,0 +1,233 @@
+---
+title: 'Links between data levels'
+description: 'A FairLink points from a data object to an object that it was made from. Turn links on, add them in your tasks, filter them by branch, and follow them to the MC tracks.'
+sidebar:
+  order: 8
+code:
+  - fairroot/base/event/FairLink.h
+  - fairroot/base/event/FairMultiLinkedData.h
+  - fairroot/base/event/FairMultiLinkedData.cxx
+  - fairroot/base/event/FairMultiLinkedData_Interface.cxx
+  - fairroot/base/steer/FairLinkManager.cxx
+  - fairroot/base/event/FairPrintFairLinks.cxx
+  - examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx
+  - examples/common/mcstack/FairStack.cxx
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import LinksDiagram from '../../../components/diagrams/LinksDiagram.astro';
+
+A link points from a data object to an object of an earlier level, for example from a hit to its digis. With links, you can follow a track back to its hits, digis, MC points and MC tracks. Links are off by default: turn them on in each run that needs them.
+
+<LinksDiagram />
+
+## FairLink
+
+A [`FairLink`](/api/FairLink/) names one object with five values ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L122-L127)):
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| File | The input that holds the object. -1 and 0 select the main input, a higher number selects a signal input of a mixed source. | -1 |
+| Entry | The entry (event) in the input. -1 means the current entry. | -1 |
+| Type | The branch ID of the branch that holds the object. | -1 |
+| Index | The position of the object in the `TClonesArray` of the branch. -1 means a branch with one object. | -1 |
+| Weight | A number for the strength of the relation. Equal links add their weights. | 1 |
+
+`GetCloneOfLinkData()` shows how the file and the entry select the input ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L513-L557)). The default constructor sets the values in the last column ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L130-L136)).
+
+`FairLink` keeps the file plus one in an `unsigned char`, and the type plus one in an `unsigned short`. Thus the file must be between -1 and 254, and the type between -1 and 65534. `SetFile()` and `SetType()` ignore values below -1 ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L159-L177)).
+
+| Constructor | File and entry |
+| --- | --- |
+| [`FairLink(type, index, weight = 1)`](/api/FairLink/#FairLink-2) | -1 and -1 |
+| [`FairLink(branchName, index, weight = 1)`](/api/FairLink/#FairLink-3) | -1 and -1 |
+| [`FairLink(file, entry, type, index, weight = 1)`](/api/FairLink/#FairLink-4) | As given |
+| [`FairLink(file, entry, branchName, index, weight = 1)`](/api/FairLink/#FairLink-5) | As given |
+
+The constructors with a branch name get the type from `FairRootManager::GetBranchId()`. An unknown name gives the type -1 ([FairLink.cxx](/source/fairroot/base/event/FairLink.cxx/#L19-L38)).
+
+Two links are equal when the type and the index are equal. The file and the entry count only when the right-hand link has a value other than -1. The weight does not count ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L71-L76)). The set of links of an object uses `operator<` instead. There, -1 on either side matches any file or entry ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L78-L102)). `operator<<` prints a link as `(file/entry/type/index/weight)` ([FairLink.cxx](/source/fairroot/base/event/FairLink.cxx/#L40-L44)).
+
+## The links of a data object
+
+[`FairMultiLinkedData`](/api/FairMultiLinkedData/) keeps a `std::set` of links, an entry number and some flags. The data classes do not derive from it. They derive from [`FairMultiLinkedData_Interface`](/api/FairMultiLinkedData_Interface/), which holds a pointer to a `FairMultiLinkedData`. The interface makes this object at the first change, and only when links are on:
+
+<Snippet file="fairroot/base/event/FairMultiLinkedData_Interface.cxx" start="FairMultiLinkedData* FairMultiLinkedData_Interface::CreateFairMultiLinkedData()" title="FairMultiLinkedData_Interface.cxx" />
+
+With links off, the interface makes no link set. Without a link set, the setters do nothing, and the getters return empty values ([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L77-L174)). See [Data classes](/concepts/data-classes/) for the classes that derive from the interface.
+
+## Branch IDs
+
+The type of a link is a branch ID: the position of the branch name in the [branch list](/concepts/io/#the-branch-list-and-the-file-header) of `FairRootManager`. Each new name gets the next number ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L185-L196)). Get the ID with [`GetBranchId()`](/api/FairRootManager/#GetBranchId), and the name with [`GetBranchName()`](/api/FairRootManager/#GetBranchName). `GetBranchId()` returns -1 for an unknown name ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L264-L277)).
+
+The reconstruction task of Tutorial 3 gets the ID of the digi branch for its link:
+
+<Snippet file="examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx" start="hit->AddLink(FairLink(-1," end="ipnt));" title="FairTestDetectorRecoTask.cxx" />
+
+The IDs stay the same from run to run. At the end of `Init()`, the run writes the branch list into the output file as `BranchList` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L383-L390)). The file source of the next run reads this list before the tasks start, and adds the names in their order ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L189-L209)). The new branches of the run get the next numbers.
+
+The manager remembers the ID of the branch `MCTrack` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L189-L192)), and [`GetMCTrackBranchId()`](/api/FairRootManager/#GetMCTrackBranchId) returns it. The link code never looks for links behind an MC track.
+
+:::caution[Do not write branch IDs as numbers]
+The IDs depend on the order of registration. For example, a simulation that stores trajectories registers `GeoTracks` before the stack and the detectors ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L857-L875)). Get each ID with `GetBranchId()` or `GetMCTrackBranchId()`.
+:::
+
+## Turn links on
+
+Links are off by default ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L90)). Turn them on in the macro of each run that adds links. The digitization macro of Tutorial 3 does it after it makes the run:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="FairRunAna run{};" end="run.SetUseFairLinks(kTRUE);" title="run_digi.C" />
+
+[`FairRun::SetUseFairLinks()`](/api/FairRun/#SetUseFairLinks) gives the flag to `FairRootManager` ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L170)).
+
+Turn links on in the simulation too. `FairStack` then gives each MC point a link to its MC track when it corrects the track index ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L288-L294)). The simulation of Tutorial 3 does this ([run_sim.C](/source/examples/advanced/Tutorial3/macro/run_sim.C/#L49)).
+
+This does not work on the worker threads of multithreaded Geant4. `CloneForWorker()` does not copy
+the flag, and the I/O manager of each thread starts with links off
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). Thus the MC
+points in the worker files have no links, see [Limits of MT mode](/simulation/geant4-mt/#limits-of-mt-mode).
+
+## Add links in a task
+
+Call `AddLink()` on the new object, with a link to each object that it comes from. The digitizer of Tutorial 3 makes one digi for each MC point, and links the digi to its point:
+
+<Snippet file="examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx" start="FairTestDetectorDigi* digi = new" end="digi->AddLink(" title="FairTestDetectorDigiTask.cxx" mark="digi->AddLink" />
+
+The link uses the current entry, `FairRootManager::GetEntryNr()`, and the branch name `FairTestDetectorPoint`. With `bypass` false (the default), [`FairMultiLinkedData::AddLink()`](/api/FairMultiLinkedData/#AddLink) does three things ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L117-L183)):
+
+1. It multiplies the weight of the link by `mult`, which is 1 by default.
+2. It calls `InsertLink()`. This function drops the link if the link manager ignores its type. If the set has an equal link, it adds the new weight to that link. If not, it inserts the new link.
+3. If history is on, it calls `InsertHistory()`, which copies the links of the target object into the set.
+
+<Snippet file="fairroot/base/event/FairMultiLinkedData.cxx" start="void FairMultiLinkedData::InsertLink(FairLink link)" title="FairMultiLinkedData.cxx" />
+
+[`FairMultiLinkedData_Interface::AddLink()`](/api/FairMultiLinkedData_Interface/#AddLink) takes only the link. The other setters of the interface:
+
+- [`SetLink()`](/api/FairMultiLinkedData_Interface/#SetLink) removes all links, and then adds one link in the same way as `AddLink()` ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L100-L106)).
+- [`AddLinks()`](/api/FairMultiLinkedData_Interface/#AddLinks) adds all links of a `FairMultiLinkedData`.
+- [`ResetLinks()`](/api/FairMultiLinkedData_Interface/#ResetLinks) removes all links.
+
+### History
+
+History is on by default ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L25-L33)). With history, the links go through all levels. A digi gets the MC track links of its MC points. A hit gets links to its digis, and through them to the MC points and the MC tracks.
+
+`InsertHistory()` looks for the target object in the memory of the current event. It copies the links of the target only when all of these conditions are true ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L202-L253)):
+
+- The type is a branch ID, and not the ID of the `MCTrack` branch.
+- The branch name has no dot. Event headers have one, for example `MCEventHeader.`.
+- The entry of the link is -1 or the current entry.
+- `GetObject()` finds the branch, and the index is in the range of its `TClonesArray`. For index -1, the branch holds one object.
+- The target object derives from `FairMultiLinkedData_Interface`.
+
+The copied links keep their weights, and equal links add up. With weight 1 on each link, the weight of an MC track link is the number of paths to that MC track.
+
+`AddLink()` calls `InsertHistory()` after `InsertLink()`, also when the link manager drops the link itself ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L133-L140)). A dropped level still passes its links on.
+
+### Entry numbers for time-based data
+
+In a time-based run, a task gets data from other entries. History does not apply to them, because it needs the current entry. For this case, each object has an entry number: a link to the object itself. `FairTSBufferFunctional` sets it when it reads an object ([FairTSBufferFunctional.cxx](/source/fairroot/base/steer/FairTSBufferFunctional.cxx/#L258-L271)). The time-based reconstruction of Tutorial 3 uses it to link each hit to its digi:
+
+<Snippet file="examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx" start="hit->AddLink(digi->GetEntryNr());" end="hit->AddInterfaceData(digi);" title="FairTestDetectorTimeRecoTask.cxx" />
+
+[`AddInterfaceData()`](/api/FairMultiLinkedData_Interface/#AddInterfaceData) turns history off, adds the entry number of the other object, and copies its links ([FairMultiLinkedData_Interface.cxx](/source/fairroot/base/event/FairMultiLinkedData_Interface.cxx/#L176-L189)). In this example, the link to the digi goes in twice, so its weight is 2.
+
+:::caution[AddInterfaceData() and history]
+After the call, history stays off for the object. With links off, the last line of the function uses a null pointer. Call it only in runs with links on.
+:::
+
+## Filter links by branch
+
+[`FairLinkManager`](/api/FairLinkManager/) decides which link types `InsertLink()` keeps. Each run owns one link manager ([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L217)), and [`FairLinkManager::Instance()`](/api/FairLinkManager/#Instance) returns it. The manager has two modes:
+
+| Mode | How it starts | A link stays when its type |
+| --- | --- | --- |
+| Ignore list (default) | [`AddIgnoreType(type)`](/api/FairLinkManager/#AddIgnoreType) adds a type to the list | is not on the list |
+| Include list | The first [`AddIncludeType(type)`](/api/FairLinkManager/#AddIncludeType) clears the list and changes the mode | is on the list |
+
+<Snippet file="fairroot/base/steer/FairLinkManager.cxx" lines="46-72" title="FairLinkManager.cxx" />
+
+`Register()` puts each memory-only branch on the ignore list ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L175-L177)). `RegisterAny()` does not. In include mode, `AddIgnoreType()` does nothing, and the manager drops each type that is not on the include list.
+
+The digitization and reconstruction macros of Tutorial 3 change to include mode before `Init()`:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="run.SetUseFairLinks(kTRUE);" end="AddIncludeType(1);" title="run_digi.C" />
+
+ID 0 is the first branch of the input file. The simulation of Tutorial 3 stores trajectories ([run_sim.C](/source/examples/advanced/Tutorial3/macro/run_sim.C/#L110)), so by the order of registration, its branch 0 is `GeoTracks`. The include list then keeps only links to `GeoTracks`. The links to MC points, digis and MC tracks have other types, so the digis and hits of these macros get no links. Do not use fixed numbers. Add the types after `Init()`, when the manager knows all branch IDs:
+
+```cpp title="run_digi.C"
+run.Init();
+auto ioman = FairRootManager::Instance();
+FairLinkManager::Instance()->AddIncludeType(ioman->GetMCTrackBranchId());
+FairLinkManager::Instance()->AddIncludeType(ioman->GetBranchId("FairTestDetectorPoint"));
+run.Run();
+```
+
+The tasks add their links in `Exec()`, so a change after `Init()` applies to all events.
+
+## Read links
+
+| Function of the interface | Returns |
+| --- | --- |
+| [`GetNLinks()`](/api/FairMultiLinkedData_Interface/#GetNLinks) | The number of links |
+| [`GetLink(pos)`](/api/FairMultiLinkedData_Interface/#GetLink) | The link at position `pos` of the sorted set |
+| [`GetLinks()`](/api/FairMultiLinkedData_Interface/#GetLinks) | A copy of the set |
+| [`GetLinksWithType(type)`](/api/FairMultiLinkedData_Interface/#GetLinksWithType) | A `FairMultiLinkedData` with the links to one branch |
+| [`GetSortedMCTracks()`](/api/FairMultiLinkedData_Interface/#GetSortedMCTracks) | The links to the `MCTrack` branch, largest weight first |
+| [`GetEntryNr()`](/api/FairMultiLinkedData_Interface/#GetEntryNr) | The entry number of the object |
+| [`GetPointerToLinks()`](/api/FairMultiLinkedData_Interface/#GetPointerToLinks) | The `FairMultiLinkedData`, or `nullptr` without links |
+
+`GetLink(pos)` steps through the set from the start ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L82-L92)). For a loop over all links, use `GetLinks()`.
+
+`GetLinksWithType()` and `GetSortedMCTracks()` put each link through `InsertLink()`. Thus the link manager of the current run also filters their result ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L278-L287)).
+
+A link to the current entry points into a branch in memory. Keep the arrays that your task gets with `GetObject()` in `Init()`, and get the object by its index:
+
+```cpp title="MyAnaTask.cxx"
+// In Init(): fDigis = static_cast<TClonesArray*>(ioman->GetObject("FairTestDetectorDigi"));
+//            fDigiId = ioman->GetBranchId("FairTestDetectorDigi");
+auto digiLinks = hit->GetLinksWithType(fDigiId);
+for (auto const& link : digiLinks.GetLinks()) {
+    auto digi = static_cast<FairTestDetectorDigi*>(fDigis->At(link.GetIndex()));
+    // use the digi
+}
+```
+
+[`FairRootManager::GetCloneOfLinkData()`](/api/FairRootManager/#GetCloneOfLinkData) reads the object from the input tree, also from another entry, and returns a copy ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L497-L577)). It reads the entry of the link and then reads the old entry again. Delete the copy after use. For a branch that is not in the input tree, it returns `nullptr`.
+
+## Print links
+
+Add [`FairPrintFairLinks`](/api/FairPrintFairLinks/) to a run to log the links of each event:
+
+```cpp
+auto printLinks = new FairPrintFairLinks();
+printLinks->AddBranchName("FairTestDetectorHit");
+run.AddTask(printLinks);
+```
+
+Without `AddBranchName()`, the task reads all branches. It skips each name that contains `_link`, `MCTrack`, `.`, `GeoTracks`, `Header`, `Info`, `ID`, `PidAlgo` or `Riemann`, also a name that you give ([FairPrintFairLinks.cxx](/source/fairroot/base/event/FairPrintFairLinks.cxx/#L47-L79)). `Init()` logs the full branch list, with one `ID : name` line for each branch. `Exec()` logs each object that has links:
+
+<Snippet file="fairroot/base/event/FairPrintFairLinks.cxx" start="void FairPrintFairLinks::Exec(Option_t*)" title="FairPrintFairLinks.cxx" />
+
+An object prints as its entry number, an arrow and its links in brackets ([FairMultiLinkedData.h](/source/fairroot/base/event/FairMultiLinkedData.h/#L117-L126)). Each link prints as `(file/entry/type/index/weight)`.
+
+:::caution
+The task casts each branch to `TClonesArray` in `Init()` ([FairPrintFairLinks.cxx](/source/fairroot/base/event/FairPrintFairLinks.cxx/#L73-L74)), and each object to `FairMultiLinkedData_Interface` in `Exec()` ([FairPrintFairLinks.cxx](/source/fairroot/base/event/FairPrintFairLinks.cxx/#L101)). It does not check the types. Give it only branches of such objects.
+:::
+
+## Links in files and messages
+
+The links are members of the data object, so the sink writes them with it. `FairMultiLinkedData_Interface` does not mark its pointer as transient ([FairMultiLinkedData_Interface.h](/source/fairroot/base/event/FairMultiLinkedData_Interface.h/#L86)). In `FairMultiLinkedData`, the links and the entry number go into the file, and the flags do not ([FairMultiLinkedData.h](/source/fairroot/base/event/FairMultiLinkedData.h/#L134-L152)).
+
+The Boost support headers of `FairRoot::BaseMQ` do not write the links. An object that crosses a FairMQ channel with Boost serialization arrives without links ([FairTimeStampBoostSerializationSupport.h](/source/fairroot/basemq/FairTimeStampBoostSerializationSupport.h/#L18-L30)). `FairLink` itself has a `serialize()` function for Boost ([FairLink.h](/source/fairroot/base/event/FairLink.h/#L112-L120)). See [Serialize FairRoot data for messages](/online/serialization/).
+
+## The datamatch library
+
+The deprecated datamatch library (`FairMCMatch` and its tasks) copies the links of each event into tables and searches them. In the current code, its tables stay empty. See [Match reconstructed data to MC truth](/reconstruction/mc-matching/).
+
+## Related pages
+
+- [Match reconstructed data to MC truth](/reconstruction/mc-matching/): use the MC track links to measure the reconstruction.
+- [Data classes](/concepts/data-classes/): the base classes that hold the links.
+- [Branches, sources and sinks](/concepts/io/): branch names, memory-only branches and the branch list.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): buffers and entry numbers.
+- [Tutorial 3](/examples/tutorial3/): the example that turns links on in its main macros.

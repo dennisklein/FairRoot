@@ -1,0 +1,96 @@
+---
+// Three ways into the docs, below the hero of the home page.
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const cols = [
+  {
+    label: 'Start',
+    links: [
+      ['Install FairRoot', '/start/install/'],
+      ['Your first simulation', '/start/first-simulation/'],
+      ['Use FairRoot in a CMake project', '/start/cmake/'],
+    ],
+  },
+  {
+    label: 'Understand',
+    links: [
+      ['Tasks', '/concepts/tasks/'],
+      ['Branches, sources and sinks', '/concepts/io/'],
+      ['How a simulation runs', '/simulation/overview/'],
+    ],
+  },
+  {
+    label: 'Build',
+    links: [
+      ['Write a detector', '/simulation/detectors/'],
+      ['Parameters and the runtime database', '/concepts/parameters/'],
+      ['Time-based reconstruction', '/reconstruction/time-based/'],
+    ],
+  },
+];
+---
+
+<nav class="fr-paths not-content" aria-label="Ways into the documentation">
+  {
+    cols.map((c) => (
+      <div>
+        <p class="fr-eyebrow">{c.label}</p>
+        {c.links.map(([t, l]) => (
+          <a href={base + l}>{t}</a>
+        ))}
+      </div>
+    ))
+  }
+</nav>
+
+<style>
+  .fr-paths {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-top: 1px solid var(--fr-rule);
+    border-bottom: 1px solid var(--fr-rule);
+    margin-block: 0 2.5rem;
+  }
+  .fr-paths > div {
+    padding: 1.4rem 1.5rem;
+    border-inline-end: 1px solid var(--fr-rule);
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+  .fr-paths > div:first-child {
+    padding-inline-start: 0;
+  }
+  .fr-paths > div:last-child {
+    border-inline-end: 0;
+  }
+  .fr-paths .fr-eyebrow {
+    margin-bottom: 0.35rem;
+  }
+  .fr-paths a {
+    color: var(--fr-ink);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.975rem;
+  }
+  .fr-paths a::after {
+    content: ' →';
+    color: var(--fr-ink-3);
+  }
+  .fr-paths a:hover {
+    color: var(--fr-link);
+  }
+  @media (max-width: 48rem) {
+    .fr-paths {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .fr-paths > div {
+      padding-inline: 0;
+      border-inline-end: 0;
+      border-bottom: 1px solid var(--fr-rule);
+    }
+    .fr-paths > div:last-child {
+      border-bottom: 0;
+    }
+  }
+</style>

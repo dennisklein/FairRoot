@@ -1,0 +1,320 @@
+---
+title: 'Parameters and the runtime database'
+description: 'Parameter containers hold calibration, geometry and settings. The runtime database makes them, fills them for each run ID from up to two inputs, and writes them to an output.'
+sidebar:
+  order: 5
+code: [fairroot/parbase/FairRuntimeDb.h, fairroot/parbase/FairRuntimeDb.cxx, fairroot/parbase/FairParSet.h, fairroot/parbase/FairParSet.cxx, fairroot/parbase/FairParGenericSet.h, fairroot/parbase/FairContFact.h, fairroot/parbase/FairContFact.cxx, fairroot/parbase/FairParRootFileIo.h, fairroot/parbase/FairParAsciiFileIo.h, fairroot/parbase/FairDetParRootFileIo.cxx, fairroot/parbase/FairRtdbRun.h]
+---
+
+import RuntimeDbExplainer from '../../../components/diagrams/RuntimeDbExplainer.astro';
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A parameter container holds values that a task or a detector needs in addition to the event data. Examples are
+calibration constants, digitization settings and the geometry of the simulation. The runtime database,
+`FairRuntimeDb`, makes the containers, fills them for the run ID of the data, and writes them to a parameter file.
+Thus a task always gets the parameters that belong to its events.
+
+<RuntimeDbExplainer />
+
+## The parts
+
+| Part | Class | What it does |
+| --- | --- | --- |
+| Runtime database | [`FairRuntimeDb`](/api/FairRuntimeDb/) | Keeps the list of parameter containers, the list of run IDs with their versions, up to two inputs and one output. |
+| Parameter container | [`FairParSet`](/api/FairParSet/), in practice [`FairParGenericSet`](/api/FairParGenericSet/) | Holds the values. Reads itself from an input and writes itself to the output. |
+| Container factory | [`FairContFact`](/api/FairContFact/) | Knows the container names of one library and makes the container objects. |
+| Input and output | [`FairParRootFileIo`](/api/FairParRootFileIo/), [`FairParAsciiFileIo`](/api/FairParAsciiFileIo/) | A ROOT file, or a text file in the [ASCII parameter format](/reference/par-format/). |
+| Run | [`FairRtdbRun`](/api/FairRtdbRun/) | Gives the version of each container for one run ID. |
+
+The runtime database is a singleton. [`FairRuntimeDb::instance()`](/api/FairRuntimeDb/#instance) makes it at the
+first call. Each run takes this instance in its constructor ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L44)),
+and [`GetRuntimeDb()`](/api/FairRun/#GetRuntimeDb) returns it. The master run deletes the runtime database in its
+destructor ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L99-L102)).
+
+## Use a container in a task
+
+A task requests its containers in [`SetParContainers()`](/api/FairTask/#SetParContainers) and reads the values in
+[`Init()`](/api/FairTask/#Init). The digitizer of Tutorial 2 gets its container like this:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx" start="void FairTutorialDet2Digitizer::SetParContainers()" />
+
+[`getContainer()`](/api/FairRuntimeDb/#getContainer) returns the pointer at once, but the values are not there yet.
+The runtime database fills the container later, in [`initContainers()`](/api/FairRuntimeDb/#initContainers).
+`FairRunAna::Init()` does these steps ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L238)):
+
+<Steps>
+
+1. It requests `FairGeoParSet` if you gave no geometry file. It always requests `FairBaseParSet`. These
+   containers hold the geometry and the settings of the simulation.
+2. It gets the run ID from the event header of the input. Without an input file, it makes a new run ID.
+3. It calls `SetParContainers()` of all tasks. Your task requests its containers here.
+4. It calls `initContainers()` with the run ID. This call fills all containers in the list. With an input file,
+   `FairRunAna` also calls `initContainers()` once before step 3.
+5. It calls `Init()` of all tasks. The values in the containers are valid now.
+
+</Steps>
+
+A simulation does the same for its tasks and its modules. `FairMCApplication` calls `SetParContainers()` of the
+tasks and of each module, and then `initContainers()` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1215)).
+A module reads its containers in `InitParContainers()`. The application calls this function before
+`ConstructGeometry()` of the module ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L767)).
+
+:::caution
+Request each container in `SetParContainers()`. A container that you request after the last `initContainers()` call
+stays empty. The factory makes it, but the runtime database fills it only at the next `initContainers()` call.
+For this reason, `read_digis.C` of Tutorial 2 requests its container before `Init()`.
+:::
+
+### When the container is not found
+
+Two errors can occur, and the run does not stop for either of them:
+
+- **No factory knows the name.** `getContainer()` logs `Container <name> not created!` and returns `nullptr`
+  ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L199-L218)). Check the pointer.
+- **No input has the container.** `init()` returns `false`, and the runtime database logs
+  `<class>(<name>)::init(): failed` ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L548-L563)).
+  `FairRunAna` logs `FairRunAna::Init: fRtdb->initContainers failed` and continues
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L198-L201)). The values in the container are
+  then not valid.
+
+Thus check the values in `Init()`, and return `kERROR` or `kFATAL` if they are not valid. An invalid start value
+in the constructor makes this check easy. `FairTutorialDet2DigiPar` sets the number of stations to -1.
+
+### A new run ID
+
+`FairRunAna` compares the run ID of each event with the current run ID
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L568-L592)). When it changes, `FairRunAna` calls
+`initContainers()` with the new run ID and then [`ReInit()`](/api/FairTask/#ReInit) of all tasks. The container
+objects stay the same, but their values can change. If your task copies values from a container in `Init()`, copy
+them again in `ReInit()`. See [When the run ID changes](/concepts/event-headers/#when-the-run-id-changes).
+
+Two settings stop the new reads:
+
+- [`FairRunAna::SetContainerStatic()`](/api/FairRunAna/#SetContainerStatic): `FairRunAna` ignores the change of the
+  run ID. It calls neither `initContainers()` nor `ReInit()`.
+- [`FairRuntimeDb::setContainersStatic()`](/api/FairRuntimeDb/#setContainersStatic) or
+  [`FairParSet::setStatic()`](/api/FairParSet/#setStatic): `initContainers()` skips the static containers.
+
+## How the runtime database fills a container
+
+[`initContainers(runId)`](/source/fairroot/parbase/FairRuntimeDb.cxx/#L464-L564) does these steps:
+
+1. If the run ID is not the current run ID, it writes the changed containers of the current run to the output.
+2. It selects the [`FairRtdbRun`](/api/FairRtdbRun/) of the run ID. If there is none, it adds one.
+3. Each input reads its version table for the run ID. A ROOT file has a table, a text file has none.
+4. It logs `initialisation for run id <run ID>` and the inputs.
+5. For each container that is not static, it calls `init()`.
+
+[`FairParSet::init()`](/api/FairParSet/#init) tries the first input. Only when the first input fails, it tries
+the second input:
+
+<Snippet file="fairroot/parbase/FairParSet.cxx" start="Bool_t FairParSet::init()" />
+
+This order has three results:
+
+- **The first input wins.** Use the input with the preferred values as the first input. The comments in
+  `read_digis.C` give an example: to replace a container that the ROOT file has, make the ASCII file the first input.
+- **The second input must have the complete container.** The runtime database does not combine the values of one
+  container from two inputs.
+- **Each failed input logs a warning.** The line is `<class>(<name>)::init(io) failed for first input` or
+  `... for second input`. A missing input gives no line.
+
+## Parameter containers
+
+### FairParSet
+
+[`FairParSet`](/api/FairParSet/) is the base class of all containers. The runtime database uses these members:
+
+| Member | What it does |
+| --- | --- |
+| [`GetName()`](/api/FairParSet/#GetName) | The name is the key of the container in the runtime database and in the files. |
+| [`init()`](/api/FairParSet/#init), [`init(FairParIo*)`](/api/FairParSet/#init-2) | Fill the container from the inputs, or from one input. The base class returns `kFALSE` for one input. |
+| [`write()`](/api/FairParSet/#write), [`write(FairParIo*)`](/api/FairParSet/#write-2) | Write the container to the output. The return value is the version, or -1 after an error. |
+| [`setChanged()`](/api/FairParSet/#setChanged), [`hasChanged()`](/api/FairParSet/#hasChanged) | The runtime database writes only changed containers. Each successful read sets the flag. `saveOutput()` clears it, also when no output is set. |
+| [`setStatic()`](/api/FairParSet/#setStatic), [`isStatic()`](/api/FairParSet/#isStatic) | `initContainers()` does not fill a static container. |
+| [`getInputVersion(i)`](/api/FairParSet/#getInputVersion) | The version that input `i` (1 or 2) gave, or -1 if the container does not come from this input. |
+| [`setAuthor()`](/api/FairParSet/#setAuthor), [`setDescription()`](/api/FairParSet/#setDescription) | Free text. The ASCII format stores it. |
+| [`clear()`](/api/FairParSet/#clear) | Makes the container not static, resets its input versions and clears the changed flag ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L111-L126)). |
+
+### FairParGenericSet: the usual way
+
+All containers in FairRoot, in its examples and in its templates derive from
+[`FairParGenericSet`](/api/FairParGenericSet/). A container of this kind implements two functions:
+
+- [`putParams(FairParamList*)`](/api/FairParGenericSet/#putParams) adds each value to the list.
+- [`getParams(FairParamList*)`](/api/FairParGenericSet/#getParams) fills each data member from the list. It returns
+  `kFALSE` when a value is missing, so that the runtime database can try the second input.
+
+The digitization container of Tutorial 2 has a number, an integer array and a float array:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.h" start="class FairTutorialDet2DigiPar : public FairParGenericSet" />
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2DigiPar.cxx" start="Bool_t FairTutorialDet2DigiPar::getParams(FairParamList* l)" />
+
+`FairParGenericSet` reads and writes through the I/O class with the name `FairGenericParIo`
+([FairParGenericSet.cxx](/source/fairroot/parbase/FairParGenericSet.cxx/#L38-L56)). Each input and output adds
+this class when it opens: [`FairGenericParRootFileIo`](/api/FairGenericParRootFileIo/) for a ROOT file and
+[`FairGenericParAsciiFileIo`](/api/FairGenericParAsciiFileIo/) for a text file. The two classes use different code:
+
+| File | How the I/O class reads and writes the container |
+| --- | --- |
+| Text file | Through `getParams()` and `putParams()`, see [ASCII parameter file format](/reference/par-format/). |
+| ROOT file | With the ROOT streamer of the class ([FairDetParRootFileIo.cxx](/source/fairroot/parbase/FairDetParRootFileIo.cxx/#L48-L97)). The I/O class does not call `getParams()` and `putParams()`. |
+
+For the ROOT file, the class needs a dictionary entry in the `LinkDef.h` file of your library. Its data members
+must be persistent, that is, without a `//!` comment. Increase the version in `ClassDef` when you change the data
+members.
+
+A class can also derive from `FairParSet` directly and implement `init(FairParIo*)` and `write(FairParIo*)`. It
+then needs its own I/O classes, derived from [`FairDetParIo`](/api/FairDetParIo/). Its factory adds them to each
+input and output in [`activateParIo()`](/api/FairContFact/#activateParIo). No class in the repository does this.
+
+## Container factories
+
+A container factory knows the names of the containers in one library and makes the container objects. The factory
+of Tutorial 2 is a static object in the library:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx" start="static FairTutorialDet2ContFact gFairTutorialDet2ContFact;" end="/^}/" />
+
+The constructor runs when the program loads the library. The base constructor `FairContFact(name, title)` registers the
+factory with the runtime database ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)).
+Each `FairContainer` gives the name, the title and the default context of one container. In
+[`createContainer()`](/api/FairContFact/#createContainer), the factory calls the constructor of the container:
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2ContFact.cxx" start="FairParSet* FairTutorialDet2ContFact::createContainer(FairContainer* c)" />
+
+[`FairRuntimeDb::getContainer(name)`](/api/FairRuntimeDb/#getContainer) asks all factories in the order in which
+they registered. The factory that knows the name does this
+([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L182-L209)):
+
+1. It looks for a container with this name in the runtime database. If it finds one, it returns it. Thus each
+   container exists once, and all tasks share it.
+2. Otherwise, it calls `createContainer()` and adds the new container to the runtime database.
+
+### Contexts
+
+A context selects a variant of a container. Each `FairContainer` has a list of accepted contexts, and the first one
+is the default. [`FairRuntimeDb::addParamContext()`](/api/FairRuntimeDb/#addParamContext) sets the actual context
+in all containers that accept it. If the actual context is not the default context, the container name gets the
+suffix `_<context>` ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L121-L135)). The block in the
+text file and the key in the ROOT file then have this name too. The containers in the repository accept only their
+default context.
+
+Call `addParamContext()` before you request the containers. When the factory makes a container, it sets the default
+context if the container has no context yet ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L200-L202)). The
+container ignores a later setting and logs a warning ([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L67-L85)).
+`addParamContext()` logs the error `Unknown context` also when it found the context
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L146-L160)). Use its return value instead.
+
+## Inputs and the output
+
+| | [`FairParRootFileIo`](/api/FairParRootFileIo/) | [`FairParAsciiFileIo`](/api/FairParAsciiFileIo/) |
+| --- | --- | --- |
+| File | ROOT file | Text file, see [ASCII parameter file format](/reference/par-format/) |
+| Open to read | `open(name)` (option `"READ"`) | `open(name, "in")` |
+| Open to write | `open(name, "RECREATE")` or `"UPDATE"`. With the constructor argument `true`, `open()` ignores the option. It uses `"UPDATE"` for a file that exists and `"RECREATE"` otherwise ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L122-L134)). | `open(name, "out")`. This removes the old content of the file. |
+| Several files | `open(TList*)` merges them into `allParams_<date>_<time>.root`, in the folder of the first file that exists. | `open(TList*)` merges them with `cat` into `all_<pid>.par` in the working directory. |
+| Versions | One version table for each run ID | No versions. A container that the file has gets the version 1. |
+
+The `create_digis.C` macro of Tutorial 2 uses one input of each type:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start="// Init Simulation Parameters from Root File" end="rtdb->print();" />
+
+Keep these rules:
+
+- Open the file before you call [`setFirstInput()`](/api/FairRuntimeDb/#setFirstInput),
+  [`setSecondInput()`](/api/FairRuntimeDb/#setSecondInput) or [`setOutput()`](/api/FairRuntimeDb/#setOutput).
+  These functions check the file. If it is not open, they log `no connection to input` or `no connection to output`
+  and return `false`.
+- If `open()` cannot open the file, it calls ROOT's `Fatal()`, which stops the program
+  ([FairParAsciiFileIo.cxx](/source/fairroot/parbase/FairParAsciiFileIo.cxx/#L47-L73)).
+- One object can be the first input and the output. `create_digis.C` does this with the ROOT file. Open the file
+  with `"UPDATE"` then.
+
+## Write the parameters
+
+[`saveOutput()`](/api/FairRuntimeDb/#saveOutput) writes the containers of the current run ID to the output
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L385-L462)):
+
+- It writes only containers for which `hasChanged()` is true. Then it clears the flag of each container, also when
+  no output is set ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L450-L452)).
+- In a ROOT file, each write adds a new cycle of the key with the container name. The cycle number is the version.
+- A ROOT output does not store the same container twice. If the container comes from the first input and this input
+  is also the output, the run ID gets the existing version. This is also true if you changed the values. The same
+  occurs if another run ID already has the same input versions ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L341-L383)).
+- If it wrote a container to a ROOT output, it then writes the version tables of all run IDs
+  ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L303-L315)).
+- It logs `***  <name> written to ROOT file   version: <n>`, or `***  <name> written to output` for a text file.
+
+A simulation macro sets the output after `Init()` and saves at once. This part of `run_tutorial2.C` writes the
+containers that the simulation filled:
+
+<Snippet file="examples/simulation/Tutorial2/macros/run_tutorial2.C" start="// -----   Runtime database" end="rtdb->print();" />
+
+`FairRunSim::Init()` fills `FairBaseParSet` and `FairGeoParSet` and marks them as changed
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L244-L253)). `FairModule::ConstructASCIIGeometry()`
+does the same for the geometry container of a detector
+([FairModule.h](/source/fairroot/base/sim/FairModule.h/#L241-L242)). If you fill a container in your own code, call
+`setChanged()`. The FairRoot code also sets the first input version to the run ID:
+
+```cpp
+par->setChanged();
+par->setInputVersion(runId, 1);
+```
+
+Do not set the first input version if the first input is also the output and the container has no second input
+version. `findOutputVersion()` then uses the run ID as the ROOT version and does not write the container
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L368-L370)).
+
+[`closeOutput()`](/api/FairRuntimeDb/#closeOutput) calls `saveOutput()` again if the output is auto-writable, which
+is the default. The destructor of the runtime database closes the inputs first and then the output
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L99-L122)). Thus, if one object is the first input
+and the output, the destructor closes its file before this last save. Call `saveOutput()` yourself in this case.
+
+### Run IDs and versions in a ROOT file
+
+A ROOT parameter file holds each container with its name as the key. Each write adds a version, that is, a cycle
+of the key. The file also holds one [`FairRtdbRun`](/api/FairRtdbRun/) for each run ID, with the run ID as its name.
+This object gives the version of each container for the run ID.
+
+For a run ID, the ROOT input first reads the `FairRtdbRun` with this name
+([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L67-L77)). Then it reads each container in
+the version that this table gives ([FairDetParRootFileIo.cxx](/source/fairroot/parbase/FairDetParRootFileIo.cxx/#L48-L77)).
+If the file has no entry for the run ID, the input logs
+`FairParRootFile::readVersions(<file>): Reading run <run ID> failed` and fills no container.
+
+Thus a reconstruction must use the parameter file of the simulation that made its input file. The run ID in the
+event header selects the versions. One parameter file can hold the parameters of many run IDs.
+[`addRun()`](/api/FairRuntimeDb/#addRun) adds a run ID to the list, and `initContainers()` calls it for you. With a
+reference run ID, the second argument of both functions, the inputs read the versions of the reference run instead.
+
+## Print the state
+
+[`FairRuntimeDb::print()`](/api/FairRuntimeDb/#print) shows the containers, the versions of each run ID (columns
+`1st-inp`, `2nd-inp` and `output`), the inputs and the output. [`FairParSet::print()`](/api/FairParSet/#print) logs
+the versions and the flags of one container. [`FairParGenericSet::printParams()`](/api/FairParGenericSet/#printParams)
+calls `putParams()` and prints the values.
+
+## Write a new container
+
+<Steps>
+
+1. Copy the template [`templates/NewParameterContainer`](/repo/templates/NewParameterContainer/). The class derives
+   from `FairParGenericSet`. Implement `putParams()` and `getParams()` with the same parameter names.
+2. Add the class to the `LinkDef.h` file of your library, for example `#pragma link C++ class MyDigiPar+;`.
+3. Add a `FairContainer` to the constructor of your container factory, and a branch in `createContainer()`.
+4. Request the container in `SetParContainers()` of your task.
+5. Write a block for the container into an ASCII parameter file. Open the file as an input of the runtime database.
+
+</Steps>
+
+## Related pages
+
+- [ASCII parameter file format](/reference/par-format/): blocks, types and arrays of a text parameter file.
+- [Tutorial 2: digitization and parameters](/examples/tutorial2/): a container, its factory and both input types.
+- [Tasks](/concepts/tasks/): the hooks `SetParContainers()`, `Init()` and `ReInit()`.
+- [Runs](/concepts/runs/): `FairRunSim` and `FairRunAna`, which call the runtime database.
+- [Event headers and run IDs](/concepts/event-headers/): where the run ID of the data comes from.
+- [Parameters over FairMQ](/online/parameters/): parameters for FairMQ devices.
+- [Templates](/tools/templates/): the template for a new parameter container.

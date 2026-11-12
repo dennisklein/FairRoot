@@ -1,0 +1,447 @@
+---
+title: 'Primary generators'
+description: 'FairPrimaryGenerator makes the event vertex and calls its generators, which add the primary particles to the stack. FairRoot has generators for boxes, single particles, ions and files.'
+sidebar:
+  order: 6
+code: [fairroot/base/sim/FairPrimaryGenerator.h, fairroot/base/sim/FairPrimaryGenerator.cxx, fairroot/base/sim/FairGenerator.h, fairroot/generators/FairBaseMCGenerator.cxx, fairroot/generators/FairBoxGenerator.h, fairroot/generators/FairBoxGenerator.cxx, fairroot/generators/FairIonGenerator.cxx, fairroot/generators/FairYPtGenerator.cxx, fairroot/generators/FairAsciiGenerator.cxx, fairroot/generators/FairUrqmdGenerator.cxx, fairroot/base/sim/FairIon.h, fairroot/base/sim/FairMCApplication.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The primary generator makes the particles that start each event. A run has one
+[`FairPrimaryGenerator`](/api/FairPrimaryGenerator/). In each event, it makes the event vertex, calls
+each generator in its list and gives the particles to the stack.
+
+Each generator derives from [`FairGenerator`](/api/FairGenerator/). Some generators make particles
+from settings, others read the output of an event generator from a file. The generators of FairRoot
+are in the library `Gen`, with the CMake target `FairRoot::Generators`
+([CMakeLists.txt](/repo/fairroot/generators/CMakeLists.txt)), see
+[Libraries and headers](/reference/libraries/#fairrootgenerators).
+
+## Set up the primary generator
+
+Tutorial 1 uses one box generator:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="FairPrimaryGenerator* primGen = new FairPrimaryGenerator();" end="run->SetGenerator(primGen);" title="run_tutorial1.C" />
+
+<Steps>
+1. Make a `FairPrimaryGenerator` with `new`.
+2. Make each generator with `new` and set it.
+3. Give each generator to [`AddGenerator()`](/api/FairPrimaryGenerator/#AddGenerator).
+4. Give the primary generator to [`SetGenerator()`](/api/FairRunSim/#SetGenerator) of the run, before `Init()`.
+</Steps>
+
+The run deletes the primary generator ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L107-L110)),
+and the primary generator deletes its generators
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L169-L175)). Thus do
+not make them as local objects of the macro. The call `SetDebug(kTRUE)` of the tutorial has no
+effect, because the function is empty ([FairBoxGenerator.h](/source/fairroot/generators/FairBoxGenerator.h/#L117-L121)).
+
+The MC application calls `Init()` of each generator once, after the transport engine is ready
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L931)).
+`FairPrimaryGenerator::Init()` ignores the return values
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L148-L157)). At the
+end of the run, `FairPrimaryGenerator::Finish()` calls `Finish()` of each generator.
+
+## What happens in each event
+
+For each event, the transport engine calls `GeneratePrimaries()` of the MC application. This function
+calls [`GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) of the primary generator with the
+stack:
+
+<Snippet file="fairroot/base/sim/FairPrimaryGenerator.cxx" start="fEvent->Reset();" end="fTotPrim += fNTracks;" title="FairPrimaryGenerator.cxx" />
+
+1. It resets the MC event header. If there is no header, it logs a fatal error.
+2. It draws the beam angles, if you called `SetBeamAngle()`.
+3. It makes the event vertex and writes it into the header.
+4. It draws the angle of the event plane, if you called `SetEventPlane()`.
+5. It calls `ReadEvent()` of each generator, in the order of `AddGenerator()`. Each generator adds its
+   particles with `AddTrack()`.
+6. It sets the event ID, if no generator did, and the number of primaries in the header.
+
+:::caution[A failed ReadEvent() ends the process]
+If `ReadEvent()` returns `kFALSE`, `GenerateEvent()` logs `ReadEvent failed for generator <name>` and
+returns `kFALSE`. Then the MC application calls `StopRun()`, which writes the output and calls
+`exit(0)`. `FairUrqmdGenerator`, `FairShieldGenerator` and `FairEvtGenGenerator` return `kFALSE` at
+the end of their input file. See [How a simulation runs](/simulation/overview/).
+:::
+
+## Add a track
+
+A generator calls [`AddTrack()`](/api/FairPrimaryGenerator/#AddTrack) for each particle:
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `pdgid` | | PDG code |
+| `px`, `py`, `pz` | | Momentum in GeV |
+| `vx`, `vy`, `vz` | | Origin in cm, relative to the event vertex |
+| `parent` | `-1` | Index of the parent among the particles of this generator. `FairStack` does not use it. |
+| `wanttracking` | `true` | With `false`, the particle gets the tracking flag 0, see below |
+| `e` | `-9e9` | Energy. With a negative value, `AddTrack()` computes it from the mass. |
+| `tof` | `0.` | Time, which goes to the stack |
+| `weight` | `0.` | Weight, which goes to the stack |
+| `proc` | `kPPrimary` | Production process |
+
+`AddTrack()` changes the particle before it calls `PushTrack()` of the stack
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L301-L401)):
+
+- It adds the event vertex to the origin.
+- It turns the momentum by the angle of the event plane and into the beam direction.
+- It replaces each K0 and anti-K0 (PDG 311 and −311) with a K0S (310) or a K0L (130), each with the
+  probability 0.5.
+- For a PDG code that the PDG database does not know, it prints an error and drops the particle.
+  If you give an energy `e` of 0 or more, it prints a warning and keeps the particle.
+- It sets the tracking flag only if `wanttracking` and [`DoTracking()`](/api/FairPrimaryGenerator/#DoTracking)
+  are both true. See [The particle stack and MC tracks](/simulation/stack/).
+
+## The event vertex
+
+These setters of `FairPrimaryGenerator` make the event vertex:
+
+| Setter | Effect |
+| --- | --- |
+| [`SetTarget(z, dz)`](/api/FairPrimaryGenerator/#SetTarget) | Target center `z` and full thickness `dz`, in cm |
+| [`SetMultTarget(n, z, dz)`](/api/FairPrimaryGenerator/#SetMultTarget) | `n` targets at the positions in the array `z`. Each event takes one of them at random. |
+| [`SmearVertexZ(kTRUE)`](/api/FairPrimaryGenerator/#SmearVertexZ) | z uniform from `z − dz/2` to `z + dz/2` |
+| [`SmearGausVertexZ(kTRUE)`](/api/FairPrimaryGenerator/#SmearGausVertexZ) | z from a Gaussian around `z`, with the sigma `dz` |
+| [`SetBeam(x0, y0, sx, sy)`](/api/FairPrimaryGenerator/#SetBeam) | Vertex x and y at `x0` and `y0`, and the widths for the smearing |
+| [`SmearGausVertexXY(kTRUE)`](/api/FairPrimaryGenerator/#SmearGausVertexXY) | x and y from Gaussians around `x0` and `y0`, with the sigmas `sx` and `sy` |
+| [`SmearVertexXY(kTRUE)`](/api/FairPrimaryGenerator/#SmearVertexXY) | x and y uniform, with the full widths `sx` and `sy` |
+
+Without these setters, the vertex is (0, 0, 0). `MakeVertex()` applies the settings in this order:
+
+<Snippet file="fairroot/base/sim/FairPrimaryGenerator.cxx" start="void FairPrimaryGenerator::MakeVertex()" title="FairPrimaryGenerator.cxx" />
+
+- `SetBeam()` moves the vertex also without a smearing flag.
+- The Gaussian smearing in z uses the full thickness `dz` as sigma.
+- `SmearVertexXY()` uses the widths of `SetBeam()` as full widths of a uniform distribution, although
+  the header comment calls them Gaussian widths.
+- A width of 0 switches off the smearing in that direction.
+- The uniform and the Gaussian smearing of one direction exclude each other. Each setter switches off
+  the other flag of the same direction
+  ([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L522-L550)).
+
+### Beam angle and event plane
+
+[`SetBeamAngle(ax0, ay0, sx, sy)`](/api/FairPrimaryGenerator/#SetBeamAngle) gives a beam direction for
+each event. `MakeBeamAngle()` draws the two angles from Gaussians, in rad. `AddTrack()` then turns
+each momentum so that the z axis points along the beam. The header gets the angles with `SetRotX()`
+and `SetRotY()` ([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L507-L514)).
+
+[`SetEventPlane(phiMin, phiMax)`](/api/FairPrimaryGenerator/#SetEventPlane) draws an angle for each
+event, uniform from `phiMin` to `phiMax`, in rad. `AddTrack()` turns each momentum by this angle
+around the z axis. The header gets the angle with `SetRotZ()`.
+
+Both settings turn the momenta only. The origins of the particles stay where the generators put
+them.
+
+### Event ID and event time
+
+The primary generator counts the events from 1. It sets the event ID only if no generator did.
+[`SetEventNr(n)`](/api/FairPrimaryGenerator/#SetEventNr) sets the counter, so the next event gets
+the ID n+1. The primary generator and the generators of FairRoot set no event time. Thus the MC event
+header keeps the time 0. See [Event headers and run IDs](/concepts/event-headers/).
+
+## Generators with settings
+
+`FairBoxGenerator`, `FairParticleGenerator`, `FairIonGenerator` and `FairYPtGenerator` derive from
+[`FairBaseMCGenerator`](/api/FairBaseMCGenerator/). It gives them these settings:
+
+| Setter | Effect |
+| --- | --- |
+| [`SetPDGType(pdg)`](/api/FairBaseMCGenerator/#SetPDGType) | PDG code of the particles |
+| [`SetMultiplicity(n)`](/api/FairBaseMCGenerator/#SetMultiplicity) | Number of particles in each event |
+| [`SetVertex(vx, vy, vz, evx, evy, evz, mode)`](/api/FairBaseMCGenerator/#SetVertex) | Origin in cm, relative to the event vertex, with spreads and a distribution |
+
+The argument `mode` takes a value of [`eVertexSmear`](/api/FairBaseMCGenerator/#eVertexSmear)
+([FairBaseMCGenerator.cxx](/source/fairroot/generators/FairBaseMCGenerator.cxx/#L71-L104)):
+
+- `kBox`, the default: uniform from `vx − evx` to `vx + evx`
+- `kGauss`: Gaussian around `vx`, with the sigma `evx`
+- `kExp`: exponential with the mean `evx`, on a random side of `vx`
+
+The same rule applies to y and z. In each event, the generator logs its origin and its multiplicity
+with the severity info.
+
+`Init()` gets the mass of the particle from the PDG database. For a multiplicity of 0 or less, it
+returns `kFALSE` ([FairBaseMCGenerator.cxx](/source/fairroot/generators/FairBaseMCGenerator.cxx/#L56-L67)).
+Because the primary generator ignores this value, such a generator adds no particles and gives no
+error.
+
+### FairBoxGenerator
+
+[`FairBoxGenerator(pdg, mult)`](/api/FairBoxGenerator/#FairBoxGenerator-2) makes `mult` particles of
+one type. It takes each value from a uniform distribution in the range that you set. The constructor
+sets the phi range from 0 to 360 degrees.
+
+| Setter | Variable | Unit | Defaults of the arguments |
+| --- | --- | --- | --- |
+| [`SetPRange(pmin, pmax)`](/api/FairBoxGenerator/#SetPRange) | Momentum | GeV | 0, 10 |
+| [`SetPtRange(ptmin, ptmax)`](/api/FairBoxGenerator/#SetPtRange) | Transverse momentum | GeV | 0, 10 |
+| [`SetEkinRange(kmin, kmax)`](/api/FairBoxGenerator/#SetEkinRange) | Kinetic energy. `Init()` changes it into a momentum range. | GeV | 0, 10 |
+| [`SetPhiRange(phimin, phimax)`](/api/FairBoxGenerator/#SetPhiRange) | Azimuth | degree | 0, 360 |
+| [`SetThetaRange(thetamin, thetamax)`](/api/FairBoxGenerator/#SetThetaRange) | Polar angle | degree | 0, 90 |
+| [`SetCosTheta()`](/api/FairBoxGenerator/#SetCosTheta) | Uniform in cos(theta), together with the theta range | | |
+| [`SetEtaRange(etamin, etamax)`](/api/FairBoxGenerator/#SetEtaRange) | Pseudorapidity | | −5, 7 |
+| [`SetYRange(ymin, ymax)`](/api/FairBoxGenerator/#SetYRange) | Rapidity | | −5, 7 |
+| [`SetXYZ(x, y, z)`](/api/FairBoxGenerator/#SetXYZ) | Fixed origin | cm | 0, 0, 0 |
+| [`SetBoxXYZ(x1, y1, x2, y2, z)`](/api/FairBoxGenerator/#SetBoxXYZ) | Origin uniform in a rectangle at `z` | cm | 0 for all |
+| [`SetBoxXYZ(x1, y1, z1, x2, y2, z2)`](/api/FairBoxGenerator/#SetBoxXYZ-2) | Origin uniform in a box | cm | |
+
+`Init()` logs a fatal error for an unknown PDG code and for a phi range wider than 360 degrees. It
+also refuses P together with Ekin, Pt or Y, and any two of Y, theta and eta. Ekin counts as P
+([FairBoxGenerator.cxx](/source/fairroot/generators/FairBoxGenerator.cxx/#L131-L169)). A fatal error
+stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+`ReadEvent()` makes the momentum from the ranges that you set:
+
+<Snippet file="fairroot/generators/FairBoxGenerator.cxx" start="phi = gRandom->Uniform(fPhiMin, fPhiMax) * TMath::DegToRad();" end="py = pt * TMath::Sin(phi);" title="FairBoxGenerator.cxx" />
+
+| Ranges that you set | Momentum of the particles |
+| --- | --- |
+| P or Ekin, and theta or eta | Full momentum in the direction theta, phi |
+| Pt, and theta or eta | Transverse momentum pt, and `pz = pt / tan(theta)` |
+| Pt and Y | Transverse momentum pt, and `pz = mT sinh(y)` |
+| Y only | Along z, with `pz = m sinh(y)` |
+| Pt only | Transverse only, `pz = 0` |
+| P or Ekin only, or theta or eta only | Zero |
+
+:::caution
+Always set a direction range together with a momentum range. With `SetPRange()` only, all particles
+have zero momentum.
+:::
+
+### FairParticleGenerator
+
+[`FairParticleGenerator(pdg, mult, px, py, pz, vx, vy, vz)`](/api/FairParticleGenerator/#FairParticleGenerator-2)
+makes `mult` particles with the same momentum in each event.
+[`SetMomentum()`](/api/FairParticleGenerator/#SetMomentum) changes the momentum. With the default
+constructor, the PDG code is −1, and `ReadEvent()` logs a fatal error.
+
+### FairIonGenerator
+
+`FairIonGenerator` makes ions with a momentum per nucleon. The Rutherford example makes one alpha
+particle (Z = 2, A = 4, charge 2) with 0.05 GeV per nucleon along z. Its origin is at z = −1 cm,
+relative to the event vertex:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start="FairIonGenerator* fIongen" end="primGen->AddGenerator(fIongen);" title="run_rutherford.C" />
+
+The constructor with Z, A and charge makes a [`FairIon`](/api/FairIon/) with the name `FairIon<n>`.
+It gives the ion to `AddNewIon()` of the run, so make the `FairRunSim` before the generator
+([FairIonGenerator.cxx](/source/fairroot/generators/FairIonGenerator.cxx/#L81-L117)). It multiplies
+the momentum by A.
+
+The [constructor with a name](/api/FairIonGenerator/#FairIonGenerator-2) looks for a `FairIon` with
+this name in the run, see [Ions and new particles](#ions-and-new-particles). If there is none, it
+looks for a `FairParticle`. If there is neither, it logs the fatal error
+`Ion or Particle is not defined !`.
+
+:::caution
+Use the constructor with a name only for a `FairIon`. For a `FairParticle`, the generator keeps no
+ion, and `ReadEvent()` uses a null pointer ([FairIonGenerator.cxx](/source/fairroot/generators/FairIonGenerator.cxx/#L66-L75),
+[ReadEvent()](/source/fairroot/generators/FairIonGenerator.cxx/#L152-L174)).
+:::
+
+`SetExcitationEnergy()` and `SetMass()` change the `FairIon`. Call them before `Init()` of the run,
+because the transport engine defines the ion during `Init()`. `SetCharge()` has no effect, because
+the class does not use the value. In each event, `ReadEvent()` looks for the ion by name in the PDG
+database. If the ion is not there, it logs a warning and returns `kFALSE`, which stops the run.
+
+### FairYPtGenerator
+
+[`FairYPtGenerator`](/api/FairYPtGenerator/) takes the rapidity and the transverse momentum from a
+2D histogram. The x axis is the rapidity, the y axis is pT. The Rutherford example fills a small
+histogram:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start="FairYPtGenerator* ypt = new FairYPtGenerator();" end="primGen->AddGenerator(ypt);" title="run_rutherford.C" />
+
+`Init()` logs a fatal error if the histogram has a negative bin or no entries. The check of the bins
+skips the last pT bin ([FairYPtGenerator.cxx](/source/fairroot/generators/FairYPtGenerator.cxx/#L47-L63)).
+Always set the multiplicity: the default is 0.
+
+:::caution
+`ReadEvent()` gives each particle a `pz` of 0 or more, also for a negative rapidity
+([FairYPtGenerator.cxx](/source/fairroot/generators/FairYPtGenerator.cxx/#L71-L73)). For
+negative rapidities, use your own generator.
+:::
+
+## Generators that read files
+
+| Generator | Input | Particle codes | Origin of the particles | Event ID and impact parameter | End of the file |
+| --- | --- | --- | --- | --- | --- |
+| [`FairAsciiGenerator`](/api/FairAsciiGenerator/) | Text file, format below | PDG | Vertex from the file, relative to the event vertex | Not set | Fatal error, see below |
+| [`FairUrqmdGenerator`](/api/FairUrqmdGenerator/) | UrQMD output file 14 | UrQMD codes, changed with a table | Event vertex | Set, if not set before | Returns `kFALSE` |
+| [`FairShieldGenerator`](/api/FairShieldGenerator/) | Text output of SHIELD | Geant3 codes, 1000 for an ion | Event vertex | Not set | Returns `kFALSE` |
+| [`FairEvtGenGenerator`](/api/FairEvtGenGenerator/) | Text output of EvtGen | PDG | Vertex of the particle from the file, relative to the event vertex | Not set | Returns `kFALSE` |
+
+Each constructor with a file name opens the file and reports a fatal error if it cannot.
+
+### FairAsciiGenerator
+
+The file has a header line for each event, and then one line for each particle. This sketch of a file has two events:
+
+```txt
+2 1 0. 0. 0.
+211 0.1 0. 1.
+-211 -0.1 0. 1.
+1 2 0. 0. 0.5
+2212 0. 0. 2.
+```
+
+The header has the number of particles, the event number and the vertex x, y, z in cm. Each particle
+line has the PDG code and px, py, pz in GeV
+([FairAsciiGenerator.cxx](/source/fairroot/generators/FairAsciiGenerator.cxx/#L59-L86)). The class
+comment asks for Geant3 codes, but the code gives the numbers to `AddTrack()` unchanged. The event
+number goes only to the log.
+
+:::caution
+At the normal end of the file, the read of the next header fails. The generator then logs the fatal
+error `Error reading the number of events from event header.`
+([FairAsciiGenerator.cxx](/source/fairroot/generators/FairAsciiGenerator.cxx/#L60-L62)). Ask for no
+more events than the file has.
+:::
+
+### FairUrqmdGenerator
+
+`FairUrqmdGenerator` reads the output file 14 of UrQMD. Tutorial 1 has a macro and a test for it:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1_urqmd.C" start="FairUrqmdGenerator* urqmdGen" end="primGen->AddGenerator(urqmdGen);" title="run_tutorial1_urqmd.C" />
+
+- The second argument is the table that changes the UrQMD codes into PDG codes. Without it, the
+  generator reads `$VMCWORKDIR/input/urqmd_pdg.dat`
+  ([FairUrqmdGenerator.cxx](/source/fairroot/generators/FairUrqmdGenerator.cxx/#L323-L355)). The
+  examples have the table in [`examples/common/input/`](/repo/examples/common/input/).
+- A particle with a code that is not in the table gets a warning, and the generator skips it.
+- UrQMD must compute the events in the center-of-mass system. The generator boosts the momenta along
+  z into the lab system. It uses the value `E_lab(GeV/u)` of the event header as kinetic energy per
+  nucleon, and the proton mass
+  ([FairUrqmdGenerator.cxx](/source/fairroot/generators/FairUrqmdGenerator.cxx/#L162-L170)).
+- [`SkipEvents(n)`](/api/FairUrqmdGenerator/#SkipEvents) skips the next n events of the file.
+
+If no generator before it filled the MC event header, it sets the event ID and the impact parameter
+from the file:
+
+<Snippet file="fairroot/generators/FairUrqmdGenerator.cxx" start="// Set event id and impact parameter in MCEvent if not yet done" end="^    }" title="FairUrqmdGenerator.cxx" />
+
+### FairShieldGenerator and FairEvtGenGenerator
+
+[`FairShieldGenerator`](/api/FairShieldGenerator/#FairShieldGenerator-2) reads text output of SHIELD.
+Each event header has the event number, the number of particles, the beam momentum and the impact
+parameter. Each particle line has the Geant3 code, A, Z and px, py, pz, with the total momentum. The
+code 1000 marks an ion. The constructor reads the whole file once and gives a `FairIon` with the name
+`Ion_<A>_<Z>` to the run for each new ion. Thus make the `FairRunSim` before the generator
+([FairShieldGenerator.cxx](/source/fairroot/generators/FairShieldGenerator.cxx/#L123-L158)).
+
+[`FairEvtGenGenerator`](/api/FairEvtGenGenerator/#FairEvtGenGenerator-2) reads text output of EvtGen.
+It adds only the particles without daughters (`DF` and `DL` are −1). The class comment gives the
+vertex columns in mm, but the code gives them to `AddTrack()` without a change
+([FairEvtGenGenerator.cxx](/source/fairroot/generators/FairEvtGenGenerator.cxx/#L107-L151)).
+The [constructor with three arguments](/api/FairEvtGenGenerator/#FairEvtGenGenerator-3) adds a gas
+target. It moves x and y by a random radius with the sigma `Rsigma`, and z by a value from the `TF1`.
+It draws these values again for each particle. The generator deletes the `TF1` in its destructor.
+
+## Ions and new particles
+
+Give the ions and particles that the transport engine does not know to the run before `Init()`:
+
+- [`AddNewIon(FairIon*)`](/api/FairRunSim/#AddNewIon): an ion with a name, Z, A, charge, excitation
+  energy and mass. Without a mass, [`FairIon`](/api/FairIon/#FairIon-2) uses A times the proton mass
+  ([FairIon.cxx](/source/fairroot/base/sim/FairIon.cxx/#L26-L44)).
+- [`AddNewParticle(FairParticle*)`](/api/FairRunSim/#AddNewParticle): a particle with all the
+  properties that the transport engine needs.
+
+The run deletes these objects in its destructor
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L99-L102)). During `Init()`, the
+transport engine calls [`AddIons()`](/api/FairMCApplication/#AddIons) of the MC application:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="void FairMCApplication::AddIons()" title="FairMCApplication.cxx" />
+
+The PDG code of an ion is 1000000000 + 10000·Z + 10·A
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1265-L1271)). If the
+PDG database knows this code already, `AddIons()` defines no new ion. It gives the `FairIon` the
+name of the known particle instead. The code comment names the alpha particle as an example.
+`FairIonGenerator` keeps a pointer to the `FairIon`, so it uses the new name.
+
+[`AddParticles()`](/api/FairMCApplication/#AddParticles) gives each `FairParticle` to
+`DefineParticle()` of the transport engine. The constructors of `FairParticle` make the PDG code in
+different ways:
+
+| Constructor | PDG code |
+| --- | --- |
+| [`FairParticle(pdg, name, mcType, mass, charge, lifetime, …)`](/api/FairParticle/#FairParticle-5) | `pdg` |
+| [`FairParticle(name, z, a, s, mass, q, stable, decaytime)`](/api/FairParticle/#FairParticle-3) | 1000000000 + 10000000·s + 10000·z + 10·a |
+| [`FairParticle(name, z, a, mass, q, stable, decaytime)`](/api/FairParticle/#FairParticle-4) | 10000000 + 10000·z + 10·a |
+
+The last code does not agree with the ion codes of `AddIons()`. A macro with a new ion can look like
+this:
+
+```cpp title="Sketch of a macro"
+FairRunSim run{};
+// ... media, modules ...
+run.AddNewIon(new FairIon("C12", 6, 12, 6));
+
+auto primGen = new FairPrimaryGenerator();
+primGen->AddGenerator(new FairIonGenerator("C12", 1, 0., 0., 1.));
+run.SetGenerator(primGen);
+```
+
+## Write your own generator
+
+<Steps>
+1. Derive a class from `FairGenerator`. Derive from `FairBaseMCGenerator` if you want its settings.
+2. Implement `ReadEvent(FairPrimaryGenerator*)`. Call `AddTrack()` for each particle.
+3. Return `kTRUE`. Return `kFALSE` only to stop the run, for example at the end of your input.
+4. Open files and check settings in `Init()`. FairRoot calls it once, after the transport engine is ready.
+5. Implement `CloneGenerator()` if you use multithreaded Geant4.
+6. Add the class to the LinkDef file of your library, like [GenLinkDef.h](/source/templates/project_root_containers/MyProjGenerators/GenLinkDef.h/) of the project template.
+</Steps>
+
+`FairParticleGenerator` shows a complete `ReadEvent()`:
+
+<Snippet file="fairroot/generators/FairParticleGenerator.cxx" start="Bool_t FairParticleGenerator::ReadEvent(FairPrimaryGenerator* primGen)" title="FairParticleGenerator.cxx" />
+
+A minimal generator can look like this:
+
+```cpp title="MyGenerator.h"
+#include "FairGenerator.h"
+#include "FairPrimaryGenerator.h"
+
+class MyGenerator : public FairGenerator
+{
+  public:
+    Bool_t ReadEvent(FairPrimaryGenerator* primGen) override
+    {
+        // One pi+ with 1 GeV along z, from the event vertex
+        primGen->AddTrack(211, 0., 0., 1., 0., 0., 0.);
+        return kTRUE;
+    }
+
+    FairGenerator* CloneGenerator() const override { return new MyGenerator(*this); }
+
+    ClassDefOverride(MyGenerator, 1);
+};
+```
+
+The project template has generators for Pythia 6 and Pythia 8 in `MyProjGenerators/`. CMake builds
+them only if it finds both packages ([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt)).
+
+## Multithreaded Geant4
+
+Each worker thread gets a copy of the primary generator from `ClonePrimaryGenerator()`, with a clone
+of each generator. Only `FairBoxGenerator`, `FairIonGenerator` and `FairYPtGenerator` implement
+`CloneGenerator()`. For the other generators, the default stops the program with `Fatal()`
+([FairGenerator.cxx](/source/fairroot/base/sim/FairGenerator.cxx/#L40-L44)). The copy keeps the number
+of targets, but only the first target position
+([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L125-L144)). Thus do
+not use `SetMultTarget()` in MT mode. Each worker counts its own event IDs. See [Multithreaded Geant4](/simulation/geant4-mt/).
+
+## Related pages
+
+- [The particle stack and MC tracks](/simulation/stack/): what the stack does with the primaries.
+- [Write a simulation macro](/simulation/run-macro/): the primary generator in the macro.
+- [Event headers and run IDs](/concepts/event-headers/): the MC event header that the primary
+  generator fills.
+- [How a simulation runs](/simulation/overview/): `GeneratePrimaries()` in an event, and `StopRun()`.
+- [Multithreaded Geant4](/simulation/geant4-mt/): the clones of the generators.

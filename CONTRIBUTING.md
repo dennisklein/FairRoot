@@ -89,6 +89,14 @@ convenient, if one does not have a GPG key yet).
 
 ### D.1 Use [doxygen-style comments](https://www.doxygen.nl/manual/commands.html)
 
+### D.2 Update the documentation site
+
+The pages of the [documentation site](https://dennisklein.github.io/FairRoot/)
+are in [`docs/`](docs/README.md). If your change alters what a page describes
+(a behavior, an option, an interface or an example), update the page in the
+same pull request. [`docs/README.md`](docs/README.md) tells how to check and
+build the site.
+
 ## S - Style
 
 ### S.1 Our CI enforces formatting with [`clang-format`](https://clang.llvm.org/docs/ClangFormat.html)

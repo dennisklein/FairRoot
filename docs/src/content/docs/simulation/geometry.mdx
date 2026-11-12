@@ -1,0 +1,364 @@
+---
+title: 'Geometry and materials'
+description: 'How the modules build one ROOT geometry from a media file and from ASCII .geo files, ROOT files, GDML files or code, where FairRoot finds the files, and which volumes are sensitive.'
+sidebar:
+  order: 4
+code: [fairroot/base/sim/FairModule.h, fairroot/base/sim/FairModule.cxx, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/steer/FairRunSim.cxx, fairroot/geobase/FairGeoLoader.h, fairroot/geobase/FairGeoRootBuilder.cxx, fairroot/base/sim/FairGeoParSet.h, fairroot/base/sim/FairDetector.cxx, examples/common/passive/FairMagnet.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+A simulation has one ROOT geometry, a `TGeoManager`. Each module of the run adds its volumes in
+`ConstructGeometry()`. It reads them from an ASCII `.geo` file, a ROOT file or a GDML file, or it
+makes them in code. The modules take their materials from one media file of the run, or make them in
+code. The transport engine gets the finished geometry from ROOT.
+
+## How a run builds the geometry
+
+`FairRunSim::Init()` prepares the geometry, and the transport engine starts the construction:
+
+1. `Init()` makes the geometry loader `FairGeoLoader`. For the default geometry model `TGeo`, the
+   loader makes an empty `TGeoManager` with the name `FAIRGeom` and a `FairGeoRootBuilder`
+   ([FairGeoLoader.cxx](/source/fairroot/geobase/FairGeoLoader.cxx/#L32-L37)).
+2. `Init()` reads the media file of [`SetMaterials()`](/api/FairRunSim/#SetMaterials)
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L164-L168)). ROOT has no
+   material yet.
+3. Near its end, `Init()` calls `InitMC()` of the MC application
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L320)). There, the transport
+   engine calls [`FairMCApplication::ConstructGeometry()`](/api/FairMCApplication/#ConstructGeometry).
+4. For each module, in the order of `AddModule()`, the MC application calls `InitParContainers()`
+   and then `ConstructGeometry()` of the module
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774)).
+5. It closes the geometry. If the list of volumes changes in this step, it logs an error
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L777-L788)).
+6. It gives the geometry to the transport engine with `SetRootGeometry()`. Only
+   [`SetImportTGeoToVMC(kFALSE)`](/api/FairRunSim/#SetImportTGeoToVMC) stops this step.
+7. It calls `RegisterAlignmentMatrices()` of each module
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L790-L821)).
+
+The first module must make the top volume. In the examples, this module is the cave: the cave file
+makes the top volume ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L114-L115)),
+and the other modules put their volumes into it. Tutorial 3 adds the media file, the cave, the
+magnet and a detector in this order:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start='run.SetMaterials("media.geo");' end="run.AddModule(Torino);" title="run_sim.C" />
+
+The other steps of a simulation run are in [How a simulation runs](/simulation/overview/).
+
+## Where FairRoot finds the files
+
+The two functions for the file names search in different ways:
+
+| Case | `FairModule::SetGeometryFileName()` | `FairRunSim::SetMaterials()` |
+| --- | --- | --- |
+| Absolute path (starts with `/`) | Used as it is. A missing file is a fatal error. | Not supported: the function always adds a directory. |
+| `GEOMPATH` is set | `$GEOMPATH/<name>`, if this file exists | `$GEOMPATH/<name>`, also if this file does not exist |
+| Default directory | `$VMCWORKDIR/geometry/<name>`, if this file exists | `$VMCWORKDIR/geometry/<name>`, only if `GEOMPATH` is not set |
+| File not found | Fatal error in `SetGeometryFileName()` | Fatal error later, when `Init()` opens the file |
+
+See [FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L174-L215),
+[FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L344-L361) and
+[FairGeoAsciiIo.cxx](/source/fairroot/geobase/FairGeoAsciiIo.cxx/#L75-L78). `SetMaterials()` logs
+the full name as `Media file used: <path>`. The second argument of `SetGeometryFileName()`,
+`geoVer`, has no effect: the function ignores it.
+
+Tutorial 3 sets `GEOMPATH` in the macro, before it creates the run. The variables are in
+[Environment variables](/reference/environment/).
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_sim.C" start="TString tut_geomdir" end='gSystem->Setenv("GEOMPATH", tut_geomdir.Data());' title="run_sim.C" />
+
+:::caution
+Give the media file a name that ends with `.geo`, `.dat` or `.setup`. For other names, the geometry
+interface does not open the file ([FairGeoInterface.cxx](/source/fairroot/geobase/FairGeoInterface.cxx/#L405-L426)),
+and `Init()` does not check the result of `readMedia()`. The run then has no media. The reader of a
+volume file stops at the first volume with the error `Medium %s not found in list of media`.
+:::
+
+## Materials
+
+The media file defines each material once for the whole run.
+[`FairGeoMedia::read()`](/api/FairGeoMedia/#read) reads all entries in `Init()`. ROOT gets a
+material only when a volume uses it. Then
+[`FairGeoRootBuilder::createMedium()`](/api/FairGeoRootBuilder/#createMedium) makes a
+`TGeoMaterial`, or a `TGeoMixture` for more than one component. It also makes a `TGeoMedium` with
+the same name ([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L144-L186)).
+The medium numbers count up in the order of creation.
+
+This is the entry for silicon in the media file of the examples:
+
+<Snippet file="examples/common/geometry/media.geo" start="silicon" end="/^\s+0$/" title="examples/common/geometry/media.geo" />
+
+The first line has the number of components, the atomic weight, the atomic number and the density.
+The second line starts with the sensitivity flag (1 for silicon), then the field flag, the maximum
+field in kG and the boundary crossing precision. The last line has the number of optical entries.
+All fields are in [Geometry and media file format](/reference/geo-format/).
+
+### Media in ROOT files and in code
+
+A volume from a ROOT file or a GDML file brings its own material. FairRoot looks for the name of this
+material in the run: first in the `TGeoManager`, then in the media file. It gives the volume the
+medium with this name. If neither has the name, FairRoot logs the fatal error
+`Material <name> is not defined in ASCII file nor in Root file.`
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L653-L673)). A fatal error stops the
+program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+In code, get the media of the run from the geometry loader.
+[`GetGeometryLoader()`](/api/FairModule/#GetGeometryLoader) is valid only during
+`ConstructGeometry()`. This sketch makes the medium `air` in the same way as
+[`createNode()`](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L78-L86):
+
+```cpp title="MyModule.cxx"
+#include "MyModule.h"   // MyModule derives from FairModule
+
+#include "FairGeoBuilder.h"
+#include "FairGeoMedia.h"
+
+#include <TGeoManager.h>
+
+void MyModule::ConstructGeometry()
+{
+    FairGeoLoader& loader = GetGeometryLoader();
+    FairGeoMedium* air = loader.getGeoInterface()->getMedia()->getMedium("air");
+    if (!air) {
+        LOG(fatal) << "The media file has no medium air";
+        return;
+    }
+    if (air->getMediumIndex() <= 0) {   // not yet in the TGeoManager
+        loader.getGeoBuilder()->createMedium(air);
+    }
+    TGeoMedium* medAir = gGeoManager->GetMedium("air");
+    // Make the volumes with medAir and add them to gGeoManager->GetTopVolume().
+}
+```
+
+## Choose the input format
+
+`FairModule` has a helper for each format, but it does not choose one. The `ConstructGeometry()` of
+your module calls the helper, for example by the file extension:
+
+<Snippet file="examples/common/passive/FairMagnet.cxx" start="void FairMagnet::ConstructGeometry()" title="FairMagnet.cxx" />
+
+For other extensions, `FairMagnet` only prints a message. `FairTutorialDet4` logs a fatal error
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L237-L249)).
+
+| Input | Helper | Sensitive volumes | You need |
+| --- | --- | --- | --- |
+| ASCII `.geo` file | [`ConstructASCIIGeometry<T, U>(name)`](/api/FairModule/#ConstructASCIIGeometry-3) | Media with a sensitivity flag, in an active module | A `FairGeoSet` class `T` and a parameter container `U` |
+| ROOT file | [`ConstructRootGeometry(shiftM)`](/api/FairModule/#ConstructRootGeometry) | `IsSensitive()` of the detector | Material names that the run knows |
+| GDML file | [`ConstructGDMLGeometry(posrot)`](/api/FairModule/#ConstructGDMLGeometry) | `IsSensitive()` of the detector | ROOT with GDML support |
+| Code | ROOT geometry classes | `AddSensitiveVolume()` | Media from the media file or from your code |
+
+### ASCII files
+
+[`ConstructASCIIGeometry<T, U>()`](/api/FairModule/#ConstructASCIIGeometry-3) does these steps
+([FairModule.h](/source/fairroot/base/sim/FairModule.h/#L207-L244)):
+
+1. [`LoadAndCreate<T>()`](/api/FairGeoLoader/#LoadAndCreate) makes the set `T`, reads the file and
+   builds the ROOT volumes ([FairGeoLoader.h](/source/fairroot/geobase/FairGeoLoader.h/#L67-L80)).
+2. It puts each volume into the list of sensitive or passive nodes of the parameter container `U`.
+   The sensitivity flag of the medium decides.
+3. It calls [`ProcessNodes()`](/api/FairModule/#ProcessNodes). This function makes a `FairVolume`
+   for each volume and registers the sensitive volumes of an active module.
+4. It marks the parameter container as changed for the run ID.
+
+The set class tells the reader which volumes to take. Its constructor gets the set name and the
+maximum number of modules. The reader takes the volumes whose names start with the set name and a
+module number from 1 to this maximum ([FairGeoSet.cxx](/source/fairroot/geobase/FairGeoSet.cxx/#L538-L563)).
+The template detector has this set class:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetectorGeo.h" start="class NewDetectorGeo" end="};" title="NewDetectorGeo.h" />
+
+To build a detector from an ASCII file:
+
+<Steps>
+1. Write a class that derives from `FairGeoSet`, like `NewDetectorGeo`.
+2. Write a parameter container with `GetGeoSensitiveNodes()` and `GetGeoPassiveNodes()`, like
+   `NewDetectorGeoPar` of the template.
+3. Add the parameter container to the container factory of your library.
+4. In `ConstructGeometry()`, call `ConstructASCIIGeometry<T, U>()` with the name of the parameter
+   container.
+5. Write the `.geo` file. Start each volume name with the set name and a module number, for example
+   `NewDetector1`.
+6. Give the sensitive volumes a medium with the sensitivity flag 1.
+7. Implement `IsSensitive()` for these volumes too. Multithreaded Geant4 uses it.
+8. In the macro, construct the detector as active, for example `new FairTestDetector("TORINO", kTRUE)`.
+</Steps>
+
+Tutorial 1 does step 4 like this:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairTutorialDet1.cxx" start="void FairTutorialDet1::ConstructGeometry()" title="FairTutorialDet1.cxx" />
+
+:::caution
+Always give the name of the parameter container. With an empty name (the default), the function
+builds the volumes, but it does not call `ProcessNodes()`
+([FairModule.h](/source/fairroot/base/sim/FairModule.h/#L219-L243)). The detector then has no
+sensitive volumes.
+:::
+
+Call `ProcessNodes()` only while the MC application builds the geometry. At other times, it logs a
+fatal error ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L231-L236)).
+
+### ROOT files
+
+[`ConstructRootGeometry()`](/api/FairModule/#ConstructRootGeometry) opens the file and looks for
+the geometry in this order ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L324-L363)):
+
+- If the file has a `TGeoManager`, the function takes the first one.
+- Otherwise, it reads the first key of the file as a `TGeoVolume`. It takes the first daughter node
+  of this volume: the volume of this node and its matrix.
+- If it finds no volume, it logs the fatal error `Could not find any geometry in file`.
+
+Then it adds the volume to the top volume of the run. With
+[`SetMotherVolume()`](/api/FairModule/#SetMotherVolume), it adds the volume to the volume with this
+name instead. The new node has the copy number 0. If you give `shiftM`, the function multiplies the
+matrix of the node by `shiftM` ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L370-L432)).
+
+Last, the function assigns the media of the volume and of all volumes in it (see
+[Media in ROOT files and in code](#media-in-root-files-and-in-code)). It registers the volumes in it,
+at all levels, and calls `IsSensitive()` for each of them. Only modules that inherit from `FairDetector` get this
+call ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L541-L573)). The volume from the
+file itself does not get it.
+
+Tutorial 4 makes such a file with a macro. The detector volume `tutorial4` is the only daughter of
+the assembly `TOP`, and the macro writes `TOP` to `tutorial4.root`
+([Create_Tutorial4_Geometry.C](/source/examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C/#L84-L86)):
+
+<Snippet file="examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C" start='TGeoVolume* top = new TGeoVolumeAssembly("TOP");' end="top->AddNode(tut4, 1);" title="Create_Tutorial4_Geometry.C" />
+
+The macro takes its materials from the media file with `FairGeoLoader`, so the names agree
+([Create_Tutorial4_Geometry.C](/source/examples/simulation/Tutorial4/macros/Create_Tutorial4_Geometry.C/#L95-L116)).
+In the simulation, the paths of the detector planes start with `/cave_1/tutorial4_0/`, with the copy
+number 0 of `ConstructRootGeometry()` ([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L300-L306)).
+
+### GDML files
+
+[`ConstructGDMLGeometry(posrot)`](/api/FairModule/#ConstructGDMLGeometry) reads the file with the
+ROOT GDML parser. It gives the new media numbers that follow the media of the run. Then it adds the
+top volume of the file to the top volume of the run, with the copy number 1 and the matrix `posrot`.
+Last, it assigns the media and calls `IsSensitive()` for each volume, also for the top volume of the
+file ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L439-L476)).
+
+`SetMotherVolume()` has no effect on GDML files. The function works only if ROOT has the `gdml`
+component: then the CMake code defines `ROOT_HAS_GDML` ([fairroot/base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt)).
+Without it, the function logs errors and a fatal error
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L480-L486)). No example in the
+repository uses GDML.
+
+### Geometry in code
+
+A module can make its volumes with the ROOT geometry classes. The template detector adds each volume
+to the top volume and calls [`AddSensitiveVolume()`](/api/FairModule/#AddSensitiveVolume) for the
+sensitive volumes:
+
+<Snippet file="templates/project_root_containers/NewDetector/NewDetector.cxx" start="void NewDetector::ConstructGeometry()" end="AddSensitiveVolume(det1);" title="NewDetector.cxx" />
+
+The template makes its materials and media in code. To take them from the media file, use the
+geometry loader, see [Media in ROOT files and in code](#media-in-root-files-and-in-code).
+
+## Sensitive volumes
+
+The MC application calls `ProcessHits()` of a detector only for steps in its sensitive volumes, see
+[Write a detector](/simulation/detectors/). The input decides how a volume becomes sensitive:
+
+| Input | The volume is sensitive if | Code |
+| --- | --- | --- |
+| ASCII file | Its medium has a sensitivity flag other than 0, and the module is active | [FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274) |
+| ROOT or GDML file | `IsSensitive(name)` of the detector returns `kTRUE` | [FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L567-L570) |
+| Code | The module calls `AddSensitiveVolume()` | [FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L278-L289) |
+| Multithreaded Geant4, all inputs | `IsSensitive(name)` returns `kTRUE` | [FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L71-L97) |
+
+In [multithreaded mode](/simulation/geant4-mt/), `FairDetector::Initialize()` calls `IsSensitive()`
+for all volumes of the geometry. The lists of volumes are `thread_local`, so on a worker thread only this call decides.
+Thus `IsSensitive()` must return `kTRUE` for your sensitive volumes and `kFALSE` for all other
+volumes, also for the volumes of other modules.
+
+The default `IsSensitive()` calls the deprecated `CheckIfSensitive()`, which returns `kFALSE`
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L531-L539)). Implement `IsSensitive()`
+in each detector. The examples look for a part of the name:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="Bool_t FairTutorialDet4::IsSensitive" title="FairTutorialDet4.cxx" />
+
+### The volume list
+
+`ProcessNodes()` makes a `FairVolume` for each volume of an ASCII file. `AddSensitiveVolume()` makes
+one for each sensitive volume of the other inputs. The list `FairModule::vList` refuses a second
+volume with the same name and logs an error
+([FairVolumeList.cxx](/source/fairroot/base/sim/FairVolumeList.cxx/#L33-L46)). The sensitive volumes
+also go into `FairModule::fAllSensitiveVolumes`, which the header marks for internal use only.
+Release 19.0.0 removed the older list `FairModule::svList` ([CHANGELOG.md](/repo/CHANGELOG.md)).
+
+`FairDetector::Initialize()` gets the volume ID of each sensitive volume from the transport engine.
+It uses the name up to the first `#` ([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L103-L117)).
+In each step, the MC application looks for the current volume ID and copy number in its map of
+sensitive volumes. For a copy that is not in the map yet, it adds a `FairVolume` and still calls
+`ProcessHits()` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L513-L557)).
+
+## The geometry after the simulation
+
+`Init()` puts `gGeoManager` into the parameter container `FairGeoParSet`
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L197-L201)) and marks the container as
+changed for the run ID ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L250-L253)). The
+container keeps the `TGeoManager` as a persistent member, so the geometry goes to the output of the
+runtime database. Its list of sensitive `FairGeoNode` objects is transient
+([FairGeoParSet.h](/source/fairroot/base/sim/FairGeoParSet.h/#L73-L77)).
+
+- ASCII modules also fill their own geometry parameter container, for example `FairGeoPassivePar`
+  for the cave and the magnet ([FairCave.cxx](/source/examples/common/passive/FairCave.cxx/#L24-L51)).
+- [`CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) writes `gGeoManager` to a separate ROOT
+  file. The code comment says that this file is for programs without the framework
+  ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L365-L376)). Tutorial 3
+  calls it after `Run()`.
+- In the reconstruction, `FairRunAna::Init()` takes the geometry from the container
+  `FairGeoParSet`. After [`SetGeomFile()`](/api/FairRunAna/#SetGeomFile), it reads the first
+  `TGeoManager` of that file instead ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L145-L151)).
+
+See [Parameters and the runtime database](/concepts/parameters/) and
+[Write a reconstruction macro](/reconstruction/run-macro/).
+
+## Alignment
+
+After the geometry is closed, the MC application calls `RegisterAlignmentMatrices()` of each module.
+There, a module gives alignment matrices to the run with
+[`FairRun::AddAlignmentMatrices()`](/api/FairRun/#AddAlignmentMatrices): a map from the volume path
+to a `TGeoHMatrix`. Later, the transport engine calls `MisalignGeometry()`, and the MC application
+calls `AlignGeometry()` of the run ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L827-L832)).
+
+Tutorial 4 makes one matrix for each detector plane
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L300-L336)).
+The old `ModifyGeometry()` is deprecated. The details are in
+[Alignment and misalignment](/reconstruction/alignment/).
+
+## Passive modules in the examples
+
+The library `ExPassive` in [examples/common/passive](/repo/examples/common/passive/) has modules
+without sensitive volumes:
+
+| Module | Input | How it builds the geometry |
+| --- | --- | --- |
+| `FairCave` | `cave.geo`, `cave_vacuum.geo` | `LoadAndCreate<FairGeoCave>()` and the container `FairGeoPassivePar`, without `ProcessNodes()` ([FairCave.cxx](/source/examples/common/passive/FairCave.cxx/#L24-L51)) |
+| `FairMagnet` | `magnet.geo` or a ROOT file | `FairGeoMagnet` or `ConstructRootGeometry()`, by the extension ([FairMagnet.cxx](/source/examples/common/passive/FairMagnet.cxx/#L32-L53)) |
+| `FairTarget` | ASCII file | `ConstructASCIIGeometry<FairGeoTarget, FairGeoPassivePar>()` ([FairTarget.cxx](/source/examples/common/passive/FairTarget.cxx/#L28-L31)) |
+| `FairPipe` | Code | `TGeoPcon` volumes with the media `vacuum`, `steel` and `Al+Be` ([FairPipe.cxx](/source/examples/common/passive/FairPipe.cxx/#L38-L177)) |
+
+`FairGeoCave` reads the cave file in its own way: the file has one volume without a position. The
+format is in [Geometry and media file format](/reference/geo-format/).
+
+:::caution
+The media file of the examples has no `steel` and no `Al+Be`. `FairPipe` gives the missing media to
+`createMedium()` without a check, and `createMedium()` then uses a null pointer
+([FairGeoRootBuilder.cxx](/source/fairroot/geobase/FairGeoRootBuilder.cxx/#L144-L150)). No example
+macro uses `FairPipe`. The media file of the templates has both media.
+:::
+
+## Related pages
+
+- [Geometry and media file format](/reference/geo-format/): all fields of the media file and of the
+  `.geo` files.
+- [Write a detector](/simulation/detectors/): sensitive volumes, `ProcessHits()` and MC points.
+- [Alignment and misalignment](/reconstruction/alignment/): alignment matrices in the simulation and
+  in the reconstruction.
+- [How a simulation runs](/simulation/overview/): the order of the calls in a simulation run.
+- [Environment variables](/reference/environment/): `GEOMPATH` and `VMCWORKDIR`.
+- [Tutorial 4](/examples/tutorial4/): a detector from a ROOT file, with misalignment.

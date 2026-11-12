@@ -1,0 +1,407 @@
+---
+title: 'Tests'
+description: 'The tests of FairRoot: Catch2 unit tests, tests that run the example macros and devices, and the CI jobs. How to run them with ctest, and how to add tests to your project.'
+sidebar:
+  order: 5
+code: [fairroot/tools/tests/maybe_owning.cxx, examples/simulation/Tutorial1/macros/run_tutorial1.C, examples/simulation/Tutorial2/macros/compare_seed_value.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+FairRoot registers all its tests with CTest. Unit tests check single classes with Catch2. Most other
+tests run the macros and the FairMQ devices of the examples, and check their output. A test run thus
+shows if a change breaks a library, a simulation or reconstruction chain of the examples, or the
+project templates.
+
+## Kinds of tests
+
+| Kind | What the test runs | When the test passes | Defined in |
+| --- | --- | --- | --- |
+| Unit test | One `TEST_CASE` of a Catch2 executable | The executable returns 0. | [`tests/`](/repo/tests/), [`fairroot/tools/tests/`](/repo/fairroot/tools/tests/) |
+| Macro test | A ROOT macro, through a generated shell script | The output matches the pass expression of the test, usually `Macro finished successfully`. A test without a pass expression passes when the exit code is 0. | `CMakeLists.txt` of the examples, [`tests/tgeo/`](/repo/tests/tgeo/) |
+| Device test | A shell script that starts FairMQ devices | The output matches the pass expression, for example `Received 100 messages!` | [`examples/MQ/`](/repo/examples/MQ/), [`examples/advanced/Tutorial3/`](/repo/examples/advanced/Tutorial3/) |
+| Template test | `test_project.sh`, which copies a project template, configures it and builds it | The output contains `Test successful.` | [`templates/CMakeLists.txt`](/repo/templates/CMakeLists.txt) |
+
+[Examples](/examples/overview/) lists the tests of each example.
+
+## Build and run the tests
+
+CTest gets the tests only with the CMake option `BUILD_TESTING=ON`. The CTest module sets it to `ON` by
+default. The macro and device tests of the examples also need `BUILD_EXAMPLES=ON`, which is also the
+default ([CMakeLists.txt](/repo/CMakeLists.txt#L131)).
+
+:::caution
+In the current code, the configuration fails with `BUILD_TESTING=OFF`. The build always adds the folder
+`fairroot/tools/tests/` ([CMakeLists.txt of Tools](/repo/fairroot/tools/CMakeLists.txt#L59)), and
+this folder calls `catch_discover_tests()`. This command exists only with `BUILD_TESTING=ON`.
+:::
+
+<Steps>
+
+1. In the source folder, configure FairRoot with an install prefix outside the build folder.
+   [Install FairRoot](/start/install/) gives the details.
+
+   ```sh
+   cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/fairroot_install"
+   ```
+
+2. Build and install FairRoot:
+
+   ```sh
+   cmake --build build --target install --parallel
+   ```
+
+3. Run all tests in the build folder:
+
+   ```sh
+   cd build
+   ctest --output-on-failure
+   ```
+
+</Steps>
+
+Install FairRoot before you run the tests, as the CI does. Two kinds of tests use the install prefix:
+
+- The template tests configure the templates with `FAIRROOTPATH` set to the install prefix
+  ([test_project.sh.in](/repo/templates/test_project.sh.in#L66-L67)).
+- The scripts of the macro tests put the include folder of the install prefix into
+  `ROOT_INCLUDE_PATH` ([CMakeLists.txt](/repo/CMakeLists.txt#L283-L284)).
+
+`--output-on-failure` shows the output of each failed test. The CI runs four tests at the same time.
+Use `ctest -j 4` to do the same. You do not need to source `config.sh` before `ctest`. The scripts of
+the macro tests set the environment themselves, and most device scripts source `config.sh` of the
+build folder.
+
+## Select tests
+
+The name of a test tells what it tests:
+
+| Names | Tests |
+| --- | --- |
+| `Base::…`, `GeoBase::…`, `Tools::…` | Unit tests of the libraries `Base`, `GeoBase` and `Tools` |
+| `ExSimulation1::…`, `ExSimulation2::…`, `ExSimulation4::…`, `ExRutherford::…`, `ExTestDetector::…`, `ExPropagator::…`, `ExPixel::…` | Unit tests of the geometry classes of the examples |
+| `ex_sim_tutorial1_…`, `ex_sim_tutorial2…`, `ex_sim_tutorial4_…`, `ex_sim_rutherford_…`, `ex_sim_run_rad_…` | Macros of the simulation examples |
+| `ex_tutorial3_…` | Macros and devices of Tutorial 3 |
+| `runPropagatorMC`, `runPropagator`, `runPropagatorPull` | Macros of the propagator example |
+| `ex_unpack_mbs` | Macro of the MBS tutorial, only with `BUILD_MBS=ON` |
+| `ex_pixel_…`, `ex_MQ_…` | Macros and devices of the FairMQ examples |
+| `test_tgeo_units` | Radiation length and interaction length of a ROOT material, to check the unit system |
+| `project_root_containers…`, `project_stl_containers…` | Project templates |
+
+Select the tests with the options of `ctest`:
+
+```sh
+ctest -N                          # list the tests, run none
+ctest -R '^GeoBase::'             # only the tests whose name matches the regular expression
+ctest -R ex_sim_tutorial2 -V      # the same, with the full output of each test
+ctest -E '^(ex_MQ_|project_)'     # all tests except the matching ones
+```
+
+No FairRoot test has a label. The CMake files set no `LABELS` property, so `ctest -L` finds no test.
+
+### Fixtures
+
+Many macro tests read the files of an earlier test. The test properties `FIXTURES_SETUP` and
+`FIXTURES_REQUIRED` give this order. When you select a test with `-R`, CTest adds the setup tests that
+the test needs, also through more than one level (CMake behavior). For example,
+`ctest -R ex_sim_tutorial4_plots_TGeant4` runs the simulation, then the reconstruction, then the plots.
+If a setup test fails, CTest does not start the tests that need it and reports them as `Not Run`.
+
+### Run a unit test executable
+
+Each Catch2 suite is one executable in the build tree, for example `tests/base/test_Base` or
+`fairroot/tools/tests/fairroot_test_Tools`. Start it directly to use the options of Catch2:
+
+```sh
+build/tests/base/test_Base --list-tests
+build/tests/base/test_Base FairVolumeList
+```
+
+## Unit tests with Catch2
+
+FairRoot contains Catch2 v3.5.4 in `third_party/Catch2_v3.5.4`. With `BUILD_TESTING=ON`, CMake adds it
+with `FetchContent` from this folder, so the build needs no network access:
+
+<Snippet file="third_party/CMakeLists.txt" start="if(BUILD_TESTING)" end="/^endif/" />
+
+Each test suite in `tests/` is one call of `fairroot_add_catch2_test_suite()`
+([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L89-L114)). The suite `Tools` in
+`fairroot/tools/tests/` calls `catch_discover_tests()` directly
+([its CMakeLists.txt](/repo/fairroot/tools/tests/CMakeLists.txt)). This is the suite of the library
+`Base`:
+
+<Snippet file="tests/base/CMakeLists.txt" start="fairroot_add_catch2_test_suite(Base" end="/^\)$/" />
+
+The function does these steps:
+
+- It makes the executable `test_<suite>` from the `SOURCES`.
+- It links the executable with `Catch2::Catch2WithMain` and with the `DEPENDENCIES`.
+- It registers each `TEST_CASE` as a CTest test with `catch_discover_tests()`. The name of the test is
+  `<suite>::<test case>`, for example `Base::FairVolumeList`.
+
+A test case can contain sections. Catch2 runs the test case once for each section, from the start.
+Thus each section gets a new `volumes` object:
+
+<Snippet file="tests/base/sim/test_FairVolumeList.cxx" start='TEST_CASE("FairVolumeList")' />
+
+The option `ENABLE_LD_LIBRARY_PATH_WORKAROUND` gives `LD_LIBRARY_PATH` to the test executable, for the
+test discovery and for the test runs. The suite `ExSimulation1` uses it on Linux
+([the comment in its CMakeLists.txt](/repo/tests/examples/simulation/Tutorial1/CMakeLists.txt#L9-L16)).
+The option needs CMake 3.22 or newer. With an older CMake, the function registers no test of the suite
+and writes only a `VERBOSE` message.
+
+### The geometry tests of the examples
+
+The tests in `tests/examples/` check the [`FairGeoSet`](/api/FairGeoSet/) class of each example. They
+use the helper `checkGeoSetNamingConventions()` from
+[checks_FairGeoSet.h](/repo/tests/geobase/checks_FairGeoSet.h):
+
+<Snippet file="tests/examples/simulation/Tutorial1/test_FairTutorialDet1Geo.cxx" start='TEST_CASE("FairTutorialDet1Geo")' />
+
+The helper checks that the name of the set is the prefix, and that
+[`getMaxModules()`](/api/FairGeoSet/#getMaxModules) returns the number of modules. Then it checks
+[`getModuleName()`](/api/FairGeoSet/#getModuleName), [`getEleName()`](/api/FairGeoSet/#getEleName) and
+[`getModNumInMod()`](/api/FairGeoSet/#getModNumInMod) for 100 random module indices. The module with
+the index `i` has the name of the prefix followed by `i + 1`, for example `tutdet2` for the index 1.
+
+## Macro tests
+
+A macro test runs a ROOT macro of an example. Three parts make the test:
+
+1. `GENERATE_ROOT_TEST_SCRIPT(<macro>)` ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L122-L162))
+   writes the script `<macro name>.sh` into the build folder that matches the folder of the macro. It
+   also makes the folder `data/` there.
+2. `add_test()` runs this script with the arguments of the macro.
+3. `set_tests_properties()` gives the time limit, the pass expression and the order of the tests.
+
+The script comes from [root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in). It sets the
+environment for the macro: the library path, `ROOT_INCLUDE_PATH`, `VMCWORKDIR` and the data variables
+of Geant4. In the build tree, `VMCWORKDIR` is the folder `examples/` of the source tree. At the end, the
+script joins its arguments with commas and starts ROOT in batch mode in the build folder:
+
+<Snippet file="cmake/scripts/root_macro.sh.in" start="# Concatenate all parameters" end="$ROOTEXE -q -b" />
+
+The macro stays in the source tree. Its output files go into the build folder.
+
+### Example: the tests of Tutorial 2
+
+This is the simulation test of Tutorial 2:
+
+<Snippet file="examples/simulation/Tutorial2/macros/CMakeLists.txt" start="add_test(NAME ${prefix}" end="/^\)$/" />
+
+- The script gets the arguments `10 "TGeant4" true 333`. ROOT thus runs
+  `run_tutorial2.C(10,"TGeant4",true,333)`. Write a string argument with escaped quotes, as
+  `\"TGeant4\"` in the CMake file.
+- `PASS_REGULAR_EXPRESSION`: the test passes when the output contains `Macro finished successfully`.
+- `FIXTURES_SETUP`: other tests can require the fixture `fixtures.ex_sim_tutorial2_sim`.
+- `RESOURCE_LOCK`: CTest does not run two tests with the same lock at the same time. Three tests of
+  Tutorial 2 use the same parameter file. They share the lock `ex_sim_tutorial2_paramFile`.
+
+The next test reads the parameter file of the simulation and compares the seed of the random
+generator:
+
+<Snippet file="examples/simulation/Tutorial2/macros/CMakeLists.txt" start="add_test(NAME ${prefix}_compare_seed_value" end="/^\)$/" />
+
+This test has no pass expression, so CTest looks at the exit code of the script. The script ends with
+the `root` call. `compare_seed_value.C` returns 1 if the seed in the file is not 333
+([compare_seed_value.C](/source/examples/simulation/Tutorial2/macros/compare_seed_value.C/#L38-L46)).
+
+### A pass expression ignores the exit code
+
+With `PASS_REGULAR_EXPRESSION`, CTest ignores the exit code of the test (CMake behavior). Thus print the
+success line only after all checks of the macro. `run_tutorial1.C` shows the difference. It prints
+`Macro finished successfully.` before it checks the output chain
+([run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L166)). It prints
+`Simulation successful.` after the checks:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="auto nofE = chain.GetEntries();" end='cout << "Simulation successful."' />
+
+The test `ex_sim_tutorial1_TGeant4` expects `Macro finished successfully`. It passes also when a check
+fails and the macro returns 1. Only `ex_sim_tutorial1_Geant4MT` expects `Simulation successful.`
+([CMakeLists.txt](/repo/examples/simulation/Tutorial1/macros/CMakeLists.txt#L50-L63)).
+
+### Measurements for the dashboard
+
+A test can give values to the CDash dashboard. `run_tutorial1.C` prints the maximum memory of the
+process in MB, from [`FairSystemInfo::GetMaxMemory()`](/api/FairSystemInfo/#GetMaxMemory), in a
+`<DartMeasurement>` tag:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="// Extract the maximal used memory" end='cout << "</DartMeasurement>" << endl;' />
+
+CTest finds such tags in the output and keeps the value with the result of the test (CTest behavior).
+The macro gives the CPU load in the same way.
+
+### Compile the macros
+
+Tutorial 2 and the pixel example also compile some macros as C++ files. An error in such a macro then
+stops the build, before a test runs:
+
+<Snippet file="examples/simulation/Tutorial2/macros/CMakeLists.txt" start="# Try to compile the macros as normal files" end="FairRoot::Generators)" />
+
+These macros include their headers only for the compiler. The ROOT interpreter defines `__CLING__` and
+skips the block:
+
+<Snippet file="examples/simulation/Tutorial2/macros/compare_seed_value.C" start="#if !defined(__CLING__)" end="#endif" />
+
+### Transport engines
+
+The examples make one test for each transport engine in the list `mcEngine_list`. The name of the
+engine is the end of the test name, for example `ex_sim_tutorial4_reco_TGeant4`:
+
+<Snippet file="examples/CMakeLists.txt" start="set(mcEngine_list TGeant4)" end="/^  endif\(\)/" />
+
+`ENABLE_GEANT3_TESTING` is `OFF` by default. A default build thus tests Geant4 only. To test Geant3
+also, set the option. CMake must also find Geant3:
+
+```sh
+cmake -S . -B build -DENABLE_GEANT3_TESTING=ON
+cmake --build build --target install --parallel
+cd build
+ctest -R TGeant3
+```
+
+Some tests always use Geant4: `ex_sim_tutorial1_Geant4MT`, `ex_sim_tutorial1_PostInitConfig`, the tests
+of Tutorial 2, `runPropagatorMC` and the tests of the pixel example.
+
+## Device tests
+
+The FairMQ examples test a chain of devices with a shell script. The build makes the script from a
+`.sh.in` file. The script starts the devices in the background with `--control static`. The test
+script of the serialization example waits for the sink, and then stops the other devices
+([testSerializationEx.sh.in](/repo/examples/MQ/serialization/testSerializationEx.sh.in)). The test
+passes when the sink logs `Received 100 messages!`:
+
+<Snippet file="examples/MQ/serialization/CMakeLists.txt" start="add_test(NAME ex_MQ_serialization" end="PASS_REGULAR_EXPRESSION" />
+
+Two more conditions apply to the device tests:
+
+- `ex_MQ_pixel_static` and `ex_MQ_parameters` bind fixed TCP ports. They have the property
+  `RUN_SERIAL`, so CTest runs each of them alone.
+- CMake adds `ex_MQ_pixel_alt_static` only if FairMQ has the target `FairMQ::fairmq-dds-command-ui`.
+  `ex_MQ_pixel_simulation` and `ex_MQ_pixel_split_DDS` also need DDS 3.5 or newer and FairMQ 1.4.23 or
+  newer.
+
+For the devices themselves, see the [FairMQ documentation](https://fairrootgroup.github.io/FairMQ/).
+
+## Template tests
+
+[`templates/CMakeLists.txt`](/repo/templates/CMakeLists.txt) adds four tests:
+`project_root_containers`, `project_stl_containers` and a variant `_double` of each. The script
+`test_project.sh` copies the template into a temporary folder and runs `rename.sh TestProj Tst det`.
+Then it configures the project with the installed FairRoot and builds it. The variant `_double` runs
+the configuration twice, to check the second run with the existing cache. Each test has a time limit
+of 300 s. [How FairRoot tests the templates](/tools/templates/#how-fairroot-tests-the-templates) shows
+the script and the limits of these tests.
+
+## The tests in the CI
+
+Jenkins runs the CI for each pull request and each branch ([Jenkinsfile](/repo/Jenkinsfile)):
+
+- Build jobs run on Linux (Debian, Fedora and Ubuntu, with several FairSoft versions) and on macOS.
+  The Linux jobs run in containers on a Slurm cluster, with the scripts in
+  [`tests/ci/`](/repo/tests/ci/).
+- Each build job runs `ctest -S FairRoot_build_test.cmake -V --output-on-failure`.
+- Branch builds on Linux add `-DENABLE_GEANT3_TESTING=ON`. Pull requests and the macOS jobs test
+  Geant4 only.
+- One Linux job runs clang-tidy, and each pull request gets a format check. See
+  [Contributing](/project/contributing/).
+
+The script [FairRoot_build_test.cmake](/repo/FairRoot_build_test.cmake) does these steps:
+
+1. It configures FairRoot with the install prefix `install` in the build folder. It sets
+   `BUILD_MBS`, `BUILD_PROOF_SUPPORT` and `BUILD_EVENT_BUILDER` to `ON`, unless the caller sets them
+   to `OFF`.
+2. It builds the target `install`.
+3. It runs the tests, four at the same time and in random order. In a branch build, CTest runs a
+   failed test again, up to 7 runs in total.
+4. It sends the results to the CDash server of [CTestConfig.cmake](/repo/CTestConfig.cmake). If a test
+   failed, the script fails.
+
+<Snippet file="FairRoot_build_test.cmake" start="unset(repeat)" end="RETURN_VALUE _ctest_test_ret_val)" />
+
+To repeat a CI job on your computer, run the script in the source folder. The script finds its CMake
+modules with a relative path:
+
+```sh
+cd FairRoot
+ctest -S FairRoot_build_test.cmake -V --output-on-failure -DCTEST_BINARY_DIRECTORY="$PWD/build-ci"
+```
+
+:::caution
+This script also sends the results to the CDash server of FairRoot.
+:::
+
+## Add tests to your project
+
+The project templates include the CTest module and the CMake modules of FairRoot. A project can thus
+add macro tests in the same way as the examples.
+
+<Steps>
+
+1. Keep `include(CTest)` in the top-level `CMakeLists.txt`. It adds the option `BUILD_TESTING` and
+   enables `add_test()`.
+
+2. Make the macro check its result. Print a fixed success line at the end, after all checks.
+
+3. Add the folder of the macro to the build with `add_subdirectory()`. The templates do not add their
+   folder `macro`.
+
+4. In the `CMakeLists.txt` of this folder, generate the script and add the test:
+
+   ```cmake title="macro/CMakeLists.txt"
+   GENERATE_ROOT_TEST_SCRIPT(${CMAKE_CURRENT_SOURCE_DIR}/run_sim.C)
+
+   add_test(NAME run_sim_TGeant4
+            COMMAND ${CMAKE_CURRENT_BINARY_DIR}/run_sim.sh 10 \"TGeant4\")
+   set_tests_properties(run_sim_TGeant4 PROPERTIES
+     TIMEOUT 120
+     PASS_REGULAR_EXPRESSION "Macro finished successfully"
+   )
+   ```
+
+5. Build the project, then run `ctest` in its build folder.
+
+</Steps>
+
+[`GENERATE_ROOT_TEST_SCRIPT()`](/reference/cmake/#generate_root_test_script) comes from the module
+`ROOTMacros` of FairRoot. In a project with `FAIRROOTPATH`, it takes `root_macro.sh.in` from
+`$FAIRROOTPATH/share/fairbase/cmake/scripts/`.
+
+:::caution
+- The macro `run_sim.C` of the templates prints `Macro finished succesfully.`, with one "s" missing.
+  The pass expression of the sketch does not match it. Correct the macro first.
+- Give each test a `TIMEOUT`. The line `set(CTEST_TESTING_TIMEOUT 60)` in `CTestConfig.cmake` has no
+  effect, because CTest does not read this variable. The default time limit of CTest stays 1500 s
+  (`DART_TESTING_TIMEOUT`).
+:::
+
+`CTestConfig.cmake` and `CTestCustom.cmake` of the templates are for a CDash dashboard.
+`CTestConfig.cmake` gives the server. `CTestCustom.cmake` filters the warnings and errors of a
+dashboard build. A run of `ctest` without a dashboard does not use these settings.
+
+For unit tests, use your own test framework. FairRoot does not install
+`fairroot_add_catch2_test_suite()` or its copy of Catch2. With an installed Catch2 v3, a geometry test
+like the ones in `tests/examples/` can look like this:
+
+```cmake title="tests/CMakeLists.txt"
+find_package(Catch2 3 REQUIRED)
+include(Catch)
+
+add_executable(test_NewDetector test_NewDetectorGeo.cxx)
+target_include_directories(test_NewDetector PRIVATE ${CMAKE_SOURCE_DIR}/NewDetector)
+target_link_libraries(test_NewDetector PRIVATE NewDetector Catch2::Catch2WithMain)
+catch_discover_tests(test_NewDetector TEST_PREFIX "NewDetector::")
+```
+
+`GENERATE_LIBRARY()`, which the templates use, sets no include folder on the library target
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L227-L234)). Thus the test gives the folder of
+the detector headers itself.
+
+## Related pages
+
+- [Contributing](/project/contributing/): the rules for a pull request, the format check and clang-tidy.
+- [Install FairRoot](/start/install/): build and install FairRoot with FairSoft.
+- [Examples](/examples/overview/): the examples and their tests.
+- [Templates](/tools/templates/): the project templates and `rename.sh`.
+- [CMake reference](/reference/cmake/): the options of the FairRoot build.

@@ -1,0 +1,272 @@
+---
+title: 'Architecture'
+description: 'The FairRoot libraries and their dependencies, the central objects that connect the parts at run time, and the path of the data through a simulation run and a reconstruction run.'
+sidebar:
+  order: 1
+code: [fairroot/base/steer/FairRun.cxx, fairroot/base/steer/FairRootManager.cxx, fairroot/parbase/FairRuntimeDb.cxx, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/steer/FairRunSim.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/tools/FairLogger.cxx]
+---
+
+import Architecture from '../../../components/diagrams/Architecture.astro';
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot is a set of shared libraries. The library `FairRoot::Base` holds the runs, the tasks, the
+I/O manager, the sources, the sinks and the MC application. The other libraries add parameters,
+geometry input, generators, track propagation, online input and the FairMQ interface. At run time,
+a few central objects connect the parts, and each event takes a fixed path through them.
+
+<Architecture />
+
+## The libraries
+
+Each library is a CMake target in the namespace `FairRoot::`. `FairRoot::Base` is at the center:
+
+- Below `Base` are `Tools`, `Alignment`, `GeoBase` and `ParBase`. They depend on no other FairRoot
+  library except `Tools`.
+- `Base` links these four libraries as public dependencies
+  ([fairroot/base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L103-L124)). A target that
+  links `FairRoot::Base` gets all of them.
+- Most of the other libraries build on `Base`. Many of them are optional. The build makes them only
+  when CMake finds their dependencies or when a build option is on
+  ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L12-L54)).
+
+| Library | Contents | FairRoot dependencies | Built when |
+| --- | --- | --- | --- |
+| `Tools` | `FairLogger`, `FairMonitor`, `FairSystemInfo`, the version header | none | always |
+| `Alignment` | `FairAlignmentHandler` | `Tools` (private) | always |
+| `GeoBase` | Geometry from `.geo` files: `FairGeoLoader`, `FairGeoInterface` | `Tools` (private) | always |
+| `ParBase` | Runtime database, parameter containers, parameter I/O | `Tools` (private) | always |
+| `Base` | Runs, tasks, I/O manager, sources, sinks, event headers, MC application, modules, detectors, primary generator, stack and field base classes | `Alignment`, `Tools`, `ParBase`, `GeoBase` | always |
+| `Generators` | Event generators, for example `FairBoxGenerator` | `Base`; `Tools` (private) | always |
+| `TrackBase` | Track parameters and propagators | `Base` (private) | always |
+| `DataMatch` | Matching of reconstructed data to MC data (deprecated) | `Base` | always |
+| `MCStepLogger` | A step logger that you load with `LD_PRELOAD` | `Base` (private) | always |
+| `Geane` | Track propagation with Geane | `Base`, `TrackBase`; `Tools` (private) | Geant3 is found |
+| `FastSim` | Fast simulation with Geant4 | `Base`; `Tools`, `GeoBase` (private) | Geant4 and Geant4 VMC are found |
+| `MCConfigurator` | Engine configuration from YAML files | `Base`; `Tools`, `FastSim` (private) | Geant3, Geant4 VMC and yaml-cpp are found, and `FastSim` is built |
+| `EventDisplay` | Event display with ROOT Eve | `Base` | ROOT has OpenGL support |
+| `MbsAPI` | C library for MBS and LMD data | none | `BUILD_MBS` is on |
+| `Online` | `FairRunOnline` and the online sources | `Base`; `Tools`, `ParBase`, `MbsAPI` (private) | `BUILD_ONLINE` or `BUILD_MBS` is on |
+| `FairMQ` | Header-only wrapper of the FairMQ library | none (links `FairMQ::FairMQ`) | `BUILD_BASEMQ` is on |
+| `BaseMQ` | Header-only devices and serializers for FairMQ | `Base`, `FairMQ`, `ParBase`, `Tools`; `MbsAPI` with `BUILD_MBS` | `BUILD_BASEMQ` is on |
+| `ParMQ` | The parameter server device | `FairMQ`; `Base`, `BaseMQ`, `ParBase` (private) | `BUILD_BASEMQ` is on |
+
+A public dependency goes on to each target that links the library. A private dependency does not.
+For example, `TrackBase` uses `Base` only in its sources, so a target that uses classes of both
+libraries must link both. The page [Libraries and headers](/reference/libraries/) lists the main
+classes, the external dependencies and the installed files of each library.
+
+## The central objects
+
+Five objects connect the parts. Your code and the FairRoot classes get them through static
+functions:
+
+| Object | Get it with | Made by | Lifetime |
+| --- | --- | --- | --- |
+| Run | [`FairRun::Instance()`](/api/FairRun/#Instance), [`FairRunSim::Instance()`](/api/FairRunSim/#Instance), [`FairRunAna::Instance()`](/api/FairRunAna/#Instance) | Your macro or program | Until you delete it |
+| I/O manager | [`FairRootManager::Instance()`](/api/FairRootManager/#Instance), [`FairRun::GetRootManager()`](/api/FairRun/#GetRootManager) | The first call of `Instance()`, usually in the constructor of `FairRun` | One object for each thread, until the thread ends |
+| Runtime database | [`FairRuntimeDb::instance()`](/api/FairRuntimeDb/#instance), [`FairRun::GetRuntimeDb()`](/api/FairRun/#GetRuntimeDb) | The first call of `instance()` | Until the master run deletes it |
+| MC application | [`FairMCApplication::Instance()`](/api/FairMCApplication/#Instance), [`FairRunSim::GetMCApplication()`](/api/FairRunSim/#GetMCApplication) | [`FairRunSim::Init()`](/api/FairRunSim/#Init) | Until `FairRunSim` deletes it |
+| Logger | [`FairLogger::GetLogger()`](/api/FairLogger/#GetLogger) | The first call of `GetLogger()` | Never deleted |
+
+### The run
+
+You make the run in your macro. The constructor of `FairRun` stores the object in a static pointer.
+If a run exists already, it stops the program with ROOT's `Fatal()`
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L40-L82)). The pointer has the VMC
+qualifier `TMCThreadLocal`, so each thread of a multithreaded simulation has its own run. The
+destructor sets the pointer back to `nullptr`.
+
+`FairRunSim` and `FairRunAna` have their own static pointer for their `Instance()`. The page
+[Runs](/concepts/runs/) explains the run classes.
+
+### The I/O manager
+
+[`FairRootManager`](/api/FairRootManager/) is a `thread_local` object in a function:
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="FairRootManager* FairRootManager::Instance()" />
+
+The constructor of `FairRun` calls `Instance()` and keeps the pointer. Each thread has its own I/O
+manager. It is not deleted with the run, and it stays until its thread ends. Modules and detectors
+get it with [`FairModule::GetRootManager()`](/api/FairModule/#GetRootManager).
+
+The run gives the source and the sink to the I/O manager as pointers without ownership. The
+destructor of the run resets these pointers before it deletes the source and the sink
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L88-L91)). See
+[Branches, sources and sinks](/concepts/io/).
+
+### The runtime database
+
+[`FairRuntimeDb::instance()`](/api/FairRuntimeDb/#instance) makes the object at the first call
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L72-L79)). This often happens
+before your macro makes the run. A library with parameter containers usually has a static container
+factory object. When the library is loaded, the constructor of
+[`FairContFact`](/api/FairContFact/#FairContFact-2) adds the factory to the runtime database
+([FairContFact.cxx](/source/fairroot/parbase/FairContFact.cxx/#L153-L158)). `FairRoot::Base` has
+such an object for `FairBaseParSet` and `FairGeoParSet`
+([FairBaseContFact.cxx](/source/fairroot/base/sim/FairBaseContFact.cxx/#L24-L38)).
+
+The master run deletes the runtime database in its destructor
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L99-L102)). A later call of `instance()`
+makes a new one. See [Parameters and the runtime database](/concepts/parameters/).
+
+### The MC application
+
+[`FairMCApplication`](/api/FairMCApplication/) derives from the VMC class
+`TVirtualMCApplication`. `FairRunSim::Init()` makes it
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L172)), and the destructor of
+`FairRunSim` deletes it. `FairMCApplication::Instance()` returns the application that VMC knows,
+cast to `FairMCApplication`.
+
+The MC application owns the stack and the transport engine. In `InitMC()`, it takes the stack from
+the engine into a `std::unique_ptr`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L253-L262)). Its
+destructor deletes the engine.
+
+The MC application has a state. It changes during the initialization and the run:
+
+<Snippet file="fairroot/base/sim/FairMCApplication.h" start="enum class FairMCApplicationState" />
+
+Some functions check the state. For example, `FairModule::ProcessNodes()` logs a fatal error
+outside `ConstructGeometry()`
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L225-L236)).
+
+With multithreaded Geant4, each worker thread gets a copy of the MC application from
+[`CloneForWorker()`](/api/FairMCApplication/#CloneForWorker). The copy has its own `FairRunSim`
+and a copy of the sink
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). See
+[Multithreaded Geant4](/simulation/geant4-mt/).
+
+### The logger
+
+FairRoot code writes log messages with the `LOG()` macro of
+[FairLogger](https://github.com/FairRootGroup/FairLogger). The class
+[`FairLogger`](/api/FairLogger/) keeps the old interface, for example `SetLogScreenLevel()`.
+`GetLogger()` makes the object at the first call and never deletes it
+([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L28-L47)).
+
+The constructor installs a handler for fatal messages. The handler writes a stack trace to the
+file `core_dump_<pid>`, unless the ROOT setting `Root.Stacktrace` is off. Then it throws
+`fair::FatalException` ([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L179-L202)).
+
+The FairRoot libraries do not call `GetLogger()` themselves. Thus the handler is active only after
+your code calls `GetLogger()`. Before that, `LOG(fatal)` writes the message, but the FairLogger
+library does not stop the program. See [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+## Who owns what
+
+Many FairRoot functions take raw pointers and keep the objects. These owners delete them:
+
+- The run owns the tasks, the sink, the source and the event header. Its destructor deletes the
+  main task `FairTaskList`, which holds your tasks
+  ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L84-L108)).
+- `FairRunSim` owns the modules, the primary generator, the MC event header and the MC application
+  ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L84-L120)). It does not delete the
+  field.
+- `FairRunAna` deletes its field and `gGeoManager`
+  ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L93-L108)).
+- The MC application owns the stack and the transport engine.
+- The runtime database deletes its parameter containers, except the containers that
+  `setOwnership()` marks as owned by another object
+  ([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L99-L122)).
+
+Thus make these objects with `new`, give them to FairRoot, and do not delete them yourself.
+
+## The data path in a simulation run
+
+`FairRunSim::Init()` connects the parts
+([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L154-L258)):
+
+1. The I/O manager initializes the sink.
+2. The run makes the MC application, gets the run ID and gives its tasks to the MC application.
+3. The engine configuration makes the transport engine and the stack. Then
+   [`InitMC()`](/api/FairMCApplication/#InitMC) initializes the engine.
+4. In these two steps, the engine calls
+   [`ConstructGeometry()`](/api/FairMCApplication/#ConstructGeometry) and
+   [`InitGeometry()`](/api/FairMCApplication/#InitGeometry). The engine decides when, see
+   [The callbacks during initialization](/simulation/overview/#the-callbacks-during-initialization).
+   The modules build their volumes. The stack, the detectors and the MC event header register their
+   branches ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L945-L979)).
+5. The MC application initializes the generators and the tasks. Then the sink makes the output tree
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L942)).
+
+For each event, the data goes this way:
+
+```text
+FairGenerator::ReadEvent() -> FairPrimaryGenerator::AddTrack() -> stack PushTrack()
+  -> transport engine -> FairMCApplication::Stepping() -> FairDetector::ProcessHits()
+  -> MC points in the registered arrays
+  -> FairMCApplication::FinishEvent() -> FairRootManager::Fill() -> sink
+```
+
+In `FinishEvent()`, the stack makes the MC tracks with
+[`FillTrackArray()`](/api/FairGenericStack/#FillTrackArray) and updates the track indices with
+[`UpdateTrackIndex()`](/api/FairGenericStack/#UpdateTrackIndex). Then the tasks run, and the I/O
+manager fills the event into the sink
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L633-L690)).
+[`FairRunSim::Run()`](/api/FairRunSim/#Run) closes the sink after the last event. The page
+[How a simulation runs](/simulation/overview/) shows each step.
+
+## The data path in a reconstruction run
+
+`FairRunAna::Init()` prepares the run
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L252)):
+
+1. The I/O manager initializes the source and the sink.
+2. The run gets the geometry, the run ID and the event header.
+3. Each task requests its parameter containers in `SetParContainers()`. Then the runtime database
+   initializes the containers for the run ID.
+4. Each task gets its input branches and registers its output branches in `Init()`.
+5. The sink makes the output tree.
+
+[`FairRunAna::Run()`](/api/FairRunAna/#Run) then does this for each entry
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L302-L337)):
+
+```text
+source -> FairRootManager::ReadEvent() -> branches in memory
+  -> FairTask::Exec() of each task -> new branches
+  -> FairRootManager::Fill() -> sink
+```
+
+If the run ID of an event changes, the run initializes the parameter containers again and calls
+`ReInit()` of the tasks. It does not do this after
+[`SetContainerStatic()`](/api/FairRunAna/#SetContainerStatic)
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L568-L584)). After the last entry,
+the run calls `Finish()` of each task and writes the output. The page
+[Runs](/concepts/runs/#fairrunana-reconstruction-and-analysis) gives all steps, and
+[Tasks](/concepts/tasks/) explains the hooks of a task.
+
+## Where your code plugs in
+
+An experiment adds its code as subclasses of these base classes:
+
+| Base class | What you implement | Who calls it | Example |
+| --- | --- | --- | --- |
+| [`FairModule`](/api/FairModule/) | [`ConstructGeometry()`](/api/FairModule/#ConstructGeometry). It often reads the file from `SetGeometryFileName()`. | `FairMCApplication::ConstructGeometry()` | [FairCave.h](/source/examples/common/passive/FairCave.h/) |
+| [`FairDetector`](/api/FairDetector/) | [`ProcessHits()`](/api/FairDetector/#ProcessHits), [`Register()`](/api/FairDetector/#Register), [`GetCollection()`](/api/FairDetector/#GetCollection), [`Reset()`](/api/FairDetector/#Reset), and [`IsSensitive()`](/api/FairModule/#IsSensitive) to select the sensitive volumes | The MC application calls `ProcessHits()` in `Stepping()` and `Register()` in `InitGeometry()`. The stack `FairStack` of the examples calls `GetCollection()`. | [FairTutorialDet4.h](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.h/) |
+| [`FairGenerator`](/api/FairGenerator/) | [`ReadEvent()`](/api/FairGenerator/#ReadEvent) | [`FairPrimaryGenerator::GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) | [`FairBoxGenerator`](/api/FairBoxGenerator/) |
+| [`FairGenericStack`](/api/FairGenericStack/) | [`PushTrack()`](/api/FairGenericStack/#PushTrack) and the functions of `TVirtualMCStack` | The primary generator, the engine and the MC application | [FairStack.h](/source/examples/common/mcstack/FairStack.h/) |
+| [`FairTask`](/api/FairTask/) | [`Init()`](/api/FairTask/#Init), `Exec()`, [`SetParContainers()`](/api/FairTask/#SetParContainers), [`ReInit()`](/api/FairTask/#ReInit), [`Finish()`](/api/FairTask/#Finish) | The run, through its main task | [FairTutorialDet4StraightLineFitter.h](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4StraightLineFitter.h/) |
+| [`FairParSet`](/api/FairParSet/), usually through [`FairParGenericSet`](/api/FairParGenericSet/) | [`putParams()`](/api/FairParGenericSet/#putParams), [`getParams()`](/api/FairParGenericSet/#getParams) | The runtime database | [FairTutorialDet4GeoPar.h](/source/examples/simulation/Tutorial4/src/param/FairTutorialDet4GeoPar.h/) |
+| [`FairContFact`](/api/FairContFact/) | The list of containers in the constructor, [`createContainer()`](/api/FairContFact/#createContainer) | [`FairRuntimeDb::getContainer()`](/api/FairRuntimeDb/#getContainer) | [FairTutorialDet4ContFact.h](/source/examples/simulation/Tutorial4/src/param/FairTutorialDet4ContFact.h/) |
+| [`FairField`](/api/FairField/) | [`GetBx()`](/api/FairField/#GetBx), [`GetBy()`](/api/FairField/#GetBy), [`GetBz()`](/api/FairField/#GetBz), or [`GetFieldValue()`](/api/FairField/#GetFieldValue) | The transport engine, through [`Field()`](/api/FairField/#Field) | [FairConstField.h](/source/examples/common/passive/FairConstField.h/) |
+| [`FairSource`](/api/FairSource/) | [`Init()`](/api/FairSource/#Init), [`ReadEvent()`](/api/FairSource/#ReadEvent) and the other pure virtual functions | The I/O manager | [PixelDigiSource.h](/source/examples/MQ/pixelDetector/src/PixelDigiSource.h/) |
+| [`FairSink`](/api/FairSink/) | [`InitSink()`](/api/FairSink/#InitSink), [`Fill()`](/api/FairSink/#Fill), [`Write()`](/api/FairSink/#Write) and the other pure virtual functions | The I/O manager | [`FairRootFileSink`](/api/FairRootFileSink/) |
+
+The detector, the generator, the stack, the source, the sink and `FairParGenericSet` have pure
+virtual functions, so your class must implement them. The other functions in the table have a
+default, but most defaults do no useful work. For example, `FairModule::ConstructGeometry()` only
+logs a warning ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L57-L61)), and
+`FairField::GetBx()` logs a warning and returns 0
+([FairField.h](/source/fairroot/base/field/FairField.h/#L67-L71)). The default
+`GetFieldValue()` calls `GetBx()`, `GetBy()` and `GetBz()`
+([FairField.cxx](/source/fairroot/base/field/FairField.cxx/#L38-L43)). Thus a field implements
+these three functions or `GetFieldValue()`.
+
+## Related pages
+
+- [What FairRoot is](/start/overview/): the parts and the life of one event.
+- [Runs](/concepts/runs/): the run classes and what `Init()` and `Run()` do.
+- [Tasks](/concepts/tasks/): the hooks of a task.
+- [Branches, sources and sinks](/concepts/io/): the I/O manager in detail.
+- [Parameters and the runtime database](/concepts/parameters/): parameter containers and factories.
+- [Libraries and headers](/reference/libraries/): all libraries, their targets and the headers.

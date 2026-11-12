@@ -1,0 +1,203 @@
+---
+title: 'Output: sinks and persistence'
+description: 'How a sink stores the persistent branches: the ROOT file of FairRootFileSink, the choice of persistent branches, extra objects, the geometry, and a sink of your own.'
+sidebar:
+  order: 4
+code:
+  - fairroot/base/sink/FairSink.h
+  - fairroot/base/sink/FairRootFileSink.h
+  - fairroot/base/sink/FairRootFileSink.cxx
+  - fairroot/base/steer/FairRootManager.cxx
+  - fairroot/base/steer/FairTask.cxx
+  - examples/MQ/pixelDetector/src/FairOnlineSink.h
+  - examples/MQ/pixelDetector/src/FairOnlineSink.cxx
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+A sink stores the persistent branches of each event, or sends them on. `FairRootFileSink` writes a ROOT file with one tree, and the `FairOnlineSink` of the MQ pixel example sends the branches over FairMQ channels. The run calls the sink; your tasks only decide which branches are persistent.
+
+## Set the sink
+
+Create the sink in the macro and give it to the run with [`SetSink()`](/api/FairRun/#SetSink). The run owns the sink ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L190-L199)).
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_reco.C" start="FairRunAna* fRun = new FairRunAna();" end="fRun->SetSink(" title="run_reco.C" />
+
+`FairRootFileSink` has three constructors ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L38-L69)):
+
+| Constructor | File |
+| --- | --- |
+| [`FairRootFileSink(TString name, ...)`](/api/FairRootFileSink/#FairRootFileSink-3) | Opens the file with `TFile::Open(name, "recreate")`. An existing file is overwritten. |
+| [`FairRootFileSink(const TString* name, ...)`](/api/FairRootFileSink/#FairRootFileSink-2) | The same, with a pointer to the name. |
+| [`FairRootFileSink(TFile* f, ...)`](/api/FairRootFileSink/#FairRootFileSink) | Uses your open file. The sink owns it and deletes it. |
+
+If the file does not open, the constructor logs a `fatal` line. This line stops the program only if the macro called `FairLogger::GetLogger()` before, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does). Otherwise the macro goes on. For a file name, `InitSink()` then uses a null file pointer ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L86)).
+
+`FairRun::SetOutputFile()` and `FairRun::SetOutputFileName()` are deprecated: they create a `FairRootFileSink` and log a warning ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L201-L221)).
+
+Without a sink, the run still works. A persistent `Register()` then logs a warning, and a persistent `RegisterAny()` logs a `fatal` line. In both cases, the branch stays in memory only ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L171), [FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L452-L466)). A multithreaded simulation crashes without a sink, because it clones the sink for each worker ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L442)).
+
+## When the run calls the sink
+
+| Step | `FairRunAna` | `FairRunSim` |
+| --- | --- | --- |
+| `InitSink()` | `Init()`, after the source ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L142-L143)) | `Init()` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L157)) |
+| `WriteFolder()`: makes the tree | End of `Init()`, after `Init()` of the tasks ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L237-L251)) | After `Init()` of the tasks ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L942)) |
+| `Fill()` | After the tasks of each event ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L326-L327)) | At the end of each event ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L661-L665)) |
+| `Write()` | After `Finish()` of the tasks ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L339-L345)) | At the end of the run, but not with a radiation mesh ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L368-L370)) |
+| `Close()` | In [`TerminateRun()`](/api/FairRunAna/#TerminateRun) | At the end of `Run()` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L322-L329)) |
+
+`FairRunAna::Run()` does not close the sink. The file closes when the run deletes the sink. Do not call `TerminateRun()` after `Run()`: it calls `Finish()` of the tasks and `Write()` again ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L550-L562)). It ends a run that [`RunMQ()`](/api/FairRunAna/#RunMQ) drives, like the FairMQ sampler of Tutorial 3.
+
+After the last event, [`FairRootManager::LastFill()`](/api/FairRootManager/#LastFill) calls `Fill()` once more if its flag is set ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L337-L344)). Before `Finish()` of the tasks, the run sets this flag to `kTRUE` if a `FairWriteoutBuffer` still holds data, else to `kFALSE` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L879-L889)). A task can also set it with [`SetLastFill()`](/api/FairRootManager/#SetLastFill) at the end of the run, as `FairRingSorterTask` does in `FinishTask()` ([FairRingSorterTask.cxx](/source/fairroot/base/steer/FairRingSorterTask.cxx/#L121)). An earlier call has no effect, because the run overwrites the flag.
+
+## What `FairRootFileSink` writes
+
+`FairRootFileSink` builds the tree from a ROOT folder:
+
+1. [`InitSink()`](/api/FairRootFileSink/#InitSink) creates the folder `GetFolderName()` and logs `FairRootFileSink initialized.` ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L78-L98)).
+2. Each persistent `Register()` puts the object into a subfolder, with the folder name that the task gives ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L214-L226)).
+3. [`WriteFolder()`](/api/FairRootFileSink/#WriteFolder) writes the folder and creates the tree `GetTreeName()` from it. ROOT makes one branch for each object in the folder.
+4. The sink shortens the branch names to the names of the objects, and adds a branch for each persistent `RegisterAny()`.
+5. [`Fill()`](/api/FairRootFileSink/#Fill) fills the tree, and [`Write()`](/api/FairRootFileSink/#Write) writes it to the file.
+
+<Snippet file="fairroot/base/sink/FairRootFileSink.cxx" start="void FairRootFileSink::WriteFolder()" title="FairRootFileSink.cxx" />
+
+The tree reads each object at its address in the folder. That is why a task must keep its registered object for the whole run. For a `RegisterAny()` branch, the tree reads through your pointer, so the pointer must stay valid ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L261-L289)).
+
+The output file contains these keys:
+
+| Key | Content | Written by |
+| --- | --- | --- |
+| Tree name, `cbmsim` by default | The tree, with one branch for each persistent branch | `Write()` |
+| Folder name, `cbmroot` or `cbmout` by default | The folder with the objects of the persistent `Register()` branches. `GetObject()` takes the object of an input branch from it. | `WriteFolder()` |
+| `BranchList` | The names of all branches of the run, also the memory-only ones | `FairRootManager::WriteFolder()` |
+| `TimeBasedBranchList` | The branches that a `FairWriteoutBuffer` writes | `FairRootManager::WriteFolder()` |
+| `FileHeader` | A [`FairFileHeader`](/api/FairFileHeader/) with the run ID and the task classes | [`FairRootManager::WriteFileHeader()`](/api/FairRootManager/#WriteFileHeader) |
+| `MonitorResults` | The histograms of [`FairMonitor`](/api/FairMonitor/), only if the monitor runs and [`EnableMonitor()`](/api/FairMonitor/#EnableMonitor) got no other file name | `Write()` ([FairMonitor.cxx](/source/fairroot/tools/FairMonitor.cxx/#L632-L664)) |
+| `SimulationSetup` | The name of the transport engine and the YAML configuration, only in a simulation with a [`FairYamlVMCConfig`](/api/FairYamlVMCConfig/) | `FairYamlVMCConfig::Setup()` ([FairYamlVMCConfig.cxx](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L287-L297)) |
+
+The names of the tree and the folder come from `FairRootManager`. [Branches, sources and sinks](/concepts/io/) explains the defaults, and [Configuration files](/reference/config-files/) describes `rootmanager.dat`.
+
+## Choose the persistent branches
+
+The last argument of `Register()` and `RegisterAny()` decides if the sink stores a branch. To let the macro decide, a task can ask [`IsOutputBranchPersistent(name)`](/api/FairTask/#IsOutputBranchPersistent) for this argument. It returns the value that the macro set with [`SetOutputBranchPersistent()`](/api/FairTask/#SetOutputBranchPersistent), and `kTRUE` if the macro set nothing ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L250-L263)).
+
+```cpp title="MyHitFinder.cxx"
+InitStatus MyHitFinder::Init()
+{
+    auto ioman = FairRootManager::Instance();
+    fHits = new TClonesArray("MyHit");
+    ioman->Register("MyHit", "MyDetector", fHits, IsOutputBranchPersistent("MyHit"));
+    return kSUCCESS;
+}
+```
+
+```cpp title="run_reco.C"
+auto hitFinder = new MyHitFinder();
+hitFinder->SetOutputBranchPersistent("MyHit", kFALSE);
+fRun->AddTask(hitFinder);
+```
+
+:::caution
+`SetOutputBranchPersistent()` has an effect only if the task passes `IsOutputBranchPersistent()` to `Register()`. No task in FairRoot or in the examples does this. Call it once for each branch: a second call for the same name does not change the value.
+:::
+
+Keep these rules in mind:
+
+- The sink does not copy the input branches. The output has only the branches that this run registers as persistent. To use both later, read the input file and add the output file as a friend ([Input sources, friends and event mixing](/reconstruction/sources/)).
+- `FairRunAna` registers its event header `EventHeader.` as persistent when there is a sink ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L194)). Call [`SetEventHeaderPersistence(kFALSE)`](/api/FairRunAna/#SetEventHeaderPersistence) to drop it.
+- In a simulation, `MCEventHeader.` is always persistent ([FairMCEventHeader.cxx](/source/fairroot/base/event/FairMCEventHeader.cxx/#L82-L86)).
+- [`FairTask::SetInputPersistance()`](/api/FairTask/#SetInputPersistance) is deprecated and has no effect: no code in FairRoot reads the value ([Deprecated APIs](/reference/deprecations/#runs-sources-sinks-and-tasks)).
+
+## Skip an event
+
+In `FairRunAna` and `FairRunOnline`, a task can stop the sink from storing the current event. Call [`MarkFill(kFALSE)`](/api/FairRun/#MarkFill) in `Exec()`. The run then skips `Fill()` for this event and sets the flag back to `kTRUE` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L617-L624)).
+
+```cpp title="MyFilter.cxx"
+void MyFilter::Exec(Option_t*)
+{
+    if (fHits->GetEntriesFast() == 0) {
+        FairRun::Instance()->MarkFill(kFALSE);
+    }
+}
+```
+
+`FairRunSim` does not use this flag. In a simulation, call [`SetSaveCurrentEvent(kFALSE)`](/api/FairMCApplication/#SetSaveCurrentEvent) on the `FairMCApplication` instead ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L661-L665)).
+
+## Write histograms and other objects
+
+[`FairSink::WriteObject(obj, name, option)`](/api/FairSink/#WriteObject) writes one object. `FairRootFileSink` changes to its file and calls `obj->Write(name, option)` ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L291-L295)). `FairYamlVMCConfig` writes the YAML configuration of a simulation into the output file this way:
+
+<Snippet file="fairroot/mcconfigurator/FairYamlVMCConfig.cxx" start="void FairYamlVMCConfig::StoreYamlInfo()" title="FairYamlVMCConfig.cxx" />
+
+Write your histograms in `Finish()` of the task. `FairRunAna` calls `Finish()` of the tasks before `Write()` of the sink, so the file is still open:
+
+```cpp title="MyTask.cxx"
+void MyTask::Finish()
+{
+    if (auto sink = FairRootManager::Instance()->GetSink()) {
+        sink->WriteObject(fHistogram, fHistogram->GetName());
+    }
+}
+```
+
+[`FairRootManager::GetOutFile()`](/api/FairRootManager/#GetOutFile) and `GetOutTree()` return the file and the tree of a `FairRootFileSink`. They check the sink type only with `assert()` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L976-L990)), so call them only when the sink is a `FairRootFileSink`.
+
+## Geometry
+
+The output file does not contain the geometry. `FairRootFileSink::WriteGeometry()` exists, but no code calls `FairRootManager::WriteGeometry()` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L358-L363)).
+
+- `FairRunSim` puts the geometry into the parameter container `FairGeoParSet`, which goes to the parameter file ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L197-L201)).
+- [`FairRun::CreateGeometryFile()`](/api/FairRun/#CreateGeometryFile) writes `gGeoManager` to a separate file ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L365-L376)).
+- `FairRunAna` reads the geometry from `FairGeoParSet`, or from a file that you give with [`SetGeomFile()`](/api/FairRunAna/#SetGeomFile) ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L145-L151)).
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="run->Run(nEvents);" end="run->CreateGeometryFile(" title="run_tutorial1.C" />
+
+## Multithreaded simulation
+
+With multithreaded Geant4, each worker thread writes its own file. [`FairMCApplication::CloneForWorker()`](/api/FairMCApplication/#CloneForWorker) gives each worker a copy of the sink from [`CloneSink()`](/api/FairRootFileSink/#CloneSink) ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). `FairRootFileSink::CloneSink()` inserts `_t` and the instance ID of the `FairRootManager` of the thread before `.root` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L969-L974)).
+
+Tutorial 1 reads the files of its two worker threads as one chain:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start="if (run->WasMT()) {" title="run_tutorial1.C" />
+
+Each worker initializes its sink and closes it when it finishes ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L452-L488)). See [Multithreaded Geant4](/simulation/geant4-mt/).
+
+## Write your own sink
+
+Derive from [`FairSink`](/api/FairSink/) to store the data in another way, and implement all its pure virtual methods. The MQ pixel example has `FairOnlineSink`, which sends the branches of each event over FairMQ channels:
+
+<Snippet file="examples/MQ/pixelDetector/src/FairOnlineSink.h" start="class FairOnlineSink : public FairSink" end="FairSink* CloneSink() override;" title="FairOnlineSink.h" />
+
+It implements the interface like this:
+
+| Method | `FairOnlineSink` |
+| --- | --- |
+| `GetSinkType()` | Returns `kONLINESINK`. |
+| `RegisterImpl()` | Does nothing ([FairOnlineSink.cxx](/source/examples/MQ/pixelDetector/src/FairOnlineSink.cxx/#L23)). |
+| `RegisterAny()` | Keeps the type and the address of the branch ([FairOnlineSink.cxx](/source/examples/MQ/pixelDetector/src/FairOnlineSink.cxx/#L26-L29)). |
+| `Fill()` | Calls `SendBranches()` of the FairMQ device ([FairOnlineSink.cxx](/source/examples/MQ/pixelDetector/src/FairOnlineSink.cxx/#L47-L55)). |
+| `Write()` | Returns -1. |
+| `WriteFolder()`, `WriteObject()`, `WriteGeometry()` | Do nothing, so objects that you write with `WriteObject()` are lost. |
+| `CloneSink()` | Returns a copy for each worker thread ([FairOnlineSink.cxx](/source/examples/MQ/pixelDetector/src/FairOnlineSink.cxx/#L58-L66)). |
+
+`FairMQRunDevice::SendBranches()` selects the branches by the channel name, not by the persistence flag ([FairMQRunDevice.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQRunDevice.cxx/#L62-L120)):
+
+- A channel gets each branch whose name appears as `#<branch>#` in the channel name, or all branches if the channel name contains `#all#`.
+- It gets the `Register()` branches from `GetObject()`, also the memory-only ones.
+- Of the persistent `RegisterAny()` branches, it can send only `MCTrack`; for others it logs a warning.
+- A memory-only `RegisterAny()` branch on such a channel is not sent. `GetObject()` does not find it, and the device logs the `fatal` line `Object <name> NOT FOUND!!!`. FairMQ and the example install no fatal handler, so the device sends the other branches.
+
+The pixel simulation uses the channel `data#all#` ([startFairMQPixelSimulation.sh.in](/repo/examples/MQ/pixelDetector/run/scripts/startFairMQPixelSimulation.sh.in#L164)). The program gives the sink to its device, and the device gives it to its `FairRunSim` ([FairMQSimDevice.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQSimDevice.cxx/#L47-L49)):
+
+<Snippet file="examples/MQ/pixelDetector/run/runMQSim.cxx" start="auto run = std::make_unique" end="run->SetSink(std::move(sink));" title="runMQSim.cxx" />
+
+## Related pages
+
+- [Branches, sources and sinks](/concepts/io/): how tasks register branches, and the order of the sink calls.
+- [Input sources, friends and event mixing](/reconstruction/sources/): read the output again, also as a friend file.
+- [Configuration files](/reference/config-files/): `rootmanager.dat` with the tree and folder names.
+- [Multithreaded Geant4](/simulation/geant4-mt/): the worker threads and their files.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the devices that use an online sink.
+- [Measure time and memory](/tools/monitor/): the `FairMonitor` histograms in the output.

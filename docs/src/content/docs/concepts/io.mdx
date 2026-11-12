@@ -1,0 +1,199 @@
+---
+title: 'Branches, sources and sinks'
+description: 'How FairRootManager connects the tasks to the data: named branches in memory, a source that reads each event and a sink that writes the persistent branches.'
+sidebar:
+  order: 4
+code:
+  - fairroot/base/steer/FairRootManager.h
+  - fairroot/base/steer/FairRootManager.cxx
+  - fairroot/base/source/FairSource.h
+  - fairroot/base/sink/FairSink.h
+  - fairroot/base/event/FairFileHeader.h
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import IoDiagram from '../../../components/diagrams/IoDiagram.astro';
+
+Tasks do not open files. They exchange data through named branches, which `FairRootManager` keeps in memory for each event. A source fills the input branches, the tasks read them and add new branches, and a sink writes the branches that you mark as persistent.
+
+<IoDiagram />
+
+This split keeps a task independent of the file layout. The same task runs on a ROOT file, on mixed signal and background events, or on live data from an online source.
+
+## The I/O manager
+
+`FairRootManager::Instance()` gives one manager for each thread, not one for each process. Each manager gets an ID from a global counter ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L94)), which [`GetInstanceId()`](/api/FairRootManager/#GetInstanceId) returns.
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="FairRootManager* FairRootManager::Instance()" title="FairRootManager.cxx" />
+
+The header recommends getters instead of the singleton: `FairRun::GetRootManager()`, `FairDetector::GetRootManager()` (protected, from `FairModule`) and `FairEventManager::GetRootManager()` ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L139-L150)).
+
+The run owns the source and the sink. Give them to the run, not to the manager:
+
+| Object | Set it with | Job |
+| --- | --- | --- |
+| Source ([`FairSource`](/api/FairSource/)) | [`FairRun::SetSource()`](/api/FairRun/#SetSource) | Reads one event into the input branches. |
+| Tasks ([`FairTask`](/api/FairTask/)) | [`FairRun::AddTask()`](/api/FairRun/#AddTask-2) | Read branches and register new branches. |
+| Sink ([`FairSink`](/api/FairSink/)) | [`FairRun::SetSink()`](/api/FairRun/#SetSink) | Writes the persistent branches. |
+
+The run keeps the owning pointers and gives the manager plain pointers ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L190-L199), [FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L256-L260)). `FairRootManager::SetSource()` and `FairRootManager::SetSink()` are deprecated ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L246-L251)).
+
+## Branches
+
+A branch is a named object that lives for the whole run: for example a `TClonesArray` of hits, or a `std::vector` of your own class. Each event, the source or a task fills it again. A branch is persistent or memory-only:
+
+| | Persistent | Memory-only |
+| --- | --- | --- |
+| Flag in `Register()` and `RegisterAny()` | `kTRUE` | `kFALSE` |
+| Later tasks of the same run can read it | Yes | Yes |
+| The sink writes it | Yes | No |
+| Name in the branch list of the output | Yes | Yes |
+| Links to its objects ([`FairLink`](/api/FairLink/)) | Kept | Dropped (`Register()` only) |
+
+For a memory-only branch, `Register()` puts the branch ID on the ignore list of `FairLinkManager` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L175-L177)). `FairMultiLinkedData` then drops links to that branch ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L185-L189)). `RegisterAny()` does not use the ignore list. After a call to `FairLinkManager::AddIncludeType()`, the link manager uses a list of types to keep instead ([FairLinkManager.cxx](/source/fairroot/base/steer/FairLinkManager.cxx/#L46-L72)). See [Links between data levels](/concepts/links/).
+
+## Read a branch
+
+Two calls read a branch. Use the one that matches how the branch was made:
+
+- [`GetObject(name)`](/api/FairRootManager/#GetObject) returns a `TObject*`. Cast it to the real class.
+- [`InitObjectAs<T const*>(name)`](/api/FairRootManager/#InitObjectAs) returns a pointer to a constant object of any type `T` that has a ROOT dictionary.
+
+| Branch made with | `GetObject()` | `InitObjectAs<T const*>()` |
+| --- | --- | --- |
+| `Register()` in this run | Yes | No |
+| `RegisterAny()` in this run | No | Yes, with the same `T` |
+| Input file, written from a `Register()` branch | Yes | Yes, if `T` is the class in the file |
+| Input file, written from a `RegisterAny()` branch | No | Yes, if `T` is the class in the file |
+
+`GetObject()` looks first at the branches in memory. Then it looks for the name in the folders of the input files, and asks the source to connect the branch ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L723-L753)). If both fail, it logs `Branch: <name> not found in Tree.` and returns `nullptr`.
+
+`InitObjectAs()` looks first at the branches made with `RegisterAny()` and at the input branches that it connected before. If it finds the name with the same type, it returns that object. If the type differs, it logs a warning. Then it asks the source to connect the branch, and returns `nullptr` if there is no source or the source refuses ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L471-L515)). The file source compares the class stored in the branch with `T` and refuses a different class ([FairFileSourceBase.cxx](/source/fairroot/base/source/FairFileSourceBase.cxx/#L83-L117)).
+
+<Snippet file="examples/advanced/Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx" start="InitStatus FairTestDetectorRecoTask::Init()" title="FairTestDetectorRecoTask.cxx" />
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2CustomTask.cxx" start="fCustomData = ioman->InitObjectAs" end="assert(fCustomData2);" title="FairTutorialDet2CustomTask.cxx" />
+
+Follow these rules:
+
+- Call `GetObject()` and `InitObjectAs()` in `Init()` of your task, and keep the pointer. The source or the other task fills the same object for each event.
+- A task can read a memory branch only if the task that registers it was added to the run before it. The run calls `Init()` of the tasks in the order of `AddTask()` ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L49-L64)). The subtasks of a task come right after it, see [The tree of tasks](/concepts/tasks/#the-tree-of-tasks).
+- Return `kERROR` from `Init()` if an input is missing. The task then becomes inactive, and the run continues without it.
+
+:::caution
+Read one input branch with one of the two calls, not with both. Each call gives the source its own object for the branch, and the source then fills only one of them.
+:::
+
+## Register a branch
+
+### `Register()` for ROOT objects
+
+[`Register(name, folder, obj, persistent)`](/api/FairRootManager/#Register) takes a `TNamed*` or a [`TCollection*`](/api/FairRootManager/#Register-2), for example a `TClonesArray`. The folder groups branches in the output file, for example by detector. The name and the folder must differ. Otherwise `Register()` logs a fatal error ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L158-L162)). A fatal error stops the program only if FairLogger has a fatal handler, see [What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+For a persistent branch, `Register()` sets the object name to the branch name and gives the object to the sink. Without a sink, it logs a warning, and the branch stays in memory only ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L171)).
+
+Keep the registered object for the whole run. Readers and the output tree use the address of that object, so do not replace it with a new one. The manager does not clear the object between events: clear it at the start of `Exec()`. Clear a `TClonesArray` of objects with links with `Delete()`, as [FairTestDetectorDigiTask.cxx](/source/examples/advanced/Tutorial3/digitization/FairTestDetectorDigiTask.cxx/#L56) does. See [Containers](/concepts/data-classes/#containers).
+
+The overload [`Register(branchName, className, folderName, persistent)`](/api/FairRootManager/#Register-3) creates the `TClonesArray` for you and returns it. A second call with the same name returns the same array ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L209-L221)). [`GetTClonesArray()`](/api/FairRootManager/#GetTClonesArray) returns it again, and [`GetEmptyTClonesArray()`](/api/FairRootManager/#GetEmptyTClonesArray) returns it after a `Delete()`. `FairWriteoutBuffer` uses this overload ([FairWriteoutBuffer.cxx](/source/fairroot/base/steer/FairWriteoutBuffer.cxx/#L32)).
+
+### `RegisterAny()` for other types
+
+[`RegisterAny(name, obj, persistent)`](/api/FairRootManager/#RegisterAny) takes a reference to a pointer `T*&`. The manager keeps the address of your pointer, not the address of the object ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L452-L466)). Pass a data member that lives for the whole run, never a local variable.
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2.cxx" start="auto mgr = FairRootManager::Instance();" end="mgr->RegisterAny(" title="FairTutorialDet2.cxx" />
+
+<Snippet file="examples/simulation/Tutorial2/src/FairTutorialDet2Digitizer.cxx" start="void FairTutorialDet2Digitizer::Register()" title="FairTutorialDet2Digitizer.cxx" />
+
+A persistent `RegisterAny()` needs a sink. Without one, it logs a fatal error, and the branch stays in memory only ([FairRootManager.h](/source/fairroot/base/steer/FairRootManager.h/#L452-L466)). The type needs a ROOT dictionary. Without one, the file sink logs a fatal error when it makes the tree, and it makes no more `RegisterAny()` branches ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L261-L289)).
+
+### When to register
+
+Register in `Init()` of a task, or in `Register()` of a detector in a simulation. At the end of its `Init()`, the run calls [`WriteFolder()`](/api/FairRootManager/#WriteFolder), and the file sink then creates the output tree ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L246-L251), [FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L942)). A branch that you register later is not in the tree.
+
+To let the macro choose the persistence of a branch, see [Output: sinks and persistence](/reconstruction/output/).
+
+## Tree and folder names
+
+The output tree and the folder that describes it have configurable names. The source reads the input tree with the same tree name, so all files of one project must use one tree name.
+
+| Name | First choice | Second choice | Default |
+| --- | --- | --- | --- |
+| Tree ([`GetTreeName()`](/api/FairRootManager/#GetTreeName)) | [`SetTreeName()`](/api/FairRootManager/#SetTreeName) | `treename=` in `rootmanager.dat` | `cbmsim` |
+| Folder ([`GetFolderName()`](/api/FairRootManager/#GetFolderName)) | [`SetFolderName()`](/api/FairRootManager/#SetFolderName) | `foldername=` in `rootmanager.dat` | `cbmroot` in a simulation, `cbmout` otherwise |
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="const char* FairRootManager::GetFolderName()" title="FairRootManager.cxx" />
+
+`FairRunAna`, `FairRunOnline` and `FairRunAnaProof` set the analysis flag, so their default folder is `cbmout` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L88)). `FairRunSim` does not ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L77)).
+
+The manager reads `rootmanager.dat` from `$VMCWORKDIR/config/` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L898-L930)). It takes the first line that starts with the key and uses the rest of the line as the name:
+
+```text title="$VMCWORKDIR/config/rootmanager.dat"
+treename=<tree name>
+foldername=<folder name>
+```
+
+:::caution
+The manager does not trim the line. A space or a Windows line end after the name becomes part of the name.
+:::
+
+`SetTreeName()` and `SetFolderName()` are static. Call them before `Init()` of the run, because the source creates its chain there. To read a file, the file source looks for the folder `GetFolderName()`, then `cbmroot`, then `cbmout` ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L162-L175)).
+
+## Sources
+
+A source is a [`FairSource`](/api/FairSource/). It reads one event on request and connects the input branches to the objects that tasks get with `GetObject()` and `InitObjectAs()`.
+
+<Snippet file="fairroot/base/source/FairSource.h" start="class FairSource : public TObject" end="Int_t GetRunId() const" title="FairSource.h" />
+
+[`GetSourceType()`](/api/FairSource/#GetSourceType) returns a [`Source_Type`](/api/Source_Type/):
+
+| Type | Sources in FairRoot | Input |
+| --- | --- | --- |
+| `kFILE` | [`FairFileSource`](/api/FairFileSource/), [`FairMixedSource`](/api/FairMixedSource/) | ROOT files that an earlier run wrote |
+| `kONLINE` | [`FairLmdSource`](/api/FairLmdSource/), [`FairRemoteSource`](/api/FairRemoteSource/), [`FairMbsStreamSource`](/api/FairMbsStreamSource/) | MBS list-mode data files, and events from an MBS server |
+
+For each event, the run calls [`FairRootManager::ReadEvent()`](/api/FairRootManager/#ReadEvent). It resets the source, reads the entry and fills the event header:
+
+<Snippet file="fairroot/base/steer/FairRootManager.cxx" start="Int_t FairRootManager::ReadEvent(const Int_t i)" title="FairRootManager.cxx" />
+
+`ReadEvent()` of the source returns 0 for a good event. `FairRunAna` stops the event loop at any other value ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L313-L319)). [`CheckMaxEventNo()`](/api/FairSource/#CheckMaxEventNo) tells the run how many events it can read; the default of -1 means "no limit".
+
+`FairFileSource` reads a chain of files and can add friend files with more branches. `FairMixedSource` mixes signal and background events. [Input sources, friends and event mixing](/reconstruction/sources/) explains both.
+
+## Sinks
+
+A sink is a [`FairSink`](/api/FairSink/). [`GetSinkType()`](/api/FairSink/#GetSinkType) returns a [`Sink_Type`](/api/Sink_Type/). [`FairRootFileSink`](/api/FairRootFileSink/) writes a ROOT file and returns `kFILESINK`. A sink that sends the data on returns `kONLINESINK`, like the `FairOnlineSink` of the MQ pixel example.
+
+The run calls the sink in this order:
+
+1. `InitSink()` early in `Init()` of the run. `FairRunAna` initializes the source first.
+2. `RegisterImpl()` or `RegisterAny()` for each persistent branch.
+3. `WriteFolder()` at the end of `Init()`: the file sink creates the tree here.
+4. `Fill()` after the tasks of each event.
+5. `Write()` after the last event.
+
+A run without a sink is allowed. [`InitSink()`](/api/FairRootManager/#InitSink) then logs `The output sink is not set. No branches will be stored.` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L138-L146)). A simulation with multithreaded Geant4 needs a sink, because it clones the sink for each worker ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)). [Output: sinks and persistence](/reconstruction/output/) gives the details.
+
+## The branch list and the file header
+
+Besides the tree and its folder, `WriteFolder()` and [`WriteFileHeader()`](/api/FairRootManager/#WriteFileHeader) write three objects to the output ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L383-L390)):
+
+| Key | Class | Content |
+| --- | --- | --- |
+| `BranchList` | `TList` of `TObjString` | The names of all branches that the run knows at the end of `Init()` |
+| `TimeBasedBranchList` | `TList` of `TObjString` | The branches that a [`FairWriteoutBuffer`](/api/FairWriteoutBuffer/) writes |
+| `FileHeader` | [`FairFileHeader`](/api/FairFileHeader/) | The run ID and the class names of the tasks |
+
+The branch list holds the input branches, the branches of friend files, and every registered branch, persistent or memory-only. The position of a name is its branch ID ([`GetBranchId()`](/api/FairRootManager/#GetBranchId)), which a `FairLink` stores as its type. A file source needs this list in its first input file. Without it, the source logs the fatal error `No Branch list in input file` ([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L189-L192)).
+
+The manager remembers the position of the branch `MCTrack` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L185-L196)). [`GetMCTrackBranchId()`](/api/FairRootManager/#GetMCTrackBranchId) returns it, and `FairMultiLinkedData` uses it to find the links to MC tracks ([FairMultiLinkedData.cxx](/source/fairroot/base/event/FairMultiLinkedData.cxx/#L294-L296)). The stack of the examples registers this branch ([FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L315-L322)).
+
+`FairRun::AddTask()` adds the class name of each task and of its subtasks to the file header ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L110-L129)). The header also has a list of input files, but no code in FairRoot fills it. See [The file header](/concepts/event-headers/#the-file-header).
+
+## Related pages
+
+- [Tasks](/concepts/tasks/): the `Init()` and `Exec()` methods that read and register branches.
+- [Data classes](/concepts/data-classes/): the classes that you store in branches.
+- [Input sources, friends and event mixing](/reconstruction/sources/): `FairFileSource`, `FairMixedSource` and your own source.
+- [Output: sinks and persistence](/reconstruction/output/): `FairRootFileSink`, persistence and your own sink.
+- [Event headers and run IDs](/concepts/event-headers/): the event header that the source fills.
+- [Links between data levels](/concepts/links/): branch IDs in links.

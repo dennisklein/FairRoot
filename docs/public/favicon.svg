@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <style>
+    .d { fill: none; stroke: #1a1a1a; stroke-width: 2.2; }
+    .t { fill: none; stroke: #1a1a1a; stroke-width: 1.5; }
+    .v { fill: #1a1a1a; }
+    @media (prefers-color-scheme: dark) { .d, .t { stroke: #eceef2; } .v { fill: #eceef2; } }
+  </style>
+  <line class="d" x1="11" y1="5" x2="11" y2="28"/>
+  <line class="d" x1="18" y1="5" x2="18" y2="28"/>
+  <line class="d" x1="25" y1="5" x2="25" y2="28"/>
+  <path class="t" d="M3 25 A34 34 0 0 0 30 11.66"/>
+  <circle class="v" cx="3" cy="25" r="1.8"/>
+  <rect x="8.4" y="21.45" width="5.2" height="5.2" fill="#fabe5d" stroke="#b97800" stroke-width="1"/>
+  <rect x="15.4" y="18.91" width="5.2" height="5.2" fill="#fabe5d" stroke="#b97800" stroke-width="1"/>
+  <rect x="22.4" y="14.32" width="5.2" height="5.2" fill="#fabe5d" stroke="#b97800" stroke-width="1"/>
+</svg>

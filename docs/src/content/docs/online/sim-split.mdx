@@ -1,0 +1,275 @@
+---
+title: 'Split a simulation over devices'
+description: 'A generator device sends the primary particles of each event in chunks, transport devices simulate the chunks, and a merger device puts the chunks of each event together again.'
+sidebar:
+  order: 7
+code: [examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.h,
+  examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.h,
+  examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx,
+  examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.h,
+  examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.cxx,
+  examples/MQ/pixelSimSplit/src/FairMCSplitEventHeader.h,
+  examples/MQ/pixelSimSplit/src/FairMCSplitEventHeader.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import MqTopology from '../../../components/diagrams/MqTopology.astro';
+
+A simulation can run in FairMQ devices. In the example `pixelSimSplit`, a generator device makes
+the primary particles. Transport devices simulate them with a
+[transport engine](/simulation/engines/), and a merger device collects the results. The generator
+can split an event into chunks of primaries. Then several transport devices simulate the parts of
+one event at the same time. [MQ: split simulation](/examples/mq-pixel-sim-split/) shows how to run
+the example.
+
+<MqTopology example="split" />
+
+## The devices
+
+The device classes are in `examples/MQ/pixelSimSplit/src/devices`. The main functions in
+`examples/MQ/pixelSimSplit/run` make the programs. The sink comes from the
+[pixel detector example](/examples/mq-pixel-detector/):
+
+| Device | Program | Class | Job |
+| --- | --- | --- | --- |
+| Generator | `pixel-sim-gen` | `FairMQPrimaryGeneratorDevice` | Generates the primaries of each event and sends them in chunks. |
+| Transport device | `pixel-sim-transport` | `FairMQTransportDevice` | Simulates each chunk with a `FairRunSim` and sends the branches of the chunk. |
+| Merger | `pixel-sim-chunk-merger` | `FairMQChunkMerger` | Collects the chunks of an event and sends the full event. |
+| Sink | `pixel-sink` | `FairMQPixelFileSink` | Writes each event into the tree `cbmsim` and acknowledges it. |
+| Parameter server | `parmq-server` | [`ParameterMQServer`](/api/ParameterMQServer/) | Gives the run ID and stores the parameter containers. |
+
+The test script of the example connects the devices with these channels
+([test-splitMQ.sh.in](/repo/examples/MQ/pixelSimSplit/run/scripts/test-splitMQ.sh.in)):
+
+| Channel | From | To | Types | Content of a message |
+| --- | --- | --- | --- | --- |
+| `primariesChannel` | Generator | Transport devices | `push`, `pull` | Header and all primaries of the event |
+| `data#all#` | Transport devices | Merger | `push`, `pull` | Header and branches of one chunk |
+| `dataOut` | Merger | Sink | `push`, `pull` | Header and branches of one event |
+| `updateChannel` | Transport devices | Parameter server | `req`, `rep` | Run ID and parameter containers |
+| `ack` | Sink | Generator | `push`, `pull` | One empty message for each event |
+
+The generator and the transport device use the name `primariesChannel` from their constructors.
+The transport device sends its branches on each channel with `#all#` or `#<branch name>#` in the
+name, see [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/).
+
+## Split an event into chunks
+
+The generator sends one message for each chunk. It generates a new event when its chunk pointer
+is 0:
+
+<Snippet file="examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx" start="bool FairMQPrimaryGeneratorDevice::GenerateAndSendData()" />
+
+1. If the chunk pointer is 0, the generator resets its `FairStack` and calls
+   [`GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent) of the primary generator. It
+   counts the events from 1.
+2. It makes a `FairMCSplitEventHeader` with the run ID 0, the event ID and the range of the chunk.
+3. It sends two parts: the header and the array of all primaries of the event (`TParticles`). Each
+   chunk message has all primaries. The header tells the transport device which of them to simulate.
+4. It moves the chunk pointer by `--chunk-size`. After the last chunk, the pointer goes back to 0.
+5. When the event counter is larger than `--nof-events`, the function returns `false`. The device
+   then leaves `RUNNING`.
+
+`FairMCSplitEventHeader` is a [`FairMCEventHeader`](/api/FairMCEventHeader/) with two more data
+members, `fNofChunks` and `fChunkStart`
+([FairMCSplitEventHeader.h](/source/examples/MQ/pixelSimSplit/src/FairMCSplitEventHeader.h/#L25-L42)).
+The generator fills the header like this:
+
+| Field | `--chunk-size 0` (default) | `--chunk-size N` |
+| --- | --- | --- |
+| Event ID | The event counter | The event counter |
+| Run ID | 0 | 0 |
+| `GetNofChunks()` | 1 | Number of primaries / N, an integer division |
+| `GetChunkStart()` | 0 | Index of the first primary of the chunk |
+| [`GetNPrim()`](/api/FairMCEventHeader/#GetNPrim) | Number of primaries | Index after the last primary of the chunk |
+
+:::caution[Use a chunk size that divides the number of primaries]
+The code gives wrong headers in two cases
+([FairMQPrimaryGeneratorDevice.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx/#L96-L102)):
+
+- More primaries than N, but not a multiple of N: the generator sends one chunk more than
+  `GetNofChunks()` says. For this last chunk, it sets `NPrim` to the number of remaining primaries,
+  not to the end index. The transport device simulates no primary of this chunk. The merger sends
+  the event after `GetNofChunks()` chunks, and the chunk that comes last stays in its buffer.
+- Fewer primaries than N: `GetNofChunks()` is 0, and the merger never sends the event.
+
+The box generator of the example makes 100 primaries, and the test uses N = 10.
+:::
+
+## Transport the chunks
+
+The transport device runs a [`FairRunSim`](/api/FairRunSim/) inside the device. `InitTask()`
+prepares the run:
+
+- It makes a new `FairRunSim` and a `FairMCSplitEventHeader`. It gives the header to the run with
+  [`SetMCEventHeader()`](/api/FairRunSim/#SetMCEventHeader).
+- It moves the `FairOnlineSink` of the main function into the run.
+- It sets the transport engine (`--transport-name`), the materials and the modules of the main
+  function. The main function `runMQTrans.cxx` adds only the cave.
+- It loads each library of `--detector-library` with `dlopen()` and calls the function
+  `ExternCreateDetector()` of the library.
+
+The library `ExPixel` of the pixel detector example has this function. It adds the pixel detector
+to the run:
+
+<Snippet file="examples/MQ/pixelDetector/src/Pixel.cxx" start='extern "C" void ExternCreateDetector()' />
+
+If `dlopen()` or `dlsym()` fails, the device logs a message with the severity `fatal` and returns
+from `InitTask()` ([FairMQTransportDevice.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx/#L103-L135)).
+The device does not load the libraries after the failed one. Without a fatal handler of FairLogger,
+the device goes on without their modules, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+The first `PreRun()` calls `InitializeRun()`. It gets the run ID from the parameter server, calls
+`Init()` of the run, and registers the stack. The run has no primary generator, so
+`FairMCApplication` does not register the stack
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L945-L952)).
+
+Then the device simulates each chunk that it receives:
+
+<Snippet file="examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx" start="bool FairMQTransportDevice::TransportData(fair::mq::Parts& mParts, int /*index*/)" />
+
+- [`SetParticleArray()`](/api/FairGenericStack/#SetParticleArray-2) puts the primaries from
+  `GetChunkStart()` to `GetNPrim() - 1` on the stack. `FairGenericStack` has an empty version of
+  this function. `FairStack` of the examples implements it
+  ([FairStack.h](/source/examples/common/mcstack/FairStack.h/#L192-L203)).
+- `SetRECC()` sets the event header of the run. It copies the event ID, the number of chunks and
+  the chunk start, and it sets the run ID of the server.
+- `ProcessRun(1)` simulates the chunk as one event. At the end of the event, the run fills its
+  sink. `FairOnlineSink` sends the branches on `data#all#`.
+
+Each chunk is a separate event for the transport engine. Thus the MC track numbers of each chunk
+start at 0. The header of the chunk has the name `MCEventHeader.`, because
+`FairMCSplitEventHeader::Register()` registers it with this branch name
+([FairMCSplitEventHeader.cxx](/source/examples/MQ/pixelSimSplit/src/FairMCSplitEventHeader.cxx/#L29-L33)).
+
+### Push or request
+
+The option `--running-mode` selects how the primaries get to the transport devices:
+
+| Mode | Generator | Transport device | Channel types |
+| --- | --- | --- | --- |
+| `pp` (default) | `ConditionalRun()` pushes one chunk after the other. | A data callback simulates each received chunk. | `push`, `pull` |
+| `rr` | A data callback sends one chunk for each request. | `ConditionalRun()` sends `RequestData` and waits for the chunk. | `rep`, `req` |
+
+:::caution[The request mode has no end]
+In `rr` mode, the generator sends no reply after the last event: the data callback returns `false`
+before it sends ([FairMQPrimaryGeneratorDevice.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx/#L84-L85)).
+The transport device that sent the last request waits for its reply. No test of the example uses
+this mode.
+:::
+
+## Run IDs and parameters
+
+All transport devices of a topology get the same run ID. At the start of `InitializeRun()`, each
+device sends `ReportSimDevice` on the update channel. The server makes a run ID for the first
+device and gives the same run ID to the others. [Parameters over FairMQ](/online/parameters/)
+explains the protocol.
+
+After `Init()` of its run, each device sends all parameter containers of its runtime database to
+the server. The server stores each container once and replies `FAIL` for a container that it has
+already.
+
+:::caution[The containers do not carry the run ID of the events]
+The line that gives the run ID of the server to `FairRunSim` is commented out
+([FairMQTransportDevice.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx/#L177-L179)).
+Thus `FairRunSim::Init()` makes its own run ID with
+[`generateId()`](/api/FairRunIdGenerator/#generateId), and the device sends the containers with
+this run ID. The events carry the run ID of the server. The two run IDs are equal only if both
+calls of `generateId()` fall into the same second.
+:::
+
+## Merge the chunks
+
+The merger gets the messages of all transport devices on one channel. The chunks of an event can
+come in any order. For each message, `MergeData()` does these steps:
+
+1. It deserializes all parts. The part with the name `MCEventHeader.` is the header. The other
+   parts are arrays (`TClonesArray`).
+2. The event ID and the run ID identify the event. The merger counts the received chunks of each
+   event. A second chunk with the same chunk start gives a message with the severity `fatal`.
+3. Until the count is equal to `GetNofChunks()`, the merger keeps the arrays in a buffer.
+4. With the last chunk, it adds the arrays of the buffered chunks to the arrays of this message.
+5. It sets the number of chunks to 1 and the chunk start to 0 in the header. Then it sends the
+   header and the arrays on the output channel.
+
+The merger must renumber the MC tracks, because the numbers of each chunk start at 0:
+
+<Snippet file="examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.cxx" start="std::vector<int> trackShift;" end="^        }$" />
+
+- The arrays of the last chunk come first. The buffered chunks follow in the order of their
+  arrival.
+- For each buffered chunk, the shift is the number of MC tracks in the merged array before the
+  merger adds this chunk.
+- The merger adds the shift to each mother ID of a `FairMCTrack` that has a mother. A second loop
+  adds the same shift to the track ID of each `FairMCPoint` in the other arrays
+  ([FairMQChunkMerger.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.cxx/#L141-L165)).
+
+:::caution[Limits of the merger]
+- Only `FairMCTrack` and `FairMCPoint` objects get new numbers. Other objects keep the track
+  numbers of their chunk.
+- Each message must have an array with the name `MCTrack`. The shifts for the other arrays come
+  from this array.
+- If a chunk of an event does not arrive, the other chunks of the event stay in the buffer.
+- The merger deletes no object that it receives. Its `erase()` call also removes nothing from the
+  buffer, because the loops before it move `fRet.first` to the end of the range
+  ([FairMQChunkMerger.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQChunkMerger.cxx/#L114-L166)).
+  Thus the memory of the merger grows with each event.
+:::
+
+## End the run
+
+The generator knows the number of events, but the other devices do not. The example uses
+acknowledgments to end the run:
+
+1. With `--ack-channel`, the generator starts a thread in `PreRun()`. The thread receives one
+   message for each event, up to `--nof-events` messages.
+2. The sink sends an empty message on its `--ack-channel` after it writes an event.
+3. After the last event, `ConditionalRun()` of the generator returns `false`. `PostRun()` then
+   waits for the thread
+   ([FairMQPrimaryGeneratorDevice.cxx](/source/examples/MQ/pixelSimSplit/src/devices/FairMQPrimaryGeneratorDevice.cxx/#L128-L149)).
+4. Thus the generator leaves `RUNNING` only when the sink has written all events.
+
+The transport devices, the merger, the sink and the parameter server have no end condition. The
+test script waits for the end of the generator and then stops the other devices. See
+[End of run](https://fairrootgroup.github.io/FairMQ/guides/end-of-run/) in the FairMQ
+documentation for other ways to end a run.
+
+## Simulate in one device
+
+The [pixel detector example](/examples/mq-pixel-detector/) has `pixel-sim`, a simulation in one
+device (`FairMQSimDevice`).
+[Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/) describes it. The two ways compare
+like this:
+
+| | `pixel-sim` | Split simulation |
+| --- | --- | --- |
+| Primary generator | In the device | In `pixel-sim-gen` |
+| Detectors | The cave and the pixel detector from the main function | The cave from the main function, other modules from `--detector-library` |
+| Work in parallel | Several devices simulate different events | Several transport devices simulate the chunks of the same event |
+| Event IDs | Each device adds its index × `--nof-events` | The event counter of the generator |
+| Output | `data#all#` to the sink | `data#all#` to the merger, `dataOut` to the sink |
+| End of the run | Each device returns `false` after `Run()` | Acknowledgments to the generator |
+
+## Adapt the example
+
+- **Primary generator:** change `fairGetDevice()` in
+  [runMQGen.cxx](/source/examples/MQ/pixelSimSplit/run/runMQGen.cxx/#L37-L74). The example uses a
+  `FairBoxGenerator` with 100 positive pions (PDG code 211) for each event.
+- **Detector:** write a library with an `extern "C"` function `ExternCreateDetector()`. The function
+  adds your modules to `FairRunSim::Instance()`. Give the library with `--detector-library`. You can
+  give the option more than once.
+- **More transport devices:** start more `pixel-sim-transport` devices with different `--id`
+  values. Connect them to the same channels.
+- **Engine:** set `--transport-name`. The default is `TGeant3`. The tests of the example use
+  `TGeant4`.
+
+## Related pages
+
+- [MQ: split simulation](/examples/mq-pixel-sim-split/): the programs, the options and the tests.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): `FairOnlineSink` and
+  `FairMQSimDevice`.
+- [Parameters over FairMQ](/online/parameters/): the run ID and the containers of a simulation.
+- [The particle stack and MC tracks](/simulation/stack/): `FairStack` and the track numbers.
+- [Event headers and run IDs](/concepts/event-headers/): `FairMCEventHeader` and the run ID.

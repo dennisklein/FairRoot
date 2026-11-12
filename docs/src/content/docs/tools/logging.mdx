@@ -1,0 +1,269 @@
+---
+title: 'Logging'
+description: 'Write log lines with the LOG macro of FairLogger, select the lines for the console and for a log file, and know what a fatal line does in FairRoot.'
+sidebar:
+  order: 1
+code: [fairroot/tools/FairLogger.h, fairroot/tools/FairLogger.cxx, examples/advanced/Tutorial3/macro/run_digi.C, examples/simulation/rutherford/macros/run_rutherford.C, fairroot/base/steer/FairTask.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot writes its log with the library [FairLogger](https://github.com/FairRootGroup/FairLogger):
+the macro `LOG(severity)` and the class `fair::Logger`. The FairRoot class
+[`FairLogger`](/api/FairLogger/) keeps an older interface for macros, and it installs the handler for
+fatal lines. This page shows how to write log lines, how to select the lines that you see, and what
+a `fatal` line does.
+
+## The library and the class
+
+Two things have the name FairLogger:
+
+| Name | What it is | Header |
+| --- | --- | --- |
+| FairLogger, the library | A separate project. It gives the macros `LOG`, `LOG_IF`, `LOGP` and others, and the class `fair::Logger` with static functions for the settings. | `<fairlogger/Logger.h>` |
+| `FairLogger`, the class | A FairRoot class in the library `FairRoot::Tools`. It has one object, which [`GetLogger()`](/api/FairLogger/#GetLogger) gives. | `FairLogger.h` |
+
+The class has no log of its own. Each of its settings calls a static function of `fair::Logger`
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L49-L87)). Thus both interfaces change the same
+log. The macro `gLogger` is a short form of `FairLogger::GetLogger()`
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L157)).
+
+CMake of FairRoot asks for FairLogger 1.2.0 or newer ([CMakeLists.txt](/repo/CMakeLists.txt#L207)).
+But the FairRoot code uses `LOGP` with `{}` fields, for example in
+[FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L555). FairLogger has `LOGP` since
+1.6.0, and `LOGP` reads `{}` fields since 1.8.0. Thus use FairLogger 1.8.0 or newer.
+
+## Write a log line
+
+Include `<fairlogger/Logger.h>`. Write the line with `LOG(severity)` and the operator `<<`, as the
+template task does:
+
+<Snippet file="templates/NewTask/NewTask.cxx" start="void NewTask::Exec(Option_t* /*option*/)" title="templates/NewTask/NewTask.cxx" />
+
+- The macro makes a temporary `fair::Logger` object. At the end of the statement, this object writes
+  the line and adds the line break. Do not add `std::endl`.
+- The macro checks the severity first. If no output takes the line, the program does not evaluate
+  the expressions after `<<`. Thus a log line can show a costly value, but it must not change data.
+- Write the severity in lower case: `LOG(info)`, not `LOG(INFO)`. FairLogger 1.10.3 and newer mark
+  the upper case names as deprecated, with the compiler warning
+  `Use LOG(info) instead (lowercase severity name).`
+- The console log goes to the standard output, not to `stderr`.
+
+FairLogger has more macros:
+
+| Macro | The line | Use in FairRoot |
+| --- | --- | --- |
+| `LOG(severity) << …` | A normal log line | Most of the code |
+| `LOG_IF(severity, condition) << …` | A line only if `condition` is true | [FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L113-L115) |
+| `LOGP(severity, "… {} …", args…)` | A line with `{}` fields of the fmt library | [FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L555) |
+| `LOGF(severity, "… %d …", args…)` | A line with `printf` fields | Not used |
+| `LOGV(severity, verbosity) << …` | A line with its own [verbosity](#verbosity) | Not used |
+| `LOGN(severity)` | An empty line | Not used |
+
+`LOGP`, `LOGF`, `LOGV` and `LOGN` exist since FairLogger 1.6.0. In FairLogger 1.6.0 to 1.7.0,
+`LOGP` and `LOGF` have the opposite meaning. The runtime database uses `LOGP` for a failed parameter
+container:
+
+<Snippet file="fairroot/parbase/FairRuntimeDb.cxx" start="if (!cont->init()) {" title="fairroot/parbase/FairRuntimeDb.cxx" />
+
+## Severities
+
+FairRoot uses these severities, from the most lines to the fewest:
+
+| Severity | Use in FairRoot | Example from the code |
+| --- | --- | --- |
+| `debug4` to `debug1` | Fine details. The FairRoot code uses mainly `debug2`. | `AddSensitiveVolume <name>` ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L281)) |
+| `debug` | Details of the setup and of the steps of a run | `FairRootFileSink::Write to file: <name>` ([FairRootFileSink.cxx](/source/fairroot/base/sink/FairRootFileSink.cxx/#L327)) |
+| `info` | Normal messages. This is the default severity. | `Initializing without input file or Mixed input` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L203)) |
+| `warn` | Problems that do not stop the run. `warning` is the same severity. | `FairRunAna::Run() Event loop was interrupted by the user!` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L309)) |
+| `error` | Errors. Often the run goes on. | `FairRunAna::Init: fRtdb->initContainers failed` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L199)) |
+| `fatal` | Errors that must stop the program, see [What a fatal line does](#what-a-fatal-line-does) | `Initialization of Task <name> failed fatally` ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L57)) |
+
+A severity setting shows the lines of its own severity and of all severities below it in the table.
+For example, `debug` shows all lines except `debug1` to `debug4`. The value `nolog` turns an output
+off, but FairLogger always writes the `fatal` lines.
+
+The settings take the severity as a string. The lower case names always work. Upper case names, like
+`"DEBUG"` in the example macros, work for `NOLOG`, `FATAL`, `ERROR`, `WARN`, `WARNING`, `STATE`,
+`INFO`, `DEBUG`, `DEBUG1` to `DEBUG4` and `TRACE`. For an unknown name, FairLogger logs
+`Unknown severity setting: '<name>', setting to default 'info'.` and uses `info`.
+
+FairLogger knows more severities, for example `trace`, `detail`, `state` and `critical`. FairRoot does
+not use them. The enum `FairLogLevel` of `FairLogger.h` is only for old code, see
+[Old functions](#old-functions).
+
+## Select the lines
+
+Set the severity of the console, the severity of the log file and the verbosity. The example macros
+use the class `FairLogger`. The static functions of `fair::Logger` do the same:
+
+| Setting | Class `FairLogger` | `fair::Logger` | Default |
+| --- | --- | --- | --- |
+| Severity of the console | [`SetLogScreenLevel("debug")`](/api/FairLogger/#SetLogScreenLevel) | `SetConsoleSeverity("debug")` | `info` |
+| Severity of the log file | [`SetLogFileLevel("debug")`](/api/FairLogger/#SetLogFileLevel) | `SetFileSeverity("debug")` | `nolog` |
+| Open a log file | [`SetLogFileName("MyLog.log")`](/api/FairLogger/#SetLogFileName) | `InitFileSink("info", "MyLog.log", false)` | No file |
+| Prefix of the lines | [`SetLogVerbosityLevel("medium")`](/api/FairLogger/#SetLogVerbosityLevel) | `SetVerbosity("medium")` | `low` |
+| Colors on the console | [`SetColoredLog(true)`](/api/FairLogger/#SetColoredLog) | `SetConsoleColor(true)` | Off |
+| Is a severity logged? | [`IsLogNeeded(fair::Severity::debug)`](/api/FairLogger/#IsLogNeeded) | `Logging(fair::Severity::debug)` | |
+
+The digitization and reconstruction macros of Tutorial 3 start with such a block. Remove the comment
+marks to use more settings:
+
+<Snippet file="examples/advanced/Tutorial3/macro/run_digi.C" start="FairLogger* logger = FairLogger::GetLogger();" end='logger->SetLogScreenLevel("DEBUG");' title="run_digi.C" />
+
+The class keeps the last console severity and the last file severity, both `info` at the start
+([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L28-L38)). `SetLogToScreen(kTRUE)` and
+`SetLogToFile(kTRUE)` set the kept severity again. `SetLogToScreen(kFALSE)` and `SetLogToFile(kFALSE)`
+set the severity to `fatal`, not to `nolog`
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L49-L71)). Read the caution in
+[Write the log to a file](#write-the-log-to-a-file) before you use them.
+
+### Verbosity
+
+The verbosity sets the prefix of each line. A space separates the prefix from the message:
+
+| Verbosity | Prefix |
+| --- | --- |
+| `verylow` | None |
+| `low` (default) | `[SEVERITY]` |
+| `medium` | `[HH:MM:SS][SEVERITY]` |
+| `high` | `[process][HH:MM:SS][SEVERITY]` |
+| `veryhigh` | `[process][HH:MM:SS.uuuuuu][SEVERITY][file:line:function]` |
+
+`process` is the name of the program, and `uuuuuu` are the microseconds. The severity is in upper
+case. With the default verbosity, the line of `FairRunAna` from the table above looks so:
+
+```txt
+[INFO] Initializing without input file or Mixed input
+```
+
+The upper case names `VERYLOW` to `VERYHIGH` also work, as `"LOW"` in `run_digi.C`. For an unknown
+name, FairLogger logs `Unknown verbosity setting: '<name>', setting to default 'low'.` and uses `low`.
+
+## Write the log to a file
+
+[`SetLogFileName(name)`](/api/FairLogger/#SetLogFileName) opens the file at once. It uses the kept
+file severity, `info` by default ([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L141)).
+
+- The file has the exact name that you give. A relative name is in the current folder.
+- FairLogger appends to an existing file. Each run adds its lines at the end.
+- The lines in the file have the same prefix as on the console, without colors.
+- `SetLogToFile(kTRUE)` alone opens no file. It only sets the file severity.
+
+The Rutherford macro writes the log to the console and to `MyLog.log`, with the verbosity `HIGH`:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start="FairLogger* logger = FairLogger::GetLogger();" end='logger->SetLogVerbosityLevel("HIGH");' title="run_rutherford.C" />
+
+The class `FairLogger` has no public function that closes the file. Call
+`fair::Logger::RemoveFileSink()` for it. `fair::Logger::InitFileSink(severity, name)` with the default
+third argument `true` adds the date and the time to the name: `<name>_YYYY-MM-DD_HH_MM_SS.log`.
+
+:::caution[One filter for the console and the file]
+With FairLogger 1.9.0 or newer, a file severity other than `nolog` changes the console output too.
+FairLogger then makes a line only if it passes the more severe of the two settings
+([Logger.cxx of FairLogger 2.3.2](https://github.com/FairRootGroup/FairLogger/blob/v2.3.2/logger/Logger.cxx#L469-L475)).
+
+- Console `debug` and file `info`: neither output gets `debug` lines. `run_digi_timebased.C` of
+  Tutorial 3 has this setup.
+- `SetLogToFile(kFALSE)` sets the file severity to `fatal`. Then the console shows only `fatal` lines.
+- `SetLogToScreen(kFALSE)` sets the console severity to `fatal`. Then the log file gets only `fatal`
+  lines.
+
+Give the console and the file the same severity. To stop the console output, set the console
+severity to `nolog`. To stop the file, call `fair::Logger::RemoveFileSink()`.
+:::
+
+## What a fatal line does
+
+FairLogger always makes a `fatal` line. It writes the line to the console and to an open log file,
+also with the severity `nolog`. Then it calls the fatal handler, if there is one. Without a handler,
+the program goes on after the line.
+
+The constructor of the class `FairLogger` installs the handler
+([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L28-L38)). The handler does two steps
+([FairLogger.cxx](/source/fairroot/tools/FairLogger.cxx/#L179-L202)):
+
+1. It prints `For later analysis we write a stack trace to core_dump_<pid>` to `stderr`. Then it
+   writes a stack trace of the process into the file `core_dump_<pid>` in the current folder. It
+   skips this step if the ROOT setting `Root.Stacktrace` is off.
+2. It throws `fair::FatalException` with the text `Fatal error occured. Exiting...`. This class does
+   not derive from `std::exception`, so `catch (const std::exception&)` does not catch it.
+
+:::caution[Call GetLogger() first]
+The FairRoot libraries in `fairroot/` do not call `FairLogger::GetLogger()`. Thus the handler exists
+only after your code calls it, for example in the first line of the macro. Before that call, a
+`fatal` line does not stop the program.
+:::
+
+FairRoot code expects a stop after a `fatal` line. For example, `FairTask::InitTask()` only logs a
+line when `Init()` returns `kFATAL`
+([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L55-L58)). Without the handler, the task
+stays active and the run goes on. In Tutorial 4, the `fatal` lines protect the next statement from a
+null pointer:
+
+<Snippet file="examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx" start="FairRun* sim = FairRun::Instance();" end='LOG_IF(fatal, !rtdb) << "No runtime database";' title="FairTutorialDet4.cxx" />
+
+After the stack trace, the handler closes `stderr`. If your code catches the exception and goes on,
+all later output to `stderr` is lost, for example the messages of ROOT.
+
+## Check the severity before costly work
+
+The `LOG` macro skips the expressions of a line that no output takes. For a loop or another costly
+step, ask FairLogger first. `FairStack::Print()` of the examples loops over the MC tracks only if FairLogger
+logs `debug1` lines:
+
+<Snippet file="examples/common/mcstack/FairStack.cxx" start="if (gLogger->IsLogNeeded(fair::Severity::debug1)) {" title="examples/common/mcstack/FairStack.cxx" />
+
+`fair::Logger::Logging(fair::Severity::debug1)` gives the same answer without the class `FairLogger`.
+
+## Old functions
+
+The class `FairLogger` still has functions of its old interface. Replace them:
+
+| Old code | Replacement |
+| --- | --- |
+| `gLogger->Info(MESSAGE_ORIGIN, "n = %d", n)` and the other functions `Fatal()` to `Debug4()` | `LOG(info) << "n = " << n;` or `LOGF(info, "n = %d", n);` |
+| `IsLogNeeded(FairLogLevel)`, for example with `DEBUG` | `IsLogNeeded(fair::Severity::debug)` |
+| `<< FairLogger::endl`, `<< FairLogger::flush` | Nothing. These constants only add a space. |
+| `SetScreenStreamToCerr(true)` | Nothing. The function is empty. |
+
+The old functions have deprecation marks, except `SetScreenStreamToCerr()`
+([FairLogger.h](/source/fairroot/tools/FairLogger.h/#L89-L118)). See also
+[Deprecated APIs](/reference/deprecations/).
+
+## Output without FairLogger
+
+The severity settings do not change these outputs:
+
+- The messages of ROOT, for example from `Error()` of a `TObject`. `FairTask::ExecuteTask()` uses it
+  when another task is still running
+  ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L138-L141)).
+- `printf()` and `std::cout` in some places, for example the break points of `FairTask`
+  ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L185-L190)).
+- The [MC step logger](/tools/step-logger/), which writes to `std::cout` and `std::cerr`.
+
+If ROOT's `gDebug` is greater than 1, `FairTask` logs the name of each task before its `Exec()`, with
+the severity `info` ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L151-L153)).
+
+A FairMQ device sets the log from its own options, for example `--severity`. See
+[Logging in the FairMQ documentation](https://fairrootgroup.github.io/FairMQ/tools/logging/).
+
+## Problems and causes
+
+| Problem | Cause |
+| --- | --- |
+| No `debug` lines, although the console severity is `debug` | A log file or a file severity with a more severe setting. See [Write the log to a file](#write-the-log-to-a-file). |
+| Only `fatal` lines | A call of `SetLogToFile(kFALSE)` or `SetLogToScreen(kFALSE)` |
+| A `fatal` line does not stop the program | No call of `FairLogger::GetLogger()` before the line |
+| `Requested severity is higher than the enabled compile-time FAIR_MIN_SEVERITY (…), ignoring` | The FairLogger installation removes the lower severities at compile time, with the CMake option `FAIR_MIN_SEVERITY` of FairLogger. Lines below it do not exist in the program. |
+| A new file `core_dump_<pid>` | A `fatal` line with the FairRoot handler. The file has the stack trace. |
+| Old lines in `MyLog.log` | FairLogger appends to the log file. Delete the file before the run. |
+
+## Related pages
+
+- [Measure time and memory](/tools/monitor/): `FairMonitor` prints its results as `info` lines.
+- [Tasks](/concepts/tasks/#return-values-of-init-and-reinit): the return values of `Init()`, with `kFATAL`.
+- [Architecture](/concepts/architecture/): the central objects of FairRoot, the logger among them.
+- [Log the MC steps](/tools/step-logger/): a step counter that writes to the console without FairLogger.
+- [Deprecated APIs](/reference/deprecations/): the old functions of the class `FairLogger`.
+- [FairLogger](https://github.com/FairRootGroup/FairLogger): the library, with its README.

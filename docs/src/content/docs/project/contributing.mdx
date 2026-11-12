@@ -1,0 +1,305 @@
+---
+title: 'Contributing'
+description: 'How to report a problem and how to propose a change to FairRoot: the target branch, the commit rules, the format check with clang-format, clang-tidy and the checks of the CI.'
+sidebar:
+  order: 1
+code: [examples/simulation/Tutorial1/src/FairSimConfig.cxx, fairroot/parbase/FairContFact.h]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+The FairRoot developers work on GitHub, in the repository `FairRootGroup/FairRoot`. Report problems and ask
+questions in a GitHub issue. Propose changes in a pull request against the branch `dev`. The rules for
+code and commits are in [CONTRIBUTING.md](/repo/CONTRIBUTING.md), and the CI checks a part of them.
+
+## Report a problem or ask a question
+
+Open an issue in the repository on GitHub: the tab **Issues**, then **New issue**. Use an issue for bug
+reports, feature requests and questions. The repository has two
+[issue templates](/repo/.github/ISSUE_TEMPLATE/):
+
+| Template | What it asks for |
+| --- | --- |
+| Bug report | A description of the bug, the steps to reproduce it, the expected behavior, logs, and the system information |
+| Feature request | The problem behind the request, the solution that you want, and the alternatives that you considered |
+
+A developer must be able to repeat the problem. Thus give this information in a bug report:
+
+- The steps: the environment, the options of CMake, and the commands that you ran.
+- The log output, as text.
+- The operating system, the compiler and the FairSoft version.
+
+## Propose a change
+
+<Steps>
+
+1. Make a branch from `dev`, for example in your fork of the repository. Use another base branch only
+   in rare cases, for example for a backport or a hotfix.
+
+2. Make the change in commits that follow the [commit rules](#commits).
+
+3. Format the lines that you changed with clang-format. See [Format the code](#format-the-code).
+
+4. Build FairRoot and run the tests. See [Tests](/tools/testing/).
+
+5. For your first contribution, add your name to `CONTRIBUTORS` in a separate commit. See
+   [Add your name](#add-your-name).
+
+6. Open a pull request against `dev`. Describe the change, and name the issues that it resolves. The
+   [template of the pull request](/repo/.github/PULL_REQUEST_TEMPLATE.md) has a checklist item for these
+   guidelines.
+
+7. Answer the review. When the pull request is almost ready to merge, the reviewer can ask you to
+   restructure your commits.
+
+</Steps>
+
+## Commits
+
+The rules for commits are in the sections G.3 to G.5 of [CONTRIBUTING.md](/repo/CONTRIBUTING.md):
+
+- Follow the [seven rules of a great Git commit message](https://cbea.ms/git-commit/#seven-rules).
+- Put one change in each commit. Do not mix unrelated changes in one commit. Squash related commits
+  into one.
+- In the body, explain what the commit changes and why, not how. Write for a reader in the future.
+- Use the [reference keywords](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword)
+  of GitHub, in the commit messages and in the comments of the pull request.
+
+### Conventional Commits
+
+The summary line follows the [Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/):
+`<type>(<scope>): <summary>`. The scope is optional.
+
+- **Types:** `fix`, `feat`, `build`, `chore`, `ci`, `docs`, `style`, `refactor`, `perf` and `test`.
+- **Scope:** prefer the name of the library, which is its folder directly below `fairroot/`. The
+  folders are `alignment`, `base`, `basemq`, `datamatch`, `eventdisplay`, `fairmq`, `fastsim`, `geane`,
+  `generators`, `geobase`, `mbsapi`, `mcconfigurator`, `mcsteplogger`, `online`, `parbase`, `parmq`,
+  `tools` and `trackbase`.
+
+A commit message then has this form:
+
+```txt
+fix(geobase): <what the commit changes, as an instruction>
+
+<What the commit changes and why.>
+
+Fixes #<number of the issue>
+```
+
+### Signed commits
+
+Sign your commits and tags. Use a signature format that Git and GitHub support, for example GPG or
+SSH. An SSH key can be easier to set up if you do not have a GPG key yet. The GitHub documentation
+tells how to
+[give Git your signing key](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key).
+Then let Git sign all your commits:
+
+```sh
+git config --global commit.gpgsign true
+```
+
+Use `--local` instead of `--global` to sign only the commits of one repository.
+
+## Add your name
+
+A first-time contributor adds a separate commit with the name in [CONTRIBUTORS](/repo/CONTRIBUTORS).
+The script [meta_update.py](/repo/meta_update.py) copies the names of `AUTHORS` and `CONTRIBUTORS` into
+the metadata files `codemeta.json` and `.zenodo.json`. For `codemeta.json`, it reads each line with
+this expression:
+
+<Snippet file="meta_update.py" start="findregex = re.compile(r'^(?P<familyName>" end="(?P<orcid>" />
+
+Thus a line has the form `Family name, Given name`. An e-mail address in `<…>` can follow. An ORCID
+can follow in the form `[https://orcid.org/…]`, because the expression for `.zenodo.json` accepts only
+this form ([meta_update.py](/repo/meta_update.py#L99-L101)). For a line in another form, and for an
+empty line, the script stops with `Could not analyze line`.
+
+<Steps>
+
+1. Add your line to `CONTRIBUTORS`.
+
+2. In the source folder, update the metadata:
+
+   ```sh
+   python3 meta_update.py
+   ```
+
+3. Put `CONTRIBUTORS`, `codemeta.json` and `.zenodo.json` into the same commit.
+
+</Steps>
+
+The GitHub workflow [check_metadata.yaml](/repo/.github/workflows/check_metadata.yaml) runs for each
+change of these files and of `AUTHORS`. It runs `meta_update.py` and then `git diff --exit-code`. If
+the script changes a file, the check fails.
+
+## Format the code
+
+The CI checks the format of each pull request with clang-format. The configuration is
+[.clang-format](/repo/.clang-format). It starts from the style `Mozilla` and sets these values, among
+others:
+
+| Setting | Value | Effect |
+| --- | --- | --- |
+| `IndentWidth`, `UseTab` | `4`, `Never` | Four spaces for each level of indentation, no tabs. |
+| `ColumnLimit` | `120` | A line has 120 characters at most. |
+| `BraceWrapping` | `AfterClass`, `AfterEnum`, `AfterFunction`, `AfterNamespace`, `AfterStruct` | The opening brace of a class, enum, function, namespace or struct starts a new line. |
+| `AfterControlStatement` | `MultiLine` | After `if`, `for` or `while`, the brace starts a new line only if the condition has more than one line. |
+| `AllowShortFunctionsOnASingleLine` | `Inline` | Only a short function that is defined in a class can stay on one line. |
+| `AllowShortIfStatementsOnASingleLine` | `Never` | The body of an `if` never stays on the line of the condition. |
+| `BinPackArguments`, `BinPackParameters` | `false` | The arguments of a call, and the parameters of a declaration, are all on one line or each on a separate line. |
+| `PointerAlignment` | `Left` | `int* p`, not `int *p`. |
+| `BreakConstructorInitializers` | `BeforeComma` | A line break in the initializer list of a constructor comes before the colon and before each comma. |
+| `IncludeBlocks`, `SortIncludes` | `Regroup`, `true` | clang-format sorts the includes and groups them again. |
+| `SpacesBeforeTrailingComments` | `3` | Three spaces come before a comment at the end of a line. |
+
+### Check the format
+
+The script [check-format.sh](/repo/check-format.sh) checks only the lines that you changed:
+
+<Snippet file="check-format.sh" start="BASE_COMMIT=" end="/^fi$/" />
+
+- It compares the working tree with the commit in `FAIRROOT_FORMAT_BASE`. The default is `HEAD`. Thus
+  without this variable, it checks only the changes that you did not commit.
+- It checks the files with the extensions `h`, `hpp`, `c`, `C`, `cpp` and `cxx`. It skips the files
+  that end in `LinkDef.h` and the files in `third_party/`.
+- It prints the version of clang-format. If clang-format suggests changes, the script prints
+  `ERROR: format check failed. Suggested changes:` and the diff, and returns 1.
+
+In the CI, the job **Check format** runs for each pull request. It sets `FAIRROOT_FORMAT_BASE` to the
+target branch of the pull request and runs [FairRoot_format_test.cmake](/repo/FairRoot_format_test.cmake).
+This script configures FairRoot and builds the target `FormatCheck`, which runs `check-format.sh`.
+
+Run the same check before you open the pull request. The script runs `git-clang-format` from the
+`PATH`, or the program in `FAIRROOT_GIT_CLANG_FORMAT_BIN`. `git-clang-format` then runs the program in
+the git setting `clangFormat.binary`, else `clang-format` from the `PATH`. The script uses
+`FAIRROOT_CLANG_FORMAT_BIN` only to print the version. In the source folder, run:
+
+```sh
+FAIRROOT_FORMAT_BASE=origin/dev ./check-format.sh
+```
+
+In a configured build folder, the target `FormatCheck` runs the same script in the source folder. CMake
+adds this target only if it finds `clang-format` and `git-clang-format`
+([CMakeLists.txt](/repo/CMakeLists.txt#L299-L308)):
+
+```sh
+FAIRROOT_FORMAT_BASE=origin/dev cmake --build build --target FormatCheck
+```
+
+### Apply the format
+
+`git clang-format` formats the lines that differ from a commit. To format all lines that you changed
+on your branch:
+
+```sh
+git clang-format origin/dev
+```
+
+The tool changes only the files in the working tree. Stage your changes first: for a file with
+unstaged changes, it needs the option `--force`.
+
+The script [apply-format.sh](/repo/apply-format.sh) formats all C++ files below the current folder,
+except in `./build/` and `./cmake/`. It also changes files that you did not touch, and it does not skip
+`third_party/` or `docs/node_modules/`. Thus use `git clang-format` for a pull request.
+
+### Switch the format off
+
+Switch clang-format off only for a section that it makes harder to read, for example a table of
+options:
+
+<Snippet file="examples/simulation/Tutorial1/src/FairSimConfig.cxx" start="// clang-format off" end="// clang-format on" />
+
+## clang-tidy
+
+The configuration of clang-tidy is [.clang-tidy](/repo/.clang-tidy). It keeps the default checks of
+clang-tidy, `clang-diagnostic-*` and `clang-analyzer-*`, and adds these checks:
+
+- `bugprone-*`, except `bugprone-easily-swappable-parameters`, `bugprone-narrowing-conversions`,
+  `bugprone-virtual-near-miss`, `bugprone-unhandled-self-assignment` and `bugprone-reserved-identifier`
+- `cppcoreguidelines-pro-type-cstyle-cast`: no C-style casts
+- `cppcoreguidelines-virtual-class-destructor`: the destructor of a class with virtual functions is
+  public and virtual, or protected and not virtual
+- `modernize-make-unique`: `std::make_unique()` instead of `new`
+- `google-build-using-namespace`: no `using namespace`
+- `readability-simplify-boolean-expr`
+
+It disables `clang-analyzer-core.UndefinedBinaryOperatorResult`, because the headers of ROOT cause many
+of these warnings. `HeaderFilterRegex: '.*'` shows the warnings in all headers.
+
+One Linux job of the CI builds FairRoot with clang-tidy, for each pull request and each branch build.
+Jenkins collects the warnings, without the generated dictionaries and `third_party/`. With four or more
+new warnings, Jenkins marks the build as unstable ([Jenkinsfile](/repo/Jenkinsfile)). The CI does not
+enforce the checks strictly, but address the warnings of your change.
+
+To run clang-tidy in your build, configure with `-DCMAKE_CXX_CLANG_TIDY=clang-tidy`. The CI job does
+the same ([FairRoot_build_test.cmake](/repo/FairRoot_build_test.cmake#L46-L48)). The top-level
+`CMakeLists.txt` then gives clang-tidy the C++ standard of the build, `CMAKE_CXX_STANDARD`
+([CMakeLists.txt](/repo/CMakeLists.txt#L158-L162)).
+
+## Rules for the code
+
+The guidelines are new, and much of the existing code does not follow them yet. Apply them to new code
+and to the code that you change.
+
+- **Ownership (G.2):** follow the C++ Core Guideline
+  [I.11](https://github.com/isocpp/CppCoreGuidelines/blob/master/CppCoreGuidelines.md#i11-never-transfer-ownership-by-a-raw-pointer-t-or-reference-t):
+  never transfer ownership by a raw pointer `T*` or a reference `T&`. If an owning raw pointer must stay
+  for legacy reasons, add a comment that tells the ownership. For example,
+  [`FairContFact::AddContainer()`](/api/FairContFact/#AddContainer) takes the ownership of the
+  container only if it returns `true`:
+
+  <Snippet file="fairroot/parbase/FairContFact.h" start="/// @param[in] container Transfers ownership" end="Bool_t AddContainer(FairContainer*);" />
+
+- **Documentation (D.1):** write [Doxygen-style comments](https://www.doxygen.nl/manual/commands.html).
+  The API reference of this site comes from them.
+- **Documentation site (D.2):** if your change alters what a page of this site describes, update the
+  page in the same pull request. See [Change the documentation](#change-the-documentation).
+- **Names (S.2):** a variable name tells what the variable contains, not its type. Prefer `volumes` to
+  `list` for a list of volumes.
+
+To refer to a rule in a discussion, give its number with a link, for example G.2. For a C++ Core
+Guideline, add the prefix `CPPCG::`, for example `CPPCG::I.11`.
+
+## Change the documentation
+
+The pages of this site are in `docs/src/content/docs/`, as MDX files. The link **Edit page** at the end
+of each page opens the file on GitHub. To build the site on your computer, follow
+[docs/README.md](/repo/docs/README.md):
+
+```sh
+cd docs
+npm ci
+npm run dev
+```
+
+`npm run dev` runs Doxygen if its XML is missing or older than the C++ files. Then it starts a local
+server that shows each change at once. Check your page in a second terminal:
+
+```sh
+node scripts/check-pages.mjs src/content/docs/tools/testing.mdx
+```
+
+`check-pages.mjs` uses the Doxygen XML in `docs/build/doxygen/xml/`. It checks the frontmatter, the MDX
+syntax, the snippets and all links in a few seconds.
+
+- Show code of the repository with `<Snippet>`, not with a copy. Then the build fails when the code
+  changes and the sample does not agree.
+- Write in the style of ASD-STE100 (Simplified Technical English): short sentences, one instruction
+  in each sentence, and the active voice.
+
+## The checks of a pull request
+
+| Check | Where | When it runs | It fails or warns when |
+| --- | --- | --- | --- |
+| Builds and tests | Jenkins | Each pull request and each branch build | A build fails or a test fails |
+| Check format | Jenkins | Each pull request | clang-format suggests changes to the changed lines |
+| clang-tidy | Jenkins, one Linux job | Each pull request and each branch build | Four or more new warnings mark the build as unstable |
+| Metadata | GitHub Actions, [check_metadata.yaml](/repo/.github/workflows/check_metadata.yaml) | Changes of `AUTHORS`, `CONTRIBUTORS`, `codemeta.json` or `.zenodo.json` | `meta_update.py` fails or changes a file |
+| CodeMeta | GitHub Actions, [codemeta_validate.yaml](/repo/.github/workflows/codemeta_validate.yaml) | Changes of `codemeta.json` | `codemeta.json` is not valid |
+
+## Related pages
+
+- [Tests](/tools/testing/): run the tests, and the CI jobs in detail.
+- [Install FairRoot](/start/install/): build FairRoot from the source.
+- [License and citation](/project/license/): the license of FairRoot and how to cite it.

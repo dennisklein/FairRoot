@@ -1,0 +1,199 @@
+---
+title: 'Rutherford experiment'
+description: 'Alpha particles hit a thin gold foil inside a silicon ring, with protons and pions from two more generators. The example stores MC points and trajectories for the event display.'
+sidebar:
+  order: 5
+code: [examples/simulation/rutherford/macros/run_rutherford.C, examples/simulation/rutherford/macros/eventDisplay.C, examples/simulation/rutherford/macros/run_rad.C, examples/simulation/rutherford/src/FairRutherford.h, examples/simulation/rutherford/src/FairRutherford.cxx, examples/simulation/rutherford/src/FairRutherfordPoint.h, examples/simulation/rutherford/src/FairRutherfordGeo.cxx, examples/simulation/rutherford/src/FairRutherfordContFact.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { FileTree } from '@astrojs/starlight/components';
+
+The Rutherford example simulates alpha particles that hit a gold foil with a thickness of 2 µm. A
+ring of silicon around the foil records MC points. The example shows a detector from ASCII geometry
+files, three primary generators in one event, stored trajectories and the event display.
+
+## Files
+
+<FileTree>
+- examples/simulation/rutherford/
+  - src/
+    - FairRutherford.cxx the detector
+    - FairRutherfordPoint.h the MC point, with radius, phi and theta
+    - FairRutherfordGeo.cxx the geometry set `rutherford`
+    - FairRutherfordGeoPar.cxx the geometry parameter container
+    - FairRutherfordContFact.cxx the container factory
+    - FairRutherfordLinkDef.h the dictionary of the library ExRutherford
+  - macros/
+    - run_rutherford.C simulation with trajectories
+    - eventDisplay.C event display
+    - run_rad.C radiation length scan
+    - CMakeLists.txt the tests
+- examples/common/geometry/
+  - rutherford.geo the silicon ring
+  - target_rutherford.geo the gold foil
+  - cave_vacuum.geo the cave
+  - media.geo the media
+</FileTree>
+
+## Run the example
+
+[`macros/CMakeLists.txt`](/repo/examples/simulation/rutherford/macros/CMakeLists.txt) makes a script for
+`run_rutherford.C` and for `run_rad.C`. It defines a test for each transport engine: `TGeant4`, and
+`TGeant3` if CMake found Geant3 and `ENABLE_GEANT3_TESTING` is on
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L12-L17)). A test passes if the output
+contains `Macro finished successfully` within 60 s.
+
+| Test | Macro call | Writes |
+| --- | --- | --- |
+| `ex_sim_rutherford_TGeant4` | `run_rutherford.C(10, "TGeant4", false)` | `data/test_TGeant4.mc.root`, `data/params_TGeant4.root`, `data/geofile_rutherford_TGeant4_full.root` |
+| `ex_sim_run_rad_TGeant4` | `run_rad.C(100, "TGeant4")` | `data/test1_TGeant4.mc.root`, `data/params1_TGeant4.root`, `data/geofile_rad_TGeant4_full.root` |
+
+Run the tests from the build folder, or start a script yourself. CMake makes the folder `data` next
+to the scripts ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L134-L140)):
+
+```sh
+cd <build>
+ctest -R ex_sim_rutherford
+cd <build>/examples/simulation/rutherford/macros
+./run_rutherford.sh 10 '"TGeant4"' false
+```
+
+The macros also write the log to `MyLog.log`, with the verbosity `HIGH`.
+
+:::caution[Multithreading]
+The default of `isMT` in `run_rutherford.C` is `true`. In multithreaded mode, the worker threads
+write their events to files with `_t<n>` before `.root`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L969-L974)). `eventDisplay.C`
+reads only `data/test_<engine>.mc.root`. Give `false`, as the test does.
+:::
+
+## Geometry
+
+`run_rutherford.C` adds three modules
+([run_rutherford.C](/source/examples/simulation/rutherford/macros/run_rutherford.C/#L80-L90)). The
+`.geo` files give lengths in mm (see [Geometry and media file format](/reference/geo-format/)):
+
+| Module | Class | File | Shape | Medium |
+| --- | --- | --- | --- | --- |
+| `CAVE` | [`FairCave`](/source/examples/common/passive/FairCave.h/) | `cave_vacuum.geo` | Box with an edge length of 40 m | `vacuum` |
+| `Target` | [`FairTarget`](/source/examples/common/passive/FairTarget.h/) | `target_rutherford.geo` | Box of 4 mm × 4 mm × 2 µm at the origin | `gold` |
+| `RutherfordDetector` | [`FairRutherford`](/source/examples/simulation/rutherford/src/FairRutherford.h/) | `rutherford.geo` | Tube segment around the origin: radius 2.0 cm to 2.1 cm, length 1 cm | `silicon` |
+
+The file of the ring:
+
+<Snippet file="examples/common/geometry/rutherford.geo" lines="1-10" />
+
+- Lines 5 to 7: z from -5 mm to 5 mm, inner radius 20 mm, outer radius 21 mm.
+- Line 8: phi from -80° to 260°. This leaves a gap of 20°.
+- Line 10: the matrix swaps y and z. Thus the axis of the tube is the y axis, and the gap is on the
+  side of -z, where the primaries start.
+
+In `media.geo`, `silicon` has the sensitivity flag 1, and `gold` and `vacuum` have 0. A node with a
+sensitive medium becomes a sensitive volume only if its module is active
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)). `run_rutherford.C` makes
+the detector active with `kTRUE`.
+
+## Primary generators
+
+`FairPrimaryGenerator` calls all three generators in each event
+([run_rutherford.C](/source/examples/simulation/rutherford/macros/run_rutherford.C/#L94-L119)):
+
+| Generator | Particles in each event | Start point | Momentum |
+| --- | --- | --- | --- |
+| [`FairIonGenerator`](/api/FairIonGenerator/)`(2, 4, 2, 1, 0., 0., 1. / 20., 0., 0., -1.)` | 1 alpha particle (Z = 2, A = 4, charge 2) | (0, 0, -1) cm | 0.05 GeV/c per nucleon along z, thus 0.2 GeV/c |
+| [`FairBoxGenerator`](/api/FairBoxGenerator/)`(2212, 1)` | 1 proton | (0, 0, -3) cm | 0.005 GeV/c along z (theta 0, phi 0) |
+| [`FairYPtGenerator`](/api/FairYPtGenerator/) | 10 π+ | Gaussian around (0, 0, -2.5) cm, sigma 0.1 cm in x, y and z | From a histogram with two entries: rapidity 0.2 with pT 0.2 GeV/c and with pT 0.4 GeV/c |
+
+`FairIonGenerator` multiplies the momentum by A
+([FairIonGenerator.cxx](/source/fairroot/generators/FairIonGenerator.cxx/#L81-L97)). For an alpha
+particle, 0.2 GeV/c is a kinetic energy of about 5.3 MeV. See [Primary generators](/simulation/generators/)
+for the three generators. The macro sets the random seed 98989.
+
+## The detector
+
+`FairRutherford` is a [`FairDetector`](/api/FairDetector/) with the detector ID `kFairRutherford`.
+`ConstructGeometry()` reads `rutherford.geo` with `FairRutherfordGeo`, the geometry set with the
+name `rutherford`, and fills the parameter container `FairRutherfordGeoPar`
+([FairRutherford.cxx](/source/examples/simulation/rutherford/src/FairRutherford.cxx/#L109-L116)). The
+container factory `FairRutherfordContFact` makes this container
+([FairRutherfordContFact.cxx](/source/examples/simulation/rutherford/src/FairRutherfordContFact.cxx/#L16-L45)).
+
+`ProcessHits()` makes at most one MC point each time that a track goes into the silicon:
+
+<Snippet file="examples/simulation/rutherford/src/FairRutherford.cxx" start="Bool_t FairRutherford::ProcessHits(" />
+
+- When the track enters, it keeps the time in ns, the track length, the position and the momentum.
+- It adds the energy deposit of each step.
+- When the track leaves, stops or disappears, it adds a `FairRutherfordPoint` if the energy deposit
+  is not 0. The stack counts the point for the MC track.
+
+`FairRutherfordPoint` is a [`FairMCPoint`](/api/FairMCPoint/) with three more values of the entry
+point: `fRadius` (the distance from the origin), `fPhi` and `fTheta` (angles in radians)
+([FairRutherford.cxx](/source/examples/simulation/rutherford/src/FairRutherford.cxx/#L118-L130)). The
+class has no getters for them. `Register()` makes the branch `FairRutherfordPoint`, and its last
+argument `kTRUE` writes the branch to the output file. The comment above the call describes `kFALSE`
+([FairRutherford.cxx](/source/examples/simulation/rutherford/src/FairRutherford.cxx/#L87-L96)).
+
+## Trajectories
+
+`run_rutherford.C` calls `SetStoreTraj(kTRUE)` before `Init()`. After `Init()`, it sets the filter
+to store primaries and secondaries, and it keeps the default values of the other cuts
+([run_rutherford.C](/source/examples/simulation/rutherford/macros/run_rutherford.C/#L122-L139)). The
+comments in the macro show other cuts. The comment `// 1 cm` next to `SetStepSizeCut(0.01)` is
+wrong: the unit is cm, so 0.01 is 0.1 mm. [Event display](/reconstruction/event-display/) explains
+the cuts.
+
+## What the macros give
+
+The macros compute no physics result, for example no angular distribution. `run_rutherford.C` ends
+with these lines:
+
+<Snippet file="examples/simulation/rutherford/macros/run_rutherford.C" start='cout << "Output file is "' end='cout << "Macro finished successfully."' />
+
+The tree `cbmsim` in `data/test_<engine>.mc.root` has the branches `MCTrack`, `MCEventHeader.`,
+`FairRutherfordPoint` and `GeoTracks`, among others. The parameter file also holds the geometry in the
+parameter container `FairGeoParSet`. To look at the angles, draw a leaf of the MC points in ROOT:
+
+```cpp
+TFile file("data/test_TGeant4.mc.root");
+auto tree = static_cast<TTree*>(file.Get("cbmsim"));
+tree->Draw("FairRutherfordPoint.fTheta");
+```
+
+The cave is vacuum and the run has no field. Thus for a particle that comes from the foil at the
+origin, `fTheta` is the polar angle of its direction after the foil.
+
+## Event display
+
+`eventDisplay.C` reads the MC file and the parameter file. It draws the MC tracks and the MC points:
+
+<Snippet file="examples/simulation/rutherford/macros/eventDisplay.C" start="FairEventManager *fMan" end="fMan->Init();" />
+
+[Event display](/reconstruction/event-display/) shows how to start it. `FairMCTracksDraw` extrapolates
+each MC track from its start point, without material and here without a field. Thus the lines are
+straight and do not show the scattering in the foil. The simulation stores trajectories, so add
+`FairGeoTracksDraw` before `fMan->Init()` to see the paths from the transport:
+
+```cpp
+FairGeoTracksDraw* geoTracks = new FairGeoTracksDraw();
+fMan->AddTask(geoTracks);
+```
+
+## Radiation length scan: run_rad.C
+
+`run_rad.C` uses the same three modules, but the detector is not active. It switches on the radiation
+length manager. In each event, one particle with the PDG code 0 starts at (0, 0, -3) cm. Its
+momentum is 0.005 GeV/c, with phi 0 and theta from -90° to 90°
+([run_rad.C](/source/examples/simulation/rutherford/macros/run_rad.C/#L73-L99)). The macro does not
+make the folder `data`. It also stores trajectories. See
+[Radiation length and dose maps](/simulation/radiation/).
+
+## Related pages
+
+- [Primary generators](/simulation/generators/): the ion, box and y-pT generators.
+- [Write a detector](/simulation/detectors/): `ProcessHits()`, `Register()` and the geometry.
+- [Geometry and media file format](/reference/geo-format/): the `.geo` files.
+- [Event display](/reconstruction/event-display/): the display and the trajectory cuts.
+- [Radiation length and dose maps](/simulation/radiation/): `run_rad.C`.
+- [Examples](/examples/overview/): build the examples and set the environment.

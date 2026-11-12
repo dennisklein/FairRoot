@@ -1,0 +1,413 @@
+---
+title: 'Hooks and their call order'
+description: 'The virtual functions that FairRoot calls on tasks, modules, detectors, generators, stacks, parameter containers, sources, sinks and fields: when, from where, and the default.'
+sidebar:
+  order: 6
+code: [fairroot/base/steer/FairTask.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/base/steer/FairRunSim.cxx, fairroot/base/sim/FairMCApplication.cxx, fairroot/base/steer/FairRootManager.cxx, fairroot/parbase/FairRuntimeDb.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot calls virtual functions of your classes, the hooks, at fixed points of a run. This page
+lists the hooks of each base class, the code that calls them and the default. After the tables, two
+sections give the call order of a simulation run and of a reconstruction run.
+
+How to read the tables:
+
+- **When called** gives the point in the run. **Called by** links to the line that makes the call.
+- **Never** means that no code in the FairRoot libraries (`fairroot/`) calls the function. Your own
+  code or an example can still call it.
+- **Pure virtual** means that your class must implement the function.
+
+## FairTask
+
+The run does not call the task hooks directly. It calls public functions of the main task. Each of
+these functions calls the hook and then continues with the subtasks. [Tasks](/concepts/tasks/)
+explains the life cycle.
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `SetParContainers()` | Once, at the start of the run. Get the parameter containers here. They are still empty. | [`SetParTask()`](/source/fairroot/base/steer/FairTask.cxx/#L81-L88) | Does nothing |
+| `Init()` | Once, at the start of the run, after the runtime database filled the containers | [`InitTask()`](/source/fairroot/base/steer/FairTask.cxx/#L49-L64) | Returns `kSUCCESS` |
+| `ReInit()` | When the run ID changes, after the runtime database filled the containers for the new run ID | [`ReInitTask()`](/source/fairroot/base/steer/FairTask.cxx/#L66-L79) | Returns `kSUCCESS` |
+| `Exec(Option_t*)` | Once for each event | [`ExecuteTask()`](/source/fairroot/base/steer/FairTask.cxx/#L128-L208) | From ROOT `TTask` |
+| `FinishEvent()` | Once for each event, after `Exec()` of all tasks | The run, on the main task | Calls `FinishEvent()` of the subtasks ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L90-L96)) |
+| `Finish()` | Once, after the last event | [`FinishTask()`](/source/fairroot/base/steer/FairTask.cxx/#L98-L105) | Does nothing |
+| `FinishTask()` | Once, after the last event | The run, on the main task | Calls `Finish()`, then `FinishTask()` of the subtasks |
+
+The defaults of the protected hooks are in
+[FairTask.h](/source/fairroot/base/steer/FairTask.h/#L113-L131). The functions in the column
+"Called by" return at once for an inactive task.
+
+`FinishEvent()` and `FinishTask()` are different, because they are virtual. An override replaces
+the check for an inactive task. The run then calls your override also when the task is inactive,
+and the subtasks get no call unless your override calls the base function. See
+[Inactive tasks](/concepts/tasks/#inactive-tasks).
+
+`FairRingSorterTask` overrides both functions. Its `FinishTask()` puts the remaining sorted data
+into the output branch and calls `SetLastFill()` ([FairRingSorterTask.cxx](/source/fairroot/base/steer/FairRingSorterTask.cxx/#L89-L122)).
+Then the run fills the output tree one more time
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L337-L344)).
+
+### Where the runs call the task functions
+
+| Function | `FairRunAna` | `FairRunSim` | `FairRunOnline` |
+| --- | --- | --- | --- |
+| `SetParTask()` | [`Init()`](/source/fairroot/base/steer/FairRunAna.cxx/#L186-L213) | [`FairMCApplication::SetParTask()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1215) | [`Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L183-L187) |
+| `InitTask()` | [`Init()`](/source/fairroot/base/steer/FairRunAna.cxx/#L237-L238) | [`FairMCApplication::InitTasks()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L1217-L1224) | [`Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L198-L199) |
+| `ReInitTask()` | [`CheckRunIdChanged()`](/source/fairroot/base/steer/FairRunAna.cxx/#L568-L584) | Never | [`CheckRunIdChanged()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L336-L357) |
+| `ExecuteTask("")` | [`Run()`](/source/fairroot/base/steer/FairRunAna.cxx/#L326) | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L652-L655) | [`EventLoop()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L218) |
+| `FinishEvent()` | [`Run()`](/source/fairroot/base/steer/FairRunAna.cxx/#L329) | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L652-L655) | [`EventLoop()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L223) |
+| `FinishTask()` | [`Run()`](/source/fairroot/base/steer/FairRunAna.cxx/#L340) | [`FairMCApplication::FinishRun()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L320-L322) | [`Finish()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L309) |
+
+In a simulation, the application calls `SetParTask()` and `InitTask()` only if the macro added a
+task ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L1202-L1224)). Some
+FairMQ devices in the examples call `InitTask()` once and `Exec()` for each message
+([processor.cxx](/source/examples/advanced/Tutorial3/MQ/processor.cxx/#L63-L68)).
+
+## FairModule
+
+`FairModule` is the base class of all parts of the simulation geometry: passive modules and
+detectors. The MC application calls the modules in the order in which the macro adds them with
+`AddModule()` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L108-L123)).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `SetParContainers()` | Once, in `FairRunSim::Init()`, before the runtime database fills the containers | [`FairMCApplication::SetParTask()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L1208-L1210) | Does nothing |
+| `InitParContainers()` | Once, when the transport engine asks for the geometry. The containers are filled. | [`FairMCApplication::ConstructGeometry()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774) | Does nothing |
+| `ConstructGeometry()` | Once, right after `InitParContainers()` of the same module | [`FairMCApplication::ConstructGeometry()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L764-L774) | Logs a warning ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L57-L61)) |
+| `IsSensitive(const std::string&)` | Only in a detector: for the volumes that `ConstructRootGeometry()` or `ConstructGDMLGeometry()` read from the geometry file. With multithreaded Geant4, also for all volumes, in `FairDetector::Initialize()`. | [`ExpandNode()`](/source/fairroot/base/sim/FairModule.cxx/#L567-L570), [`ExpandNodeForGDML()`](/source/fairroot/base/sim/FairModule.cxx/#L461-L465), [`DefineSensitiveVolumes()`](/source/fairroot/base/sim/FairDetector.cxx/#L71-L83) | Returns the result of the deprecated `CheckIfSensitive()`, which returns `kFALSE` |
+| `RegisterAlignmentMatrices()` | Once, after all modules built their geometry and the geometry is closed | [`FairMCApplication::ConstructGeometry()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L814-L816) | Does nothing |
+| `SetSpecialPhysicsCuts()` | Once, when the transport engine initializes the geometry | [`FairMCApplication::RegisterOutput()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L957-L962) | Does nothing |
+| `ConstructOpGeometry()` | Once, when the transport engine asks for the optical properties | [`FairMCApplication::ConstructOpGeometry()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L746-L748) | Logs a message at level `debug2` ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L63-L67)) |
+| `CloneModule()` | Multithreaded Geant4: once for each worker thread | [Copy constructor of `FairMCApplication`](/source/fairroot/base/sim/FairMCApplication.cxx/#L173-L179) | Stops the program with `Fatal()` of ROOT ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L683-L687)) |
+| `BeginWorkerRun()`, `FinishWorkerRun()` | Never | None | Do nothing |
+| `ModifyGeometry()` | Never. Deprecated: Tutorial4 uses `RegisterAlignmentMatrices()` instead | None | Logs a warning |
+
+Without multithreading, a geometry from an ASCII file does not use `IsSensitive()`. There, a volume
+is sensitive if its medium has the sensitivity flag
+([FairGeoNode.h](/source/fairroot/geobase/FairGeoNode.h/#L146-L153)).
+In this case, only an active module registers its sensitive volumes
+([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L271-L274)).
+
+## FairDetector
+
+`FairDetector` derives from `FairModule`, so a detector also gets the module hooks. The application
+calls the functions below only for active detectors
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L115-L121)).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `Initialize()` | Once, when the transport engine initializes the geometry, after the geometry is built | [`FairMCApplication::RegisterOutput()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L963-L967) | Sets the engine volume IDs of the sensitive volumes ([FairDetector.cxx](/source/fairroot/base/sim/FairDetector.cxx/#L87-L121)) |
+| `Register()` | Once, right after `Initialize()`. Register the branches of the MC points here. | [`FairMCApplication::RegisterOutput()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L963-L967) | Pure virtual |
+| `BeginEvent()` | At the start of each event | [`FairMCApplication::BeginEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L384-L392) | Does nothing |
+| `BeginPrimary()` | At the start of each primary track | [`FairMCApplication::BeginPrimary()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L395-L402) | Does nothing |
+| `PreTrack()` | At the start of each track | [`FairMCApplication::PreTrack()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L405-L412) | Does nothing |
+| `ProcessHits(FairVolume*)` | At each step in a sensitive volume of the detector | [`FairMCApplication::Stepping()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L513-L558) | Pure virtual |
+| `PostTrack()` | At the end of each track | [`FairMCApplication::PostTrack()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L592-L599) | Does nothing |
+| `FinishPrimary()` | At the end of each primary track | [`FairMCApplication::FinishPrimary()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L602-L611) | Does nothing |
+| `FinishEvent()` | At the end of each event, after the tasks and before the fill of the output tree | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L657-L659) | Does nothing |
+| `EndOfEvent()` | At the end of each event, after the fill of the output tree | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L667-L669) | Does nothing |
+| `FinishRun()` | Once, at the end of the run | [`FairMCApplication::FinishRun()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L315-L317) | Does nothing |
+| `GetCollection(Int_t)` | Never. The example stack calls it in `UpdateTrackIndex()`. | [FairStack.cxx](/source/examples/common/mcstack/FairStack.cxx/#L269-L298) | Pure virtual |
+| `Reset()` | Never. Call it from your `EndOfEvent()`. | None | Pure virtual |
+| `CopyClones()` | Never | None | Does nothing |
+
+Call `FairDetector::Initialize()` from your override of `Initialize()`. Without it, the sensitive
+volumes keep the engine volume ID -1 ([FairVolume.h](/source/fairroot/base/sim/FairVolume.h/#L63)),
+and `Stepping()` does not find them.
+
+Clear the collections of MC points in `EndOfEvent()`, because the output tree has the event at that
+point. Tutorial2 calls its `Reset()` there
+([FairTutorialDet2.cxx](/source/examples/simulation/Tutorial2/src/FairTutorialDet2.cxx/#L113)).
+
+## FairGenerator
+
+The run has one primary generator, `FairPrimaryGenerator`. It holds a list of generators and calls
+them in the order of `AddGenerator()`. See [Primary generators](/simulation/generators/).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `Init()` | Once, at the end of `InitMC()`, before `InitTask()` of the tasks | [`FairPrimaryGenerator::Init()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L148-L157), from [`InitFinalizer()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L926-L942) | Returns `kTRUE`. The caller ignores the return value. |
+| `ReadEvent(FairPrimaryGenerator*)` | Once for each event. Add the primary tracks with `AddTrack()`. Return `kFALSE` to stop the run. | [`FairPrimaryGenerator::GenerateEvent()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L255-L267), from [`GeneratePrimaries()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L982-L994) | Pure virtual |
+| `Finish()` | Once, at the end of the run | [`FairPrimaryGenerator::Finish()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L159-L167), from [`FinishRun()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L372-L374) | Does nothing |
+| `CloneGenerator()` | Multithreaded Geant4: once for each worker thread | [`FairPrimaryGenerator::ClonePrimaryGenerator()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L404-L417) | Stops the program with `Fatal()` of ROOT ([FairGenerator.cxx](/source/fairroot/base/sim/FairGenerator.cxx/#L40-L44)) |
+
+:::caution[A failed ReadEvent() ends the program]
+If `ReadEvent()` returns `kFALSE`, `GenerateEvent()` logs an error and returns `kFALSE`. The
+application then calls `StopRun()`. It finishes the event and the run, writes the output and calls
+`exit(0)` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L614-L623)).
+The code after `Run()` in your macro does not run.
+:::
+
+## FairGenericStack
+
+The simulation configuration makes the stack and gives it to the transport engine, for example in
+[`FairVMCConfig::SetupStack()`](/source/examples/common/gconfig/FairVMCConfig.cxx/#L26-L34). The
+application gets the stack from the engine. It logs the fatal error `No Stack defined.` if the stack
+is not a `FairGenericStack` ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L259-L262)).
+A fatal error stops the program only if FairLogger has a fatal handler, see
+[What a fatal line does](/tools/logging/#what-a-fatal-line-does).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `PushTrack()` with 19 arguments | For each primary track that a generator adds | [`FairPrimaryGenerator::AddTrack()`](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L382-L400) | Pure virtual |
+| `Register()` | Once, when the transport engine initializes the geometry, before the detectors. Only with a primary generator. | [`FairMCApplication::RegisterOutput()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L947-L952) | Does nothing |
+| `FinishPrimary()` | At the end of each primary track, after `FinishPrimary()` of the detectors | [`FairMCApplication::FinishPrimary()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L610) | Does nothing |
+| `FillTrackArray()` | At the end of each event, as the first step | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L646) | Does nothing |
+| `UpdateTrackIndex(TRefArray*)` | At the end of each event, after `FillTrackArray()`. The argument is the list of active detectors. | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L648) | Does nothing |
+| `Reset()` | At the end of each event, after the fill and after `EndOfEvent()` of the detectors | [`FairMCApplication::FinishEvent()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L671) | Sets the current track to -1 and clears the track map of the fast simulation ([FairGenericStack.h](/source/fairroot/base/sim/FairGenericStack.h/#L112-L116)) |
+| `CloneStack()` | Multithreaded Geant4: once for each worker thread | [Copy constructor of `FairMCApplication`](/source/fairroot/base/sim/FairMCApplication.cxx/#L193-L194) | Stops the program with `Fatal()` of ROOT ([FairGenericStack.cxx](/source/fairroot/base/sim/FairGenericStack.cxx/#L95-L99)) |
+
+The transport engine also uses the functions of the VMC interface `TVirtualMCStack`, for example
+`PopNextTrack()` and the `PushTrack()` with 18 arguments for secondaries. `FairGenericStack` does not
+implement them. The example stack
+[`FairStack`](/source/examples/common/mcstack/FairStack.cxx/) does. See
+[The particle stack and MC tracks](/simulation/stack/) and the
+[VMC documentation](https://vmc-project.github.io/).
+
+## FairParSet
+
+The runtime database calls these functions on the parameter containers. `FairParGenericSet` adds
+`getParams()` and `putParams()`. It implements `init(FairParIo*)` and `write(FairParIo*)` with the
+generic parameter IO of the input or the output. See
+[Parameters and the runtime database](/concepts/parameters/).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `init()` | When the runtime database initializes the containers: in `Init()` of the run and for each new run ID. Not for static containers. | [`FairRuntimeDb::initContainers()`](/source/fairroot/parbase/FairRuntimeDb.cxx/#L548-L559) | Calls `init(FairParIo*)` with the first input, then with the second input if the first one fails ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L55-L76)) |
+| `init(FairParIo*)` | From `init()`: for the first input, and for the second input if the first one fails | [`FairParSet::CallInitIO()`](/source/fairroot/parbase/FairParSet.cxx/#L43-L53) | Returns `kFALSE`. `FairParGenericSet` reads the container through the input ([FairParGenericSet.cxx](/source/fairroot/parbase/FairParGenericSet.cxx/#L38-L46)). |
+| `clear()` | Before a ROOT parameter file reads a new version into the container | [`FairDetParRootFileIo::read()`](/source/fairroot/parbase/FairDetParRootFileIo.cxx/#L71-L72) | Clears the static flag, the input versions and the changed flag ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L111-L126)) |
+| `getParams(FairParamList*)` | When an ASCII parameter file reads a `FairParGenericSet` | [`FairGenericParAsciiFileIo`](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L261) | Pure virtual |
+| `putParams(FairParamList*)` | When an ASCII parameter file writes a `FairParGenericSet`, and in `printParams()` | [`FairGenericParAsciiFileIo`](/source/fairroot/parbase/FairGenericParAsciiFileIo.cxx/#L288), [`printParams()`](/source/fairroot/parbase/FairParGenericSet.cxx/#L74) | Pure virtual |
+| `write(FairParIo*)` | When the runtime database writes the changed containers: in `saveOutput()`, in `closeOutput()` and before it changes to a new run ID | [`FairRuntimeDb::writeContainer()`](/source/fairroot/parbase/FairRuntimeDb.cxx/#L385-L462) | Returns 0, and the runtime database writes nothing. `FairParGenericSet` writes through the output ([FairParGenericSet.cxx](/source/fairroot/parbase/FairParGenericSet.cxx/#L48-L56)). |
+| `print()` | When the FairMQ parameter server sends a container. The runtime database calls it only for an output of the class `FairParTSQLIo`, which FairRoot does not contain. | [`ParameterMQServer`](/source/fairroot/parmq/ParameterMQServer.cxx/#L142-L144), [`FairRuntimeDb::writeContainer()`](/source/fairroot/parbase/FairRuntimeDb.cxx/#L418-L429) | Logs the name, the versions and the flags ([FairParSet.cxx](/source/fairroot/parbase/FairParSet.cxx/#L92-L109)) |
+| `write()`, `fill(UInt_t)`, `store(UInt_t)` | Never | None | `write()` calls `write(FairParIo*)` with the output of the runtime database. `fill()` and `store()` do nothing. |
+
+A ROOT parameter file does not use `getParams()`. It reads the complete container object with ROOT
+I/O, and only when the file has a different version than the container
+([FairDetParRootFileIo.cxx](/source/fairroot/parbase/FairDetParRootFileIo.cxx/#L48-L77)).
+
+The runtime database closes its output in its destructor
+([FairRuntimeDb.cxx](/source/fairroot/parbase/FairRuntimeDb.cxx/#L99-L105)). A master run deletes
+the runtime database in its own destructor
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L99-L102)). So the runtime database writes
+the changed containers at the latest when your macro deletes the run object.
+
+## FairSource
+
+The [I/O manager](/reference/glossary/#io-manager) `FairRootManager` and the run call these
+functions on the source that the macro sets with `SetSource()`. See
+[Input sources, friends and event mixing](/reconstruction/sources/).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `Init()` | Once, at the start of `Init()` of the run. Return `kFALSE` if there is no input. | [`FairRootManager::InitSource()`](/source/fairroot/base/steer/FairRootManager.cxx/#L115-L136) | Pure virtual |
+| `SpecifyRunId()` | `FairRunAna` with input: once in `Init()`, to get the run ID before the parameters are read | [`FairRootManager::SpecifyRunId()`](/source/fairroot/base/steer/FairRootManager.cxx/#L398-L408) | Pure virtual |
+| `GetSourceType()` | `FairRunOnline::Init()`: a source that is not `kONLINE` reads entry 0 there | [`FairRunOnline::Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L129-L131) | Pure virtual |
+| `CheckMaxEventNo(Int_t)` | Once, at the start of `Run()`. Return the end of the event range, or -1 for no limit. | [`FairRootManager::CheckMaxEventNo()`](/source/fairroot/base/steer/FairRootManager.cxx/#L819-L824) | Returns -1 |
+| `Reset()` | Before each `ReadEvent()` | [`FairRootManager::ReadEvent()`](/source/fairroot/base/steer/FairRootManager.cxx/#L414) | Pure virtual |
+| `ReadEvent(UInt_t)` | Once for each event. Return 0 for success. | [`FairRootManager::ReadEvent()`](/source/fairroot/base/steer/FairRootManager.cxx/#L423) | Pure virtual |
+| `FillEventHeader(FairEventHeader*)` | After `SpecifyRunId()`, after each `ReadEvent()`, and each time that the run fills its event header | [`FairRootManager::ReadEvent()`](/source/fairroot/base/steer/FairRootManager.cxx/#L425), [`FairRun::FillEventHeader()`](/source/fairroot/base/steer/FairRun.cxx/#L241-L249) | Sets the run ID of the header ([FairSource.cxx](/source/fairroot/base/source/FairSource.cxx/#L31-L36)) |
+| `ActivateObject(TObject**, const char*)` | When a task gets a branch with `GetObject()` and the branch is not in memory yet | [`FairRootManager::ActivateBranch()`](/source/fairroot/base/steer/FairRootManager.cxx/#L747-L748) | Returns `kFALSE` |
+| `ActivateObjectAny(void**, const std::type_info&, const char*)` | When a task gets a branch with `InitObjectAs()` and the branch is not in memory yet | [`FairRootManager::InitObjectAs()`](/source/fairroot/base/steer/FairRootManager.h/#L496) | Returns `kFALSE` |
+| `ReadBranchEvent()` (two overloads) | When your code calls `FairRootManager::ReadBranchEvent()`. `RunTSBuffers()` calls the overload with an entry for each branch that is not time based. | [`FairRootManager::ReadBranchEvent()`](/source/fairroot/base/steer/FairRootManager.cxx/#L433-L461), [`ReadNonTimeBasedEventFromBranches()`](/source/fairroot/base/steer/FairRootManager.cxx/#L463-L477) | Does nothing |
+| `SetParUnpackers()` | `FairRunOnline` only: in `Init()`, before `SetParTask()` | [`FairRunOnline::Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L183) | Pure virtual |
+| `InitUnpackers()` | `FairRunOnline` only: in `Init()`, after the containers are filled and before `InitTask()`. On `kFALSE`, the run logs a fatal error and returns before `InitTask()`. | [`FairRunOnline::Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L193-L196) | Pure virtual |
+| `ReInitUnpackers()` | `FairRunOnline` only: when the run ID changes, before `ReInitTask()`. On `kFALSE`, the run logs a fatal error and ends the event loop. | [`FairRunOnline::CheckRunIdChanged()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L350-L355) | Pure virtual |
+| `Close()` | `FairRunOnline` only: at the end of the run | [`FairRunOnline::Finish()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L312) | Pure virtual |
+
+## FairSink
+
+The I/O manager calls most of these functions on the sink that the macro sets with `SetSink()`. See
+[Output: sinks and persistence](/reconstruction/output/).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `InitSink()` | At the start of `Init()` of the run. `FairRunOnline::Init()` calls it again after `InitTask()` ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L199-L203)). | [`FairRootManager::InitSink()`](/source/fairroot/base/steer/FairRootManager.cxx/#L138-L146) | Pure virtual |
+| `RegisterImpl(const char*, const char*, void*)` | For each persistent branch that a class registers with `Register()` | [`FairRootManager::RegisterImpl()`](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L171) | Pure virtual |
+| `RegisterAny(...)` | For each persistent branch that a class registers with `RegisterAny()` | [`FairRootManager::RegisterAny()`](/source/fairroot/base/steer/FairRootManager.h/#L458-L465) | Pure virtual |
+| `WriteFolder()` | Once, after `Init()` of the tasks: make the output tree | [`FairRootManager::WriteFolder()`](/source/fairroot/base/steer/FairRootManager.cxx/#L383-L390) | Pure virtual |
+| `CreatePersistentBranchesAny()` | From `WriteFolder()` of `FairRootFileSink` | [`FairRootFileSink::WriteFolder()`](/source/fairroot/base/sink/FairRootFileSink.cxx/#L247) | Pure virtual |
+| `WriteObject(TObject*, const char*, Int_t)` | With `WriteFolder()` for the branch lists, for the file header, and for the YAML configuration of a simulation | [`FairRootManager::WriteFolder()`](/source/fairroot/base/steer/FairRootManager.cxx/#L387-L388), [`WriteFileHeader()`](/source/fairroot/base/steer/FairRootManager.cxx/#L813-L817), [`FairYamlVMCConfig::StoreYamlInfo()`](/source/fairroot/mcconfigurator/FairYamlVMCConfig.cxx/#L287-L297) | Pure virtual |
+| `Fill()` | Once for each event that the run keeps. In `FairRunAna` and `FairRunOnline`, once more at the end if a `FairWriteoutBuffer` still holds data, or if a task called `SetLastFill()` in `FinishTask()`. | [`FairRootManager::Fill()`](/source/fairroot/base/steer/FairRootManager.cxx/#L331-L335), [`LastFill()`](/source/fairroot/base/steer/FairRootManager.cxx/#L337-L344) | Pure virtual |
+| `Write(...)` | Once, at the end of the run. A simulation with a radiation grid does not call it. | [`FairRootManager::Write()`](/source/fairroot/base/steer/FairRootManager.cxx/#L346-L356) | Pure virtual |
+| `Close()` | At the end of `FairRunSim::Run()`, `FairRunAna::TerminateRun()` and `FairRunOnline::Finish()`, and on each worker thread of Geant4 | [`FairRootManager::CloseSink()`](/source/fairroot/base/steer/FairRootManager.h/#L70-L75), [`FairRunSim::Run()`](/source/fairroot/base/steer/FairRunSim.cxx/#L326-L328) | Pure virtual |
+| `CloneSink()` | Multithreaded Geant4: once for each worker thread | [`FairMCApplication::CloneForWorker()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L442) | Pure virtual |
+| `WriteGeometry()` | Only when your code calls `FairRootManager::WriteGeometry()` | [`FairRootManager::WriteGeometry()`](/source/fairroot/base/steer/FairRootManager.cxx/#L358-L363) | Pure virtual |
+| `Reset()`, `SetOutTree(TTree*)` | Never | None | Pure virtual |
+
+`FairRunAna::Run()` does not call `Close()`. The run owns the sink and deletes it with the run
+object ([FairRun.h](/source/fairroot/base/steer/FairRun.h/#L229)).
+
+## FairField
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `Init()` | Once, in `Init()` of `FairRunSim` and `FairRunOnline`, if the macro set a field | [`FairRunSim::Init()`](/source/fairroot/base/steer/FairRunSim.cxx/#L231-L233), [`FairRunOnline::Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L160-L163) | Does nothing |
+| `FillParContainer()` | Once, right after `Init()` | [`FairRunSim::SetFieldContainer()`](/source/fairroot/base/steer/FairRunSim.cxx/#L260-L265), [`FairRunOnline::Init()`](/source/fairroot/online/steer/FairRunOnline.cxx/#L160-L163) | Logs a warning |
+| `Field(const Double_t*, Double_t*)` | When the transport engine needs the field at a point | The transport engine. It gets the field in [`InitMC()`](/source/fairroot/base/sim/FairMCApplication.cxx/#L263). | Calls `GetFieldValue()` ([FairField.h](/source/fairroot/base/field/FairField.h/#L97)) |
+| `GetFieldValue(const Double_t*, Double_t*)` | From `Field()`, and from reconstruction code | [`FairRKPropagator`](/source/fairroot/trackbase/FairRKPropagator.cxx/#L577), [`FairTrackPar`](/source/fairroot/trackbase/FairTrackPar.cxx/#L112) | Calls `GetBx()`, `GetBy()` and `GetBz()` ([FairField.cxx](/source/fairroot/base/field/FairField.cxx/#L38-L43)) |
+| `GetBx()`, `GetBy()`, `GetBz()` | From the default `GetFieldValue()` | [`FairField::GetFieldValue()`](/source/fairroot/base/field/FairField.cxx/#L38-L43) | Log a warning and return 0 |
+| `GetBxyz()` | Never | None | Logs a warning |
+
+`FairRunAna` does not call `Init()` of the field. It uses a field factory, a class derived from
+`FairFieldFactory`, if one exists. The constructor of a factory makes it the current factory
+([FairFieldFactory.cxx](/source/fairroot/base/field/FairFieldFactory.cxx/#L19-L23)).
+
+| Function | When called | Called by | Default |
+| --- | --- | --- | --- |
+| `SetParm()` | Once, in `FairRunAna::Init()`, before the last `initContainers()`. Get the field parameter container here. | [`FairRunAna::Init()`](/source/fairroot/base/steer/FairRunAna.cxx/#L215-L218) | Does nothing |
+| `createFairField()` | Once, in `FairRunAna::Init()`, after the containers are filled, if the macro set no field | [`FairRunAna::Init()`](/source/fairroot/base/steer/FairRunAna.cxx/#L228-L230) | Pure virtual |
+
+The example factory calls `Init()` of the new field itself
+([FairConstFieldCreator.cxx](/source/examples/common/passive/FairConstFieldCreator.cxx/#L54-L56)).
+See [Magnetic fields](/simulation/fields/).
+
+## Call order in a simulation run
+
+A simulation macro calls `Init()` and `Run()` of `FairRunSim`. The list shows the hooks in the order
+of the calls. A nested item happens inside the item above it.
+
+1. `FairRunSim::Init()` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L154-L258)):
+   1. `InitSink()` of the sink.
+   2. The run reads the media file and makes the MC application.
+   3. The application adds the tasks and calls its `SetParTask()`: `SetParContainers()` of the
+      tasks, `SetParContainers()` of all modules, then `initContainers()` of the runtime database.
+   4. `Init()` and `FillParContainer()` of the field.
+   5. The simulation configuration makes the transport engine and the stack. Then the run calls
+      `InitMC()` of the application
+      ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L299-L320)).
+2. `FairMCApplication::InitMC()`
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L246-L287)):
+   1. The application gets the stack and gives the field to the engine.
+   2. `fMC->Init()` and `fMC->BuildPhysics()`. In these calls, the engine calls back the
+      application. Geant4 makes some of these calls earlier, when the configuration makes the
+      `TGeant4` object, see
+      [The callbacks during initialization](/simulation/overview/#the-callbacks-during-initialization):
+      - `ConstructGeometry()`: `InitParContainers()` and `ConstructGeometry()` of each module.
+        Then the geometry closes, and `RegisterAlignmentMatrices()` of each module follows.
+      - `InitGeometry()`: `Register()` of the stack. Then, module by module, `SetSpecialPhysicsCuts()`
+        and, for an active detector, `Initialize()` and `Register()`. Then the application collects
+        the sensitive volumes.
+      - `MisalignGeometry()`, `ConstructOpGeometry()`, `AddParticles()` and `AddIons()`. The engine
+        decides when.
+   3. `InitFinalizer()`: `Init()` of the generators, `InitTask()` of the tasks, and then
+      `WriteFolder()` of the sink.
+3. `FairRunSim::Run(n)` calls `RunMC(n)`, and the engine processes the events. For each event, the
+   engine calls:
+   1. `BeginEvent()`: `BeginEvent()` of the active detectors.
+   2. `GeneratePrimaries()`: `GenerateEvent()` of the primary generator. It calls `ReadEvent()` of
+      each generator, and each primary track goes to `PushTrack()` of the stack.
+   3. For each primary track, `BeginPrimary()` of the detectors. For each track, `PreTrack()`, then
+      `ProcessHits()` at each step in a sensitive volume, then `PostTrack()`. At the end of the
+      primary, `FinishPrimary()` of the detectors and then of the stack.
+   4. `FinishEvent()` of the application, in the order of the code below.
+4. After the last event, `FinishRun()` of the application: `FinishRun()` of the active detectors,
+   `FinishTask()` of the tasks, `Write()` of the sink, and `Finish()` of the generators
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L308-L381)).
+5. `FairRunSim::Run()` calls `Close()` of the sink
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L322-L329)).
+
+<Snippet file="fairroot/base/sim/FairMCApplication.cxx" start="fStack->FillTrackArray();" end="fStack->Reset();" title="FairMCApplication.cxx: FinishEvent()" />
+
+The engine decides the order of `BeginEvent()` and `GeneratePrimaries()`, and the order of the
+tracks. The application accepts `InitGeometry()` only after `ConstructGeometry()` and before the end
+of `InitMC()`, because it checks its state
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L835-L839)).
+
+Two details change the steps above:
+
+- With a radiation grid, `FinishRun()` writes the grid to its own file and does not call `Write()`
+  of the sink ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L331-L370)).
+- [`SetSaveCurrentEvent(kFALSE)`](/api/FairMCApplication/#SetSaveCurrentEvent) skips the fill of
+  the current event in `FinishEvent()`.
+
+### Worker threads of Geant4
+
+With multithreaded Geant4, the master thread runs `Init()` as above. The engine then calls
+`CloneForWorker()` for each worker thread
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L433-L449)):
+
+1. `CloneSink()` of the sink, then the copy constructor of the application: `CloneModule()` of each
+   module, `CloneStack()` of the stack and `CloneGenerator()` of each generator
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L132-L204)).
+2. On the worker thread, `InitOnWorker()`: `InitSink()`, the same registration as in
+   `InitGeometry()`, and `InitFinalizer()`
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L452-L476)).
+3. The worker processes its events with the steps above.
+4. At the end, `FinishRunOnWorker()`: `FinishRun()` and `Close()` of the sink of the worker
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L479-L488)).
+
+The copies of the application have no task list
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L132-L135)). So the tasks
+do not run on the worker threads. See [Multithreaded Geant4](/simulation/geant4-mt/).
+
+## Call order in a reconstruction run
+
+A reconstruction macro calls `Init()` and `Run()` of `FairRunAna`:
+
+1. `FairRunAna::Init()`
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L131-L252)):
+   1. `Init()` of the source and `InitSink()` of the sink.
+   2. With an input file: `SpecifyRunId()` and `FillEventHeader()` of the source, then
+      `initContainers()`, then `SetParContainers()` of the tasks. Without an input file: a new run
+      ID, `SetParContainers()` of the tasks, then `initContainers()`.
+   3. `SetParm()` of the field factory.
+   4. `initContainers()` again: `init()` of each container that is not static.
+   5. `createFairField()` of the field factory, if the macro set no field.
+   6. The run aligns the geometry.
+   7. `Init()` of the tasks.
+   8. `WriteFolder()` of the sink: the output tree.
+2. `FairRunAna::Run()`: `CheckMaxEventNo()` of the source, then for each entry
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L302-L337)):
+   1. `Reset()`, `ReadEvent()` and `FillEventHeader()` of the source. A return value other than 0
+      ends the loop.
+   2. For a new run ID: `initContainers()` with `init()` of the containers, then `ReInit()` of the
+      tasks. Not with `SetContainerStatic(kTRUE)`.
+   3. `Exec()` of the tasks.
+   4. `Fill()` of the sink, unless a task called `MarkFill(kFALSE)`.
+   5. `FinishEvent()` of the tasks.
+3. After the loop: `Finish()` of the tasks, the last `Fill()` if needed, and `Write()` of the sink
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L339-L345)).
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="auto readEventReturn = fRootManager->ReadEvent(i);" end="fTask->FinishEvent();" title="FairRunAna.cxx: the event loop of Run()" />
+
+In a reconstruction run, `FinishEvent()` of the tasks comes after the fill. In a simulation run, it
+comes before the fill.
+
+### Other functions of FairRunAna
+
+| Function | Difference from `Run()` |
+| --- | --- |
+| `Run()` without an input | Calls [`DummyRun()`](/source/fairroot/base/steer/FairRunAna.cxx/#L536-L546): no `ReadEvent()`, no run ID check and no `FinishEvent()`. The call comes before the run converts the event range ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L264-L280)). So `Run(n)` processes no event, and `Run(0, n)` processes n events. |
+| [`RunSingleEntry(entry)`](/api/FairRunAna/#RunSingleEntry) | One entry. Calls `FinishTask()` at each call and no `FinishEvent()` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L458-L469)). The event display uses it. |
+| [`RunMQ(entry)`](/api/FairRunAna/#RunMQ) | Like `RunSingleEntry()`, but without `Fill()` and `Write()` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L443-L454)) |
+| [`Run(Double_t)`](/api/FairRunAna/#Run-2) | Processes no event, because `ReadNextEvent()` always returns `kFALSE` ([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L479-L484)). It still calls `FinishTask()` and `Write()` ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L422-L439)). |
+| `Run()` after [`RunWithTimeStamps()`](/api/FairRunAna/#RunWithTimeStamps) | Calls [`RunTSBuffers()`](/source/fairroot/base/steer/FairRunAna.cxx/#L473-L497): no `ReadEvent()` of the source and no run ID check |
+| [`TerminateRun()`](/api/FairRunAna/#TerminateRun) | Only the end: `FinishTask()`, the last `Fill()`, `Write()` and `Close()` of the sink ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L550-L562)) |
+
+### FairRunOnline
+
+`FairRunOnline` uses the same task steps as `FairRunAna`, with these differences:
+
+- `Init()` calls `SetParUnpackers()` of the source before `SetParTask()`, and `InitUnpackers()` of
+  the source before `InitTask()`
+  ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L183-L199)).
+- `ReadEvent()` of the source returns a status: 0 processes the event, 1 stops the run, and 2 reads
+  again without a call to the tasks
+  ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L266-L299)).
+- For a new run ID, the run calls `ReInitUnpackers()` of the source before `ReInitTask()`.
+- At the end, `Finish()` also calls `Close()` of the source and of the sink. `Run()` calls
+  `Finish()` unless the macro called `SetAutoFinish(kFALSE)`
+  ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L301-L315)).
+
+See [Process live data with FairRunOnline](/online/run-online/).
+
+## Related pages
+
+- [Tasks](/concepts/tasks/): the life cycle of a task and the meaning of the return values.
+- [How a simulation runs](/simulation/overview/): the simulation run from the macro to the output.
+- [Write a detector](/simulation/detectors/): the detector hooks in an example.
+- [Parameters and the runtime database](/concepts/parameters/): containers, inputs and versions.
+- [Branches, sources and sinks](/concepts/io/): the branches that the hooks register and read.

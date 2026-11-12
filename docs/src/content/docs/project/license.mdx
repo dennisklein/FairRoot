@@ -1,0 +1,220 @@
+---
+title: 'License and citation'
+description: 'FairRoot is free software under LGPL-3.0-only. The license files, what the license asks of you, the files with other notices, and how to cite FairRoot.'
+sidebar:
+  order: 4
+code: [fairroot/mcsteplogger/MCStepInterceptor.cxx, fairroot/mcsteplogger/MCStepLoggerImpl.cxx, fairroot/base/sim/FairRunIdGenerator.cxx, fairroot/mbsapi/f_ut_utime.h, examples/common/gconfig/fllibs.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+FairRoot is free software. GSI Helmholtzzentrum fuer Schwerionenforschung GmbH, the authors and the
+contributors hold the copyright. The license is the GNU Lesser General Public License, version 3
+only, with the SPDX identifier `LGPL-3.0-only`. This page shows where the repository states this,
+what the license asks of you, which files have other notices, and how to cite FairRoot.
+
+:::caution[Not legal advice]
+This page tells what the files of the repository say. It does not replace them: the texts in
+`LICENSE` and the notices in the files apply. For a legal question, ask the legal department of your
+institute.
+:::
+
+## The license files
+
+The root folder of the repository has these files:
+
+| File | Content |
+| --- | --- |
+| [COPYRIGHT](/repo/COPYRIGHT) | The copyright holders and the license of each group of files. |
+| [LICENSE](/repo/LICENSE) | The full text of the LGPL version 3, then the full text of the GPL version 3. |
+| [AUTHORS](/repo/AUTHORS) | The 7 authors, each with an ORCID iD. |
+| [CONTRIBUTORS](/repo/CONTRIBUTORS) | The other persons who contributed to FairRoot. |
+| [codemeta.json](/repo/codemeta.json) | The metadata of the software in the CodeMeta format: name, version, license, DOI, authors and contributors. |
+| [.zenodo.json](/repo/.zenodo.json) | The metadata for the Zenodo archive: title, license, creators and contributors. |
+| [meta_update.py](/repo/meta_update.py) | A script that copies the names from `AUTHORS` and `CONTRIBUTORS` into the two metadata files. |
+
+`LICENSE` holds two texts because the LGPL version 3 is a set of additional permissions on top of
+the GPL version 3. The first line of the file gives the order:
+`GPL text after LGPL text in this file:`. The copy of Catch2 in `third_party/` has its own license
+file, see [Files with other notices](#files-with-other-notices).
+
+## Copyright
+
+`COPYRIGHT` uses the
+[machine-readable format of Debian](https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/).
+Each paragraph that starts with `Files:` gives the copyright holders and the license of a group of
+files:
+
+<Snippet file="COPYRIGHT" start="Files: *" end="License: BSL-1.0" title="COPYRIGHT" />
+
+- `Files: *` covers all files of the repository. GSI, the persons in `AUTHORS` and the persons in
+  `CONTRIBUTORS` hold the copyright. The license is `LGPL-3.0-only`.
+- `Files: third_party/Catch2*` covers the copy of the test framework Catch2. The Catch2 authors hold
+  the copyright. The license is the Boost Software License 1.0 (`BSL-1.0`).
+
+In this format, the last paragraph that matches a file applies to it (Debian format). Thus Catch2 is
+not under the LGPL. At the end, `COPYRIGHT` points to the full texts: `LICENSE` for the LGPL and
+`third_party/Catch2*/LICENSE.txt` for Catch2.
+
+### The header of the files
+
+Most C and C++ files in `fairroot/`, `examples/` and `templates/` start with a header like this one:
+
+<Snippet file="fairroot/base/steer/FairTask.h" lines="1-7" />
+
+The header names the copyright holder and the years of the file. It says "version 3" and does not add
+"or any later version". Section 6 of the LGPL lets you select a later version if the library says
+"or any later version" or gives no version number. Thus the headers agree with the identifier
+`LGPL-3.0-only` in `COPYRIGHT`, `codemeta.json` and `.zenodo.json`.
+
+Some files have no license header, for example the files in `fairroot/eventdisplay/datasource/`. For
+them, only the paragraph `Files: *` of `COPYRIGHT` gives the license. A few files have another notice,
+see [Files with other notices](#files-with-other-notices).
+
+Most C++ files of the [templates](/tools/templates/) also have the header of GSI. When you copy a
+template into your project, the copies keep this notice. Read the notices before you select the
+license of your own project.
+
+## The license in short
+
+The LGPL version 3 takes the terms and conditions of the GPL version 3 and adds permissions to them.
+Thus read both texts in `LICENSE`. The terms in quotes below come from the LGPL.
+
+### Your code is an Application
+
+Section 0 of the LGPL defines the "Library" (here FairRoot) and the "Application". A subclass of a
+library class counts as use of the interface of the library:
+
+<Snippet file="LICENSE" start='An "Application" is any work' end="of using an interface provided by the Library." title="LICENSE (LGPL, section 0)" />
+
+Experiment software on FairRoot derives its classes from FairRoot classes, for example
+[`FairTask`](/api/FairTask/), [`FairDetector`](/api/FairDetector/) or
+[`FairParGenericSet`](/api/FairParGenericSet/). A program that links your code with the FairRoot
+libraries is a "Combined Work" in the words of the LGPL.
+
+### What each case asks of you
+
+| What you do | What the license text says | Section |
+| --- | --- | --- |
+| Run FairRoot, or change it for your own use, and give no copy to others | You may do this without conditions, as long as your license stays in force. | GPL section 2 |
+| Give others an unchanged copy of the FairRoot source code | Keep the copyright notices, the license notices and the notices about the absence of warranty. Give a copy of the license with each copy. | GPL section 4 |
+| Give others a program that uses FairRoot (a Combined Work) | You may use terms of your choice. These terms must not restrict changes of the FairRoot parts, or reverse engineering to debug such changes. Also do the steps a) to e) of section 4, see the list below. | LGPL section 4 |
+| Give others object code that contains material from FairRoot headers | Give a notice and copies of the license texts. You need not do this if the material is only numerical parameters, data structure layouts and accessors. The same is true for small macros, and for inline functions and templates of ten lines or fewer. | LGPL section 3 |
+| Give others a changed copy of FairRoot | Mark your changes with a date, and license the whole changed work under the same license. If you give object code, also give the source code in one of the ways of GPL section 6. LGPL section 2 adds a rule for changes that use a function or data of an Application. | GPL sections 5 and 6, LGPL section 2 |
+
+Section 4 of the LGPL lists these steps for a Combined Work:
+
+- a) Give a prominent notice that the program uses FairRoot, and that FairRoot is under the LGPL.
+- b) Give a copy of the GPL and of the LGPL with the program.
+- c) If the program shows copyright notices while it runs, show the notice of FairRoot among them,
+  with a reference to the license texts.
+- d) Do one of these two things:
+  - Give the source code of the FairRoot part. Also give your application code in a form that lets
+    the user link it with a changed FairRoot.
+  - Use a suitable shared library mechanism. Such a mechanism uses the copy of FairRoot on the
+    computer of the user. It also works with a changed FairRoot that has the same interface.
+- e) Give the installation information in the cases where section 6 of the GPL asks for it.
+
+CMake builds each compiled FairRoot library as a shared library. The `add_library()` calls in
+`fairroot/` say `SHARED`, for example in [fairroot/base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L90).
+Only the header-only targets `BaseMQ` and `FairMQ` are `INTERFACE` libraries.
+
+### No warranty
+
+FairRoot comes without warranty, to the extent that the applicable law permits. Sections 15 and 16 of
+the GPL give the full text.
+
+## Files with other notices
+
+Some files of the repository carry a notice of another copyright holder or another license.
+`COPYRIGHT` names only Catch2 as an exception. For the other files, read the notice in the file:
+
+| Files | Notice in the files | When CMake uses them |
+| --- | --- | --- |
+| [`third_party/Catch2_v3.5.4/`](/repo/third_party/Catch2_v3.5.4/) | Catch2 version 3.5.4, Boost Software License 1.0, in [LICENSE.txt](/repo/third_party/Catch2_v3.5.4/LICENSE.txt). | Only with `BUILD_TESTING`. Only the test executables link it, and CMake installs neither Catch2 nor the tests ([third_party/CMakeLists.txt](/repo/third_party/CMakeLists.txt)). |
+| [`MCStepInterceptor.cxx`](/source/fairroot/mcsteplogger/MCStepInterceptor.cxx/#L1-L21) and [`MCStepLoggerImpl.cxx`](/source/fairroot/mcsteplogger/MCStepLoggerImpl.cxx/#L1-L21) in `fairroot/mcsteplogger/` | Copyright CERN and the copyright holders of ALICE O2. GNU GPL version 3, "or (at your option) any later version". The header refers to a file `COPYING`, which is not in the repository. | Always. They make the library `FairMCStepLogger` ([fairroot/CMakeLists.txt](/repo/fairroot/CMakeLists.txt#L13)). No other FairRoot library links it. |
+| [`fairroot/base/sim/FairRunIdGenerator.cxx`](/source/fairroot/base/sim/FairRunIdGenerator.cxx/#L8-L17) | The GSI header, and parts of `gen_uuid.c`: Copyright (C) 1996-1999 Theodore Ts'o, "may be redistributed under the terms of the GNU Library General Public License". | Always, in `FairRoot::Base`. |
+| [`f_ut_utime.h`](/source/fairroot/mbsapi/f_ut_utime.h/#L1-L12) and `f_ut_utime.c` in `fairroot/mbsapi/` | From the Go4 project of GSI: "can be used under the license agreements as stated in Go4License.txt". This file is not in the repository. | Only with `BUILD_MBS=ON`. The default is `OFF` ([CMakeLists.txt](/repo/CMakeLists.txt#L126)). |
+| [`examples/common/gconfig/fllibs.C`](/source/examples/common/gconfig/fllibs.C/#L10-L17), `run_fluka.sh`, and their copies in `examples/simulation/Tutorial4/gconfig/` | From the Virtual Monte Carlo examples: Copyright (C) 2007 Ivana Hrivnacova, "For the licensing terms see geant4_vmc/LICENSE". `fllibs.C` also has the GSI header. | Not compiled. These files load the Fluka libraries and prepare the work folder of Fluka. With `BUILD_EXAMPLES`, CMake installs the folder `examples/common/gconfig/` ([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L58-L62)). |
+| [`cmake/modules/FairRootTargetRootDictionary.cmake`](/repo/cmake/modules/FairRootTargetRootDictionary.cmake) | Copyright GSI and CERN, with the copyright holders of ALICE O2. LGPL version 3. | In each build. |
+| [`scripts/astyle_linux`](/repo/scripts/astyle_linux) | A compiled program of the code formatter Artistic Style. No file gives its copyright or license. Its manual `scripts/astyle.html` shows the logos of the LGPL version 3 and of the GPL version 3. | Never. The build does not use it. |
+
+The library `FairMCStepLogger` is a separate shared library that you preload into a run, see
+[Log the MC steps](/tools/step-logger/). Its source files carry the GPL notice of the table. Keep this
+in mind before you give the library to others.
+
+## Authors and contributors
+
+`AUTHORS` lists the 7 authors of FairRoot, and `CONTRIBUTORS` lists the other persons who
+contributed. `COPYRIGHT` names both lists as copyright holders. Each line has the form
+`Family name, Given name`, with an optional ORCID iD in brackets:
+
+<Snippet file="AUTHORS" lines="1-2" title="AUTHORS" />
+
+A first-time contributor adds a line to `CONTRIBUTORS` in a separate commit. Then `meta_update.py`
+copies the names into `codemeta.json` and `.zenodo.json`:
+
+- In `codemeta.json`, `AUTHORS` gives the list `author` and `CONTRIBUTORS` gives the list
+  `contributor`.
+- In `.zenodo.json`, `AUTHORS` gives the list `creators` and `CONTRIBUTORS` gives the list
+  `contributors`, each with the type `Other`.
+
+A GitHub workflow runs the script for each change of these four files and fails if the script changes
+a file ([check_metadata.yaml](/repo/.github/workflows/check_metadata.yaml)). Another workflow
+validates `codemeta.json` ([codemeta_validate.yaml](/repo/.github/workflows/codemeta_validate.yaml)).
+The format of a line and the commands are in [Contributing](/project/contributing/).
+
+## Cite FairRoot
+
+Cite FairRoot as software, with its DOI and the version that you used. The repository gives the DOI
+`10.5281/zenodo.3896282`: it is the `identifier` in `codemeta.json`, and the DOI badge of
+[README.md](/repo/README.md) points to it.
+
+<Steps>
+
+1. Find the version of your FairRoot installation. The script `fairroot-config` in the `bin` folder
+   of the installation prints it with a leading `v`
+   ([fairroot-config.in](/repo/cmake/scripts/fairroot-config.in)):
+
+   ```sh
+   fairroot-config --version
+   ```
+
+2. To record the version in the output of your program, include `FairVersion.h`. The macro
+   `FAIRROOT_VERSION` holds the version as a string
+   ([FairVersion.h.in](/repo/fairroot/tools/FairVersion.h.in)).
+
+3. Cite the title `FairRoot`, the authors in `AUTHORS`, the version and the DOI.
+
+</Steps>
+
+For BibLaTeX, an entry can look like this. Replace `<version>` with your version:
+
+```bibtex title="references.bib"
+@software{FairRoot,
+  author  = {Al-Turany, Mohammad and Karabowicz, Radoslaw and Klein, Dennis and
+             Kresan, Dmytro and Rybalchenko, Alexey and Tacke, Christian and
+             Uhlig, Florian},
+  title   = {FairRoot},
+  version = {<version>},
+  doi     = {10.5281/zenodo.3896282},
+  url     = {https://github.com/FairRootGroup/FairRoot},
+}
+```
+
+The author list is the list of `creators` in `.zenodo.json`. For a source tree, `codemeta.json`
+gives the version in `softwareVersion`. With CMake 3.19 or newer, CMake compares this value with the
+project version in `CMakeLists.txt`
+([FairRootCodemeta.cmake](/repo/cmake/private/FairRootCodemeta.cmake)). If they differ, CMake shows
+the warning `Project Version (…) and CodeMeta Version (…) do not match!`
+([CMakeLists.txt](/repo/CMakeLists.txt#L97-L102)).
+
+## Related pages
+
+- [Contributing](/project/contributing/): add your name to `CONTRIBUTORS` and update the metadata.
+- [Release notes](/project/release-notes/): the changes in each version.
+- [Tests](/tools/testing/): the Catch2 unit tests.
+- [Log the MC steps](/tools/step-logger/): the library `FairMCStepLogger`.
+- [Read MBS and LMD data](/online/mbs/): the library `MbsAPI` and the option `BUILD_MBS`.
+- [Templates](/tools/templates/): the starting points for your project.

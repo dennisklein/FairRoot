@@ -1,0 +1,1017 @@
+---
+// Links between the data levels of Tutorial3: MC tracks, MC points, digis and hits of one entry.
+// Hover, tap or focus an object: the diagram lights up its chain back to the MC track, and the panel
+// lists the links of the object as FairLink(file, entry, type, index), in the order of GetLinks().
+// Select an MC track: the diagram lights up the objects that link to it.
+//
+// Facts and where they come from (paths relative to the FairRoot repository):
+// - A FairLink has a file, an entry, a type, an index and a weight. File -1: the current file. Entry -1: the current
+//   entry. Type: the branch, -1 if not set. Index: the position in the container of the branch
+//   (fairroot/base/event/FairLink.h:13-19). The default link is (-1, -1, -1, -1), weight 1: fFile and fType store
+//   the value + 1 (FairLink.h:122-183). FairLink(branchName, ...) gets the type from
+//   FairRootManager::GetBranchId() (fairroot/base/event/FairLink.cxx:19-38).
+// - Following a link, FairRootManager::GetCloneOfLinkData() takes the input tree for file -1, the current entry for
+//   entry -1, the branch GetBranchName(type), and the element `index` of its TClonesArray
+//   (fairroot/base/steer/FairRootManager.cxx:497-577).
+// - Branch ID = the position of the name in fBranchNameList (FairRootManager.cxx:264-277). Register() adds the names
+//   in the order of the calls (FairRootManager.cxx:172-173, 185-196). The list goes to the file as "BranchList"
+//   (FairRootManager.cxx:383-390), and FairFileSource::Init() adds the list of the input first
+//   (fairroot/base/source/FairFileSource.cxx:189-207), so the IDs stay the same in the next run.
+// - IDs of the Tutorial3 chain (examples/advanced/Tutorial3/macro/run_sim.C, run_digi.C, run_reco.C):
+//   run_sim.C:110 calls SetStoreTraj(kTRUE). FairMCApplication::InitGeometry() calls FairTrajFilter::Init(), which
+//   registers "GeoTracks", before RegisterOutput() (fairroot/base/sim/FairMCApplication.cxx:857-875,
+//   fairroot/base/steer/FairTrajFilter.cxx:78-81, FairTrajFilter.h:119). RegisterOutput() registers "MCTrack"
+//   (examples/common/mcstack/FairStack.cxx:315-322), "FairTestDetectorPoint" (Tutorial3/simulation/FairTestDetector.cxx:122-131)
+//   and "MCEventHeader." (FairMCApplication.cxx:945-978, fairroot/base/event/FairMCEventHeader.cxx:82-85).
+//   So: 0 GeoTracks, 1 MCTrack, 2 FairTestDetectorPoint, 3 MCEventHeader.
+//   run_digi.C: FairRunAna::Init() reads the input list (fairroot/base/steer/FairRunAna.cxx:142), registers
+//   "EventHeader." (185-204, fairroot/base/event/FairEventHeader.cxx:17-20), then calls InitTask() (238):
+//   FairTestDetectorDigiTask::Init() registers "FairTestDetectorDigi" (Tutorial3/digitization/FairTestDetectorDigiTask.cxx:47-48).
+//   So: 4 EventHeader., 5 FairTestDetectorDigi. run_reco.C: "EventHeader." is already in the list;
+//   FairTestDetectorRecoTask::Init() registers "FairTestDetectorHit" (Tutorial3/reconstruction/FairTestDetectorRecoTask.cxx:51-52): 6.
+// - Links on: the three macros call SetUseFairLinks(kTRUE) (run_sim.C:49, run_digi.C:50, run_reco.C:46;
+//   FairRun.cxx:170). FairMultiLinkedData_Interface makes the set of links only then (FairMultiLinkedData_Interface.cxx:64-75).
+// - Classes: FairTestDetectorPoint : FairMCPoint : FairMultiLinkedData_Interface (Tutorial3/data/FairTestDetectorPoint.h:16,
+//   fairroot/base/event/FairMCPoint.h:21). FairTestDetectorDigi : FairTimeStamp : FairMultiLinkedData_Interface
+//   (FairTestDetectorDigi.h:33, FairTimeStamp.h:22). FairTestDetectorHit : FairHit : FairTimeStamp (FairTestDetectorHit.h:24,
+//   FairHit.h:22). FairMCTrack derives from TObject, so an MC track has no links (examples/common/mcstack/FairMCTrack.h:36).
+// - MC point: FairTestDetector::AddHit() calls SetLink(FairLink(-1, fEventNr, GetBranchId("MCTrack"), trackID))
+//   (FairTestDetector.cxx:153-169). At the end of the event FairMCApplication::FinishEvent() calls FillTrackArray() and
+//   UpdateTrackIndex() (FairMCApplication.cxx:645-648); UpdateTrackIndex() calls point->SetLink(FairLink("MCTrack", newIndex))
+//   (FairStack.cxx:280-294). SetLink() clears the set first (fairroot/base/event/FairMultiLinkedData.cxx:100-106).
+//   So the stored link is (-1, -1, 1, index in MCTrack).
+// - Digi: one digi for each point, at the index of the point, with
+//   AddLink(FairLink(-1, GetEntryNr(), "FairTestDetectorPoint", ipnt)) (FairTestDetectorDigiTask.cxx:60-80).
+//   GetEntryNr() is the entry that ReadEvent(i) reads (FairRootManager.cxx:409-416).
+// - Hit: one hit for each digi, at the index of the digi, with
+//   AddLink(FairLink(-1, GetEntryNr(), GetBranchId("FairTestDetectorDigi"), ipnt)) (FairTestDetectorRecoTask.cxx:62-85),
+//   if fStreamProcessing is false, the default (fairroot/base/steer/FairTask.cxx:29).
+// - History: AddLink() calls InsertLink() and, if fInsertHistory (default kTRUE, FairMultiLinkedData.cxx:25-33), also
+//   InsertHistory(), which inserts the links of the target object (FairMultiLinkedData.cxx:117-183, 202-253). It does
+//   not follow links to MCTrack or to another entry (214-219). So a digi holds 2 links and a hit holds 3.
+// - Order: fLinks is a std::set<FairLink> (FairMultiLinkedData.h:135) with FairLink::operator<: file and entry count
+//   only if both are not -1, then type, then index (FairLink.h:78-102). `less` below is the same rule. GetLink(i)
+//   walks the set (FairMultiLinkedData.cxx:82-92). So the MC track link comes first.
+// - Weight: 1 by default (FairLink.h:33-36). AddLink() multiplies it by mult = 1, and InsertLink() adds weights only
+//   when the same link comes again (FairMultiLinkedData.cxx:117-120, 185-200). Here each link comes once: weight 1.
+// - A type filter changes this: FairLinkManager::AddIncludeType() keeps only the listed types, and InsertLink() drops
+//   the others (fairroot/base/steer/FairLinkManager.cxx:56-72, FairMultiLinkedData.cxx:187-189). run_digi.C:51 and
+//   run_reco.C:47 call AddIncludeType(0). Type 0 is GeoTracks here, so with this filter the digis and the hits get no
+//   links (InsertLink() also drops the copied ones). The diagram shows the links without the filter, and the caption says so.
+// Example values, not from the code: entry 7, three MC tracks, five MC points, and the MC track of each point.
+
+interface Lv {
+  key: string;
+  branch: string;
+  type: number;
+}
+interface Link {
+  f: number;
+  e: number;
+  t: number;
+  i: number;
+  to: string;
+  how: string;
+}
+interface Obj {
+  id: string;
+  lv: number;
+  i: number;
+  src: string | null;
+  trk: number;
+  links: Link[];
+  note: string;
+}
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+interface Layout {
+  id: 'wide' | 'narrow';
+  W: number;
+  H: number;
+  box: Record<string, Box>;
+  edge: (from: Box, to: Box) => { d: string; head: string };
+}
+
+const ENTRY = 7;
+// The MC track of each MC point (example values).
+const trackOf = [0, 0, 1, 2, 2];
+const NT = 3;
+const NP = trackOf.length;
+const LV: Lv[] = [
+  { key: 'trk', branch: 'MCTrack', type: 1 },
+  { key: 'pnt', branch: 'FairTestDetectorPoint', type: 2 },
+  { key: 'dig', branch: 'FairTestDetectorDigi', type: 5 },
+  { key: 'hit', branch: 'FairTestDetectorHit', type: 6 },
+];
+const BRANCHES = ['GeoTracks', 'MCTrack', 'FairTestDetectorPoint', 'MCEventHeader.', 'EventHeader.', 'FairTestDetectorDigi', 'FairTestDetectorHit'];
+const START = 'hit3';
+
+const key = (lv: number, i: number) => `${LV[lv].key}${i}`;
+const pointsOf = (t: number) => trackOf.flatMap((tr, i) => (tr === t ? [i] : []));
+
+// FairLink::operator< (FairLink.h:78-102).
+const less = (a: Link, b: Link) => {
+  if (a.f !== -1 && b.f !== -1 && a.f !== b.f) return a.f < b.f;
+  if (a.e !== -1 && b.e !== -1 && a.e !== b.e) return a.e < b.e;
+  if (a.t !== b.t) return a.t < b.t;
+  return a.i < b.i;
+};
+const setOrder = (ls: Link[]) => [...ls].sort((a, b) => (less(a, b) ? -1 : less(b, a) ? 1 : 0));
+const L = (f: number, e: number, t: number, i: number, to: string, how: string): Link => ({ f, e, t, i, to, how });
+
+// Text in backticks is code.
+const O: Record<string, Obj> = {};
+for (let t = 0; t < NT; t++) {
+  const n = pointsOf(t).length * 3;
+  O[key(0, t)] = {
+    id: key(0, t),
+    lv: 0,
+    i: t,
+    src: null,
+    trk: t,
+    links: [],
+    note: `\`FairMCTrack\` derives from \`TObject\`. It has no links. ${n} objects link to it.`,
+  };
+}
+for (let i = 0; i < NP; i++) {
+  const t = trackOf[i];
+  const toT = L(-1, -1, 1, t, key(0, t), 'history');
+  O[key(1, i)] = {
+    id: key(1, i),
+    lv: 1,
+    i,
+    src: key(0, t),
+    trk: t,
+    links: [{ ...toT, how: 'SetLink()' }],
+    note: '`FairTestDetector::AddHit()` sets a link to the MC track. At the end of the event, `FairStack::UpdateTrackIndex()` replaces it with the index in `MCTrack`.',
+  };
+  O[key(2, i)] = {
+    id: key(2, i),
+    lv: 2,
+    i,
+    src: key(1, i),
+    trk: t,
+    links: setOrder([L(-1, ENTRY, 2, i, key(1, i), 'AddLink()'), toT]),
+    note: '`FairTestDetectorDigiTask::Exec()` adds the link to the point. `AddLink()` also copies the links of the point.',
+  };
+  O[key(3, i)] = {
+    id: key(3, i),
+    lv: 3,
+    i,
+    src: key(2, i),
+    trk: t,
+    links: setOrder([L(-1, ENTRY, 5, i, key(2, i), 'AddLink()'), L(-1, ENTRY, 2, i, key(1, i), 'history'), toT]),
+    note: '`FairTestDetectorRecoTask::Exec()` adds the link to the digi. `AddLink()` also copies the links of the digi.',
+  };
+}
+const ids = Object.keys(O);
+const edges = ids.filter((k) => O[k].src).map((k) => [k, O[k].src!] as [string, string]);
+
+// The chain of an object: the objects that its links point to. For an MC track: the objects that link to it.
+// The number is the distance along the chain, for the delay of the highlight.
+const chainOf = (id: string) => {
+  const m = new Map<string, number>();
+  const o = O[id];
+  if (o.lv === 0) {
+    for (const k of ids) if (k !== id && O[k].trk === o.trk) m.set(k, O[k].lv);
+  } else {
+    let c = o.src;
+    let d = 1;
+    while (c) {
+      m.set(c, d++);
+      c = O[c].src;
+    }
+  }
+  return m;
+};
+
+const f1 = (n: number) => +n.toFixed(1);
+const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+
+// Wide: one column for each level, from left to right. A link goes to the left.
+const wide = ((): Layout => {
+  const W = 680;
+  const BW = 56;
+  const BH = 26;
+  const top = 86;
+  const pitch = 38;
+  const cx = [92, 260, 430, 594];
+  const box: Record<string, Box> = {};
+  for (let lv = 1; lv < 4; lv++) for (let i = 0; i < NP; i++) box[key(lv, i)] = { x: cx[lv] - BW / 2, y: top + i * pitch, w: BW, h: BH };
+  for (let t = 0; t < NT; t++) {
+    const cy = mean(pointsOf(t).map((i) => top + i * pitch + BH / 2));
+    box[key(0, t)] = { x: cx[0] - BW / 2, y: cy - BH / 2, w: BW, h: BH };
+  }
+  const H = top + (NP - 1) * pitch + BH + 16;
+  const edge = (a: Box, b: Box) => {
+    const x1 = a.x;
+    const y1 = a.y + a.h / 2;
+    const tx = b.x + b.w + 1.5;
+    const ty = b.y + b.h / 2;
+    const x2 = tx + 7;
+    const xm = (x1 + x2) / 2;
+    return {
+      d: `M${f1(x1)} ${f1(y1)}C${f1(xm)} ${f1(y1)} ${f1(xm)} ${f1(ty)} ${f1(x2)} ${f1(ty)}`,
+      head: `M${f1(tx)} ${f1(ty)}L${f1(x2)} ${f1(ty - 3.5)}L${f1(x2)} ${f1(ty + 3.5)}Z`,
+    };
+  };
+  return { id: 'wide', W, H, box, edge };
+})();
+
+// Narrow (phones): one row for each level, from top to bottom. A link goes up.
+const narrow = ((): Layout => {
+  const W = 320;
+  const BW = 26;
+  const BH = 26;
+  const gap = 5;
+  const x0 = 162;
+  const top = 36;
+  const pitch = 60;
+  const box: Record<string, Box> = {};
+  const px = (i: number) => x0 + i * (BW + gap);
+  for (let lv = 1; lv < 4; lv++) for (let i = 0; i < NP; i++) box[key(lv, i)] = { x: px(i), y: top + lv * pitch, w: BW, h: BH };
+  for (let t = 0; t < NT; t++) {
+    const cx = mean(pointsOf(t).map((i) => px(i) + BW / 2));
+    box[key(0, t)] = { x: cx - BW / 2, y: top, w: BW, h: BH };
+  }
+  const H = top + 3 * pitch + BH + 12;
+  const edge = (a: Box, b: Box) => {
+    const x1 = a.x + a.w / 2;
+    const y1 = a.y;
+    const tx = b.x + b.w / 2;
+    const ty = b.y + b.h + 1.5;
+    const y2 = ty + 7;
+    const ym = (y1 + y2) / 2;
+    return {
+      d: `M${f1(x1)} ${f1(y1)}C${f1(x1)} ${f1(ym)} ${f1(tx)} ${f1(ym)} ${f1(tx)} ${f1(y2)}`,
+      head: `M${f1(tx)} ${f1(ty)}L${f1(tx - 3.5)} ${f1(y2)}L${f1(tx + 3.5)} ${f1(y2)}Z`,
+    };
+  };
+  return { id: 'narrow', W, H, box, edge };
+})();
+const layouts = [wide, narrow];
+
+// The first view shows hit 3. The script keeps the same state, so the page also works before it runs.
+const chain0 = chainOf(START);
+const isOn = (k: string) => chain0.has(k);
+const edgeOn = (a: string, b: string) => (a === START || isOn(a)) && (b === START || isOn(b));
+const o0 = O[START];
+const fl = (l: Link) => `FairLink(${l.f}, ${l.e}, ${l.t}, ${l.i})`;
+const nLinks = (n: number) => (n === 0 ? 'no links' : n === 1 ? '1 link' : `${n} links`);
+const parts = (s: string) => s.split('`');
+const typesOf = (id: string) => new Set(O[id].links.map((l) => l.t));
+const t0 = typesOf(START);
+const label = `Links of entry ${ENTRY} in Tutorial3: MC tracks, MC points, digis and hits. Each object is a button.`;
+const data = JSON.stringify({ O, LV, start: START });
+---
+
+<figure class="fr-links not-content" data-links={data}>
+  <div class="lk-head">
+    <span class="lk-tip"
+      ><span class="t-fine">Hover an object, or use the arrow keys, to see its links.</span><span class="t-touch"
+        >Tap an object to see its links.</span
+      ></span
+    >
+    <span class="lk-keys" aria-hidden="true">
+      <span><i class="k-sel"></i>selected</span>
+      <span><i class="k-on"></i>its chain</span>
+      <span
+        ><svg class="k-arr" viewBox="0 0 22 8" width="22" height="8"><path d="M22 4H6"></path><path d="M0 4L7 0.5V7.5Z"></path></svg
+        >link</span
+      >
+    </span>
+  </div>
+  {
+    layouts.map((Ly) => (
+      <svg class={`lk lk-${Ly.id}`} viewBox={`0 0 ${Ly.W} ${Ly.H}`} role="group" aria-label={label}>
+        {Ly.id === 'wide' ? (
+          <g aria-hidden="true">
+            <rect class="lk-band" x="6" y="50" width={Ly.W - 12} height={Ly.H - 56} rx="4" />
+            <text class="lk-entry" x="16" y="69">
+              entry {ENTRY}
+            </text>
+            {LV.map((lv, k) => {
+              const b = Ly.box[key(k, 0)];
+              const x = b.x + b.w / 2;
+              return (
+                <>
+                  <text class="lk-br" x={x} y="20" text-anchor="middle">
+                    {lv.branch}
+                  </text>
+                  <text class="lk-ty" x={x} y="38" text-anchor="middle">
+                    type <tspan class="n">{lv.type}</tspan>
+                  </text>
+                </>
+              );
+            })}
+          </g>
+        ) : (
+          <g aria-hidden="true">
+            <rect class="lk-band" x="154" y="20" width={Ly.W - 156} height={Ly.H - 24} rx="4" />
+            <text class="lk-entry" x={Ly.W - 6} y="13" text-anchor="end">
+              entry {ENTRY}
+            </text>
+            {LV.map((lv, k) => {
+              const b = Ly.box[key(k, 0)];
+              return (
+                <>
+                  <text class="lk-br" x="4" y={b.y + 10}>
+                    {lv.branch}
+                  </text>
+                  <text class="lk-ty" x="4" y={b.y + 25}>
+                    type <tspan class="n">{lv.type}</tspan>
+                  </text>
+                </>
+              );
+            })}
+          </g>
+        )}
+        <g aria-hidden="true">
+          {edges.map(([a, b]) => {
+            const e = Ly.edge(Ly.box[a], Ly.box[b]);
+            return (
+              <g class="lk-e">
+                <path class="ln" d={e.d} />
+                <path class="hd" d={e.head} />
+              </g>
+            );
+          })}
+        </g>
+        {/* The chain: a copy of each link in a layer above, so that a grey link to the same object cannot cover it. */}
+        <g aria-hidden="true">
+          {edges.map(([a, b]) => {
+            const e = Ly.edge(Ly.box[a], Ly.box[b]);
+            const on = edgeOn(a, b);
+            const d = on ? (chain0.get(b) ?? 0) - 0.5 : 0;
+            return (
+              <g class={`lk-e lk-hi${on ? ' is-on' : ''}`} data-edge={`${a} ${b}`} style={`--d:${d}`}>
+                <path class="ln" d={e.d} />
+                <path class="hd" d={e.head} />
+              </g>
+            );
+          })}
+        </g>
+        <g>
+          {ids.map((k) => {
+            const b = Ly.box[k];
+            const o = O[k];
+            const cls = ['lk-b', k === START && 'is-sel', isOn(k) && 'is-on'].filter(Boolean).join(' ');
+            return (
+              <g
+                class={cls}
+                data-obj={k}
+                role="button"
+                tabindex={k === START ? 0 : -1}
+                aria-pressed={String(k === START)}
+                aria-label={`${LV[o.lv].branch} ${o.i}`}
+                style={`--d:${chain0.get(k) ?? 0}`}
+              >
+                <rect class="ring" x={b.x - 3} y={b.y - 3} width={b.w + 6} height={b.h + 6} rx="5" />
+                <rect class="bx" x={b.x} y={b.y} width={b.w} height={b.h} rx="3" />
+                <text x={b.x + b.w / 2} y={b.y + b.h / 2 + 4.5} text-anchor="middle">
+                  {o.i}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+    ))
+  }
+  <div class="lk-panel">
+    <p class="lk-ph">
+      <code class="lk-name" data-name>{LV[o0.lv].branch}</code>
+      <span class="lk-idx">index <b data-idx>{o0.i}</b></span>
+      <span class="lk-count" data-count>{nLinks(o0.links.length)}</span>
+    </p>
+    <ul class="lk-list" data-list hidden={!o0.links.length}>
+      {
+        o0.links.map((l) => (
+          <li>
+            <code class="lk-fl">{fl(l)}</code>
+            <span class="lk-to">
+              → <code>{LV[O[l.to].lv].branch}</code> {O[l.to].i}
+            </span>
+            <span class={`lk-how${l.how === 'history' ? ' h' : ''}`}>{l.how}</span>
+          </li>
+        ))
+      }
+    </ul>
+    <p class="lk-note" data-note>{parts(o0.note).map((s, i) => (i % 2 ? <code>{s}</code> : s))}</p>
+  </div>
+  <div class="lk-legend">
+    <p class="lk-lt"><code>FairLink(file, entry, type, index)</code></p>
+    <dl class="lk-dl">
+      <div><dt>file</dt><dd><code>-1</code>: the current file</dd></div>
+      <div><dt>entry</dt><dd>the entry of the tree. <code>-1</code>: the current entry</dd></div>
+      <div>
+        <dt>type</dt>
+        <dd>
+          the branch ID: the position of the branch name in <code>BranchList</code>
+          <span class="lk-chips">
+            {
+              BRANCHES.map((b, i) => (
+                <span
+                  class={['lk-chip', LV.some((l) => l.type === i) && 'lv', t0.has(i) && 'is-on', i === LV[o0.lv].type && 'is-sel']
+                    .filter(Boolean)
+                    .join(' ')}
+                  data-type={i}
+                >
+                  <b>{i}</b>
+                  {b}
+                </span>
+              ))
+            }
+          </span>
+        </dd>
+      </div>
+      <div><dt>index</dt><dd>the position in the <code>TClonesArray</code> of the branch</dd></div>
+    </dl>
+  </div>
+  <p class="lk-sr" aria-live="polite" data-live></p>
+  <figcaption>
+    Tutorial3 with <code>SetUseFairLinks(kTRUE)</code>, but without the type filter <code>AddIncludeType(0)</code> of <code>run_digi.C</code> and <code>run_reco.C</code>.
+    Entry {ENTRY} and the indices are examples. Each link also has a weight, here 1.
+  </figcaption>
+</figure>
+
+<script>
+  interface LkLink {
+    f: number;
+    e: number;
+    t: number;
+    i: number;
+    to: string;
+    how: string;
+  }
+  interface LkObj {
+    id: string;
+    lv: number;
+    i: number;
+    src: string | null;
+    trk: number;
+    links: LkLink[];
+    note: string;
+  }
+  interface LkData {
+    O: Record<string, LkObj>;
+    LV: { key: string; branch: string; type: number }[];
+    start: string;
+  }
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-links')) {
+    const { O, LV, start } = JSON.parse(root.dataset.links!) as LkData;
+    const $ = <T extends Element>(s: string) => root.querySelector<T>(s)!;
+    const svgs = [...root.querySelectorAll<SVGSVGElement>('svg.lk')];
+    const boxes = [...root.querySelectorAll<SVGGElement>('[data-obj]')];
+    const edges = [...root.querySelectorAll<SVGGElement>('[data-edge]')];
+    const chips = [...root.querySelectorAll<HTMLElement>('[data-type]')];
+    const list = $<HTMLUListElement>('[data-list]');
+    const live = $<HTMLElement>('[data-live]');
+    const ids = Object.keys(O);
+    const name = (id: string) => `${LV[O[id].lv].branch} ${O[id].i}`;
+    const fl = (l: LkLink) => `FairLink(${l.f}, ${l.e}, ${l.t}, ${l.i})`;
+    const nLinks = (n: number) => (n === 0 ? 'no links' : n === 1 ? '1 link' : `${n} links`);
+    const code = (s: string) => {
+      const c = document.createElement('code');
+      c.textContent = s;
+      return c;
+    };
+    // Text in backticks is code.
+    const rich = (el: HTMLElement, text: string) => {
+      el.replaceChildren();
+      text.split('`').forEach((s, i) => {
+        if (s) el.append(i % 2 ? code(s) : s);
+      });
+    };
+    // The objects that the links of `id` point to, or for an MC track the objects that link to it,
+    // with their distance along the chain.
+    const chainOf = (id: string) => {
+      const m = new Map<string, number>();
+      const o = O[id];
+      if (o.lv === 0) {
+        for (const k of ids) if (k !== id && O[k].trk === o.trk) m.set(k, O[k].lv);
+      } else {
+        let c = o.src;
+        let d = 1;
+        while (c) {
+          m.set(c, d++);
+          c = O[c].src;
+        }
+      }
+      return m;
+    };
+
+    let pinned = start;
+    let shown = start;
+
+    const show = (id: string) => {
+      if (id === shown) return;
+      shown = id;
+      const o = O[id];
+      const chain = chainOf(id);
+      const inS = (k: string) => k === id || chain.has(k);
+      for (const b of boxes) {
+        const k = b.dataset.obj!;
+        b.classList.toggle('is-sel', k === id);
+        b.classList.toggle('is-on', chain.has(k));
+        b.style.setProperty('--d', String(chain.get(k) ?? 0));
+      }
+      for (const e of edges) {
+        const [a, b] = e.dataset.edge!.split(' ');
+        const on = inS(a) && inS(b);
+        e.classList.toggle('is-on', on);
+        e.style.setProperty('--d', String(on ? (chain.get(b) ?? 0) - 0.5 : 0));
+      }
+      $('[data-name]').textContent = LV[o.lv].branch;
+      $('[data-idx]').textContent = String(o.i);
+      $('[data-count]').textContent = nLinks(o.links.length);
+      list.replaceChildren(
+        ...o.links.map((l) => {
+          const li = document.createElement('li');
+          const fc = code(fl(l));
+          fc.className = 'lk-fl';
+          const to = document.createElement('span');
+          to.className = 'lk-to';
+          to.append('→ ', code(LV[O[l.to].lv].branch), ` ${O[l.to].i}`);
+          const how = document.createElement('span');
+          how.className = `lk-how${l.how === 'history' ? ' h' : ''}`;
+          how.textContent = l.how;
+          li.append(fc, to, how);
+          return li;
+        })
+      );
+      list.hidden = !o.links.length;
+      rich($<HTMLElement>('[data-note]'), o.note);
+      const types = new Set(o.links.map((l) => l.t));
+      for (const c of chips) {
+        const t = Number(c.dataset.type);
+        c.classList.toggle('is-on', types.has(t));
+        c.classList.toggle('is-sel', t === LV[o.lv].type);
+      }
+    };
+
+    const say = (id: string) => {
+      const o = O[id];
+      const ls = o.links.map((l) => `${fl(l)} to ${name(l.to)}, ${l.how === 'history' ? 'copied' : `from ${l.how}`}`);
+      live.textContent = `${name(id)}: ${nLinks(o.links.length)}. ${ls.join('; ')}${ls.length ? '. ' : ''}${o.note.replace(/`/g, '')}`;
+    };
+
+    const pin = (id: string, focus = false) => {
+      const changed = id !== pinned;
+      pinned = id;
+      for (const b of boxes) {
+        const on = b.dataset.obj === id;
+        b.setAttribute('aria-pressed', String(on));
+        b.tabIndex = on ? 0 : -1;
+      }
+      if (focus) {
+        // Only the boxes of the visible layout can take the focus.
+        for (const b of boxes) if (b.dataset.obj === id && b.getClientRects().length) b.focus();
+      }
+      show(id);
+      if (changed) say(id);
+    };
+
+    // Arrow keys go to the nearest box in that direction, in the same layout.
+    const near = (from: SVGGElement, dx: number, dy: number) => {
+      const own = boxes.filter((b) => b.ownerSVGElement === from.ownerSVGElement);
+      const c = (b: SVGGElement) => {
+        const r = b.getBoundingClientRect();
+        return [r.left + r.width / 2, r.top + r.height / 2];
+      };
+      const [x0, y0] = c(from);
+      let best: SVGGElement | null = null;
+      let bs = Infinity;
+      for (const b of own) {
+        if (b === from) continue;
+        const [x, y] = c(b);
+        const along = (x - x0) * dx + (y - y0) * dy;
+        if (along < 4) continue;
+        const across = Math.abs((x - x0) * dy) + Math.abs((y - y0) * dx);
+        const s = along + 3 * across;
+        if (s < bs) {
+          bs = s;
+          best = b;
+        }
+      }
+      return best;
+    };
+
+    for (const svg of svgs) {
+      svg.addEventListener('keydown', (ev) => {
+        const b = (ev.target as Element).closest<SVGGElement>('[data-obj]');
+        if (!b || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        const own = boxes.filter((x) => x.ownerSVGElement === svg);
+        let to: SVGGElement | null = null;
+        if (ev.key === 'ArrowRight') to = near(b, 1, 0);
+        else if (ev.key === 'ArrowLeft') to = near(b, -1, 0);
+        else if (ev.key === 'ArrowDown') to = near(b, 0, 1);
+        else if (ev.key === 'ArrowUp') to = near(b, 0, -1);
+        else if (ev.key === 'Home') to = own[0];
+        else if (ev.key === 'End') to = own[own.length - 1];
+        else if (ev.key === 'Enter' || ev.key === ' ') to = b;
+        else return;
+        ev.preventDefault();
+        if (to) pin(to.dataset.obj!, true);
+      });
+      svg.addEventListener('pointerleave', (ev) => {
+        if (ev.pointerType === 'mouse') show(pinned);
+      });
+    }
+    for (const b of boxes) {
+      b.addEventListener('pointerenter', (ev) => {
+        if (ev.pointerType === 'mouse') show(b.dataset.obj!);
+      });
+      b.addEventListener('click', () => pin(b.dataset.obj!));
+      b.addEventListener('focus', () => pin(b.dataset.obj!));
+    }
+  }
+</script>
+
+<style>
+  .fr-links {
+    container-type: inline-size;
+    min-width: 0;
+    margin: 1.5rem 0;
+    border: 1px solid var(--fr-rule);
+    border-radius: 6px;
+    background: var(--fr-paper);
+    padding: 0.75rem;
+  }
+  .lk-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.35rem 1rem;
+    font-size: 0.8125rem;
+    color: var(--fr-ink-3);
+  }
+  .lk-tip .t-touch {
+    display: none;
+  }
+  @media (hover: none) {
+    .lk-tip .t-fine {
+      display: none;
+    }
+    .lk-tip .t-touch {
+      display: inline;
+    }
+  }
+  .lk-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.85rem;
+  }
+  .lk-keys > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .lk-keys i {
+    width: 14px;
+    height: 10px;
+    border: 1px solid var(--fr-bar);
+    border-radius: 2px;
+  }
+  .lk-keys .k-sel {
+    background: var(--fr-saffron);
+  }
+  .lk-keys .k-on {
+    background: var(--fr-saffron-tint);
+  }
+  .k-arr path:first-child {
+    stroke: var(--fr-bar);
+    stroke-width: 2;
+    fill: none;
+  }
+  .k-arr path:last-child {
+    fill: var(--fr-bar);
+  }
+
+  /* The diagram */
+  svg.lk {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-top: 0.6rem;
+    overflow: visible;
+  }
+  svg.lk-narrow {
+    display: none;
+    max-width: 26rem;
+    margin-inline: auto;
+  }
+  .lk-band {
+    fill: var(--fr-paper-2);
+    stroke: var(--fr-rule);
+  }
+  .lk-entry {
+    font: 500 12px var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .lk-br {
+    font: 600 12.5px var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .lk-ty {
+    font: 400 12px var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .lk-ty .n {
+    font-weight: 700;
+    fill: var(--fr-ink-2);
+  }
+  .lk-e .ln {
+    fill: none;
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.3;
+  }
+  .lk-e .hd {
+    fill: var(--fr-rule-strong);
+  }
+  .lk-hi {
+    opacity: 0;
+    transition: opacity 0.2s;
+    transition-delay: calc(var(--d, 0) * 70ms);
+  }
+  .lk-hi.is-on {
+    opacity: 1;
+  }
+  .lk-hi .ln {
+    stroke: var(--fr-bar);
+    stroke-width: 2.2;
+  }
+  .lk-hi .hd {
+    fill: var(--fr-bar);
+  }
+  .lk-b {
+    cursor: pointer;
+    transition-delay: calc(var(--d, 0) * 70ms);
+  }
+  /* The ring below shows the focus; the global :focus-visible outline would add a second, square one. */
+  .lk-b,
+  .lk-b:focus-visible {
+    outline: none;
+  }
+  .lk-b .bx {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.2;
+    transition: fill 0.2s, stroke 0.2s;
+    transition-delay: inherit;
+  }
+  .lk-b text {
+    font: 600 12.5px var(--fr-font-mono);
+    fill: var(--fr-ink);
+    pointer-events: none;
+    transition: fill 0.2s;
+    transition-delay: inherit;
+  }
+  .lk-b .ring {
+    fill: none;
+    stroke: none;
+  }
+  .lk-b:hover .bx {
+    stroke: var(--fr-ink);
+  }
+  .lk-b:focus-visible .ring {
+    stroke: var(--fr-link);
+    stroke-width: 2;
+  }
+  .lk-b.is-on .bx {
+    fill: var(--fr-saffron-tint);
+    stroke: var(--fr-bar);
+  }
+  .lk-b.is-sel .bx {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+  .lk-b.is-sel text {
+    fill: var(--fr-on-saffron);
+  }
+
+  /* The panel */
+  .lk-panel {
+    margin-top: 0.6rem;
+    border: 1px solid var(--fr-rule);
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem 0.65rem;
+    /* Room for three links, so that the page does not jump when the pointer moves over the objects. */
+    min-height: 10.5rem;
+  }
+  .lk-ph {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.6rem;
+    margin: 0;
+  }
+  .lk-name {
+    font: 700 1rem/1.3 var(--fr-font-mono);
+    color: var(--fr-ink);
+    overflow-wrap: anywhere;
+  }
+  .lk-idx {
+    font: 500 0.875rem var(--fr-font-mono);
+    color: var(--fr-ink-2);
+  }
+  .lk-idx b {
+    color: var(--fr-ink);
+  }
+  .lk-count {
+    margin-inline-start: auto;
+    font: 600 0.6875rem/1.2 var(--fr-font-body);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fr-ink-3);
+  }
+  .lk-list {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+  .lk-list[hidden] {
+    display: none;
+  }
+  .lk-list :global(li) {
+    display: grid;
+    grid-template-columns: 12.5rem minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 0.2rem 0.75rem;
+    margin: 0;
+    padding: 0.3rem 0.5rem;
+    background: var(--fr-paper-2);
+    border-radius: 3px;
+  }
+  .lk-list :global(.lk-fl) {
+    font: 600 0.8125rem/1.4 var(--fr-font-mono);
+    color: var(--fr-ink);
+    white-space: nowrap;
+  }
+  .lk-list :global(.lk-to) {
+    font-size: 0.8125rem;
+    color: var(--fr-ink-2);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .lk-list :global(.lk-to code) {
+    font: 500 0.8125rem/1.4 var(--fr-font-mono);
+    color: var(--fr-ink);
+  }
+  .lk-list :global(.lk-how) {
+    font: 600 0.6875rem/1.2 var(--fr-font-mono);
+    color: var(--fr-ink);
+    border: 1px solid var(--fr-bar);
+    border-radius: 3px;
+    padding: 0.15rem 0.35rem;
+    white-space: nowrap;
+  }
+  .lk-list :global(.lk-how.h) {
+    font-family: var(--fr-font-body);
+    letter-spacing: 0.04em;
+    color: var(--fr-ink-3);
+    border: 1px dashed var(--fr-rule-strong);
+  }
+  .lk-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--fr-ink-2);
+  }
+  .lk-panel :global(code),
+  .lk-legend code,
+  figcaption code {
+    font-family: var(--fr-font-mono);
+    font-size: 0.9em;
+    color: var(--fr-ink);
+  }
+
+  /* The legend */
+  .lk-legend {
+    margin: 0.6rem 0 0;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--fr-ink-2);
+  }
+  .lk-lt {
+    margin: 0 0 0.35rem;
+  }
+  .lk-lt code {
+    font-weight: 600;
+  }
+  .lk-dl {
+    display: grid;
+    gap: 0.3rem;
+    margin: 0;
+  }
+  .lk-dl > div {
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr);
+    gap: 0.6rem;
+    align-items: baseline;
+  }
+  .lk-dl dt {
+    font: 600 0.8125rem var(--fr-font-mono);
+    color: var(--fr-ink-3);
+  }
+  .lk-dl dd {
+    margin: 0;
+  }
+  .lk-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.3rem;
+  }
+  .lk-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35rem;
+    font: 500 0.75rem/1.2 var(--fr-font-mono);
+    color: var(--fr-ink-3);
+    border: 1px solid var(--fr-rule);
+    border-radius: 3px;
+    padding: 0.15rem 0.35rem;
+    transition: background-color 0.2s, border-color 0.2s;
+  }
+  .lk-chip b {
+    font-weight: 700;
+  }
+  .lk-chip.lv {
+    color: var(--fr-ink);
+    border-color: var(--fr-rule-strong);
+  }
+  .lk-chip.is-on {
+    background: var(--fr-saffron-tint);
+    border-color: var(--fr-bar);
+  }
+  .lk-chip.is-sel {
+    background: var(--fr-saffron);
+    border-color: var(--fr-bar);
+    color: var(--fr-on-saffron);
+  }
+  .lk-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  figcaption {
+    margin-top: 0.6rem;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--fr-ink-3);
+  }
+
+  /* Narrow (phones): rows instead of columns. */
+  @media (max-width: 30rem) {
+    .fr-links {
+      padding: 0.5rem;
+    }
+  }
+  @container (max-width: 38.74rem) {
+    svg.lk-wide {
+      display: none;
+    }
+    svg.lk-narrow {
+      display: block;
+    }
+    .lk-panel {
+      min-height: 0;
+      padding: 0.55rem 0.6rem 0.6rem;
+    }
+    .lk-br,
+    .lk-ty,
+    .lk-entry {
+      font-size: 11.5px;
+    }
+  }
+  /* A link in two lines: the code, then the target and the call. */
+  @container (max-width: 33.99rem) {
+    .lk-list :global(li) {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .lk-list :global(.lk-fl) {
+      grid-column: 1 / -1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .fr-links * {
+      transition: none !important;
+    }
+  }
+</style>

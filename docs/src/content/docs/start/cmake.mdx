@@ -1,0 +1,366 @@
+---
+title: 'Use FairRoot in a CMake project'
+description: 'Find the installed FairRoot and its dependencies with CMake, link the FairRoot targets, make ROOT dictionaries for your classes, and write config.sh for macros.'
+sidebar:
+  order: 6
+code:
+  - templates/NewTask/NewTask.h
+  - templates/NewTask/NewTask.cxx
+---
+
+import { FileTree } from '@astrojs/starlight/components';
+import Snippet from '../../../components/Snippet.astro';
+
+An installed FairRoot contains a CMake package with imported targets like `FairRoot::Base`. It also
+contains CMake modules that make ROOT dictionaries and shell scripts for ROOT macros. This page
+shows each part, and then a complete project: a library with one task, its dictionary and a
+`config.sh`.
+
+## What the installation gives to CMake
+
+The install step puts the CMake files into three folders under the install prefix
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L20-L45),
+[cmake/CMakeLists.txt](/repo/cmake/CMakeLists.txt#L9-L14)):
+
+| Folder | Contents |
+| --- | --- |
+| `lib/cmake/FairRoot-19.0.0/` | The CMake package: `FairRootConfig.cmake`, `FairRootConfigVersion.cmake` and `FairRootTargets.cmake`. On some systems, the folder is in `lib64`. |
+| `share/fairbase/cmake/modules/` | The CMake modules: `FindFairRoot.cmake`, `FairRootTargetRootDictionary.cmake`, `ROOTMacros.cmake`, `FairMacros.cmake`, `WriteConfigFile.cmake`, `CheckCompiler.cmake` and the find modules of some dependencies. |
+| `share/fairbase/cmake/scripts/` | The templates of the shell scripts that the modules write. |
+
+The package does not add the module folder to `CMAKE_MODULE_PATH`. Add it yourself before you
+include a module. [CMake reference](/reference/cmake/) describes each module.
+
+## Find FairRoot
+
+There are two ways to find FairRoot. Both give you the same imported targets.
+
+### With the CMake package
+
+Add the install prefix of FairRoot to `CMAKE_PREFIX_PATH`, then find the package:
+
+```cmake
+find_package(FairRoot 19.0 REQUIRED)
+```
+
+The version file accepts the installed FairRoot if its version is the same as or newer than the
+requested version (`AnyNewerVersion`). The package sets variables like `FairRoot_PREFIX`,
+`FairRoot_CMAKE_MODULES_DIR`, `FairRoot_CXX_STANDARD` and `FairRoot_PACKAGE_DEPENDENCIES`
+([FairRootConfig.cmake.in](/repo/cmake/private/FairRootConfig.cmake.in#L9-L23)). The
+[CMake reference](/reference/cmake/) lists all of them.
+
+The package does not search the dependencies. It only records them
+([FairRootPackage.cmake](/repo/cmake/private/FairRootPackage.cmake#L13-L18)). The targets of
+FairRoot link targets of other packages, for example `ROOT::Core` and `FairLogger::FairLogger`. Thus
+your project must find these packages too.
+
+### With FAIRROOTPATH and FindFairRoot.cmake
+
+The project templates use the environment variable `FAIRROOTPATH`. They add the module folder of
+FairRoot to `CMAKE_MODULE_PATH`, so `find_package()` loads `FindFairRoot.cmake`:
+
+<Snippet file="templates/project_root_containers/CMakeLists.txt" start="IF(NOT DEFINED ENV{FAIRROOTPATH})" end="find_package2(PUBLIC FairRoot VERSION 19.0 REQUIRED)" title="templates/project_root_containers/CMakeLists.txt" />
+
+`FindFairRoot.cmake` puts `FAIRROOTPATH` in front of `CMAKE_PREFIX_PATH` and loads the CMake package.
+Then it sets `FAIRROOTPATH` to the prefix that it found. It also sets `FAIRROOT_INCLUDE_DIR` and
+`FAIRROOT_LIBRARY_DIR` to the include and library folders of the installation
+([FindFairRoot.cmake](/repo/cmake/modules/FindFairRoot.cmake#L13-L73)).
+
+The older macros need these variables. `SetBasicVariables()` reads `FAIRROOT_INCLUDE_DIR` and
+`FAIRROOT_LIBRARY_DIR`. `WRITE_CONFIG_FILE()` and `GENERATE_ROOT_TEST_SCRIPT()` take their script
+templates from `FAIRROOTPATH`. The complete project below uses this way, because it writes a
+`config.sh`.
+
+## Find the dependencies
+
+Find the dependencies with `find_package2()` from
+[FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/). Get FairCMakeModules
+first, then include its module:
+
+```cmake
+find_package(FairCMakeModules 1.0 REQUIRED)
+include(FairFindPackage2)
+```
+
+`find_package2()` merges the requirements that FairRoot recorded with your own. For example,
+`find_package2(PUBLIC ROOT REQUIRED)` asks for ROOT 6.18.00 with the component `RIO`, because
+FairRoot needs this. The merge works only if you also found FairRoot with `find_package2()`. The
+template finds ROOT, VMC and FairLogger like this:
+
+<Snippet file="templates/project_root_containers/CMakeLists.txt" start="find_package2(PUBLIC ROOT REQUIRED)" end="find_package2(PUBLIC FairLogger" title="templates/project_root_containers/CMakeLists.txt" />
+
+- Include `ROOTMacros.cmake` after the search for ROOT
+  ([release notes of 19.0.0](/project/release-notes/#cmake)). When you include it, the module searches the program
+  `rootcint` in `ROOT_BINDIR` ([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L39-L43)).
+- ROOT can contain VMC as its component `vmc`. If it does not, find the separate package VMC. The
+  variable `VMCLIB` then holds the VMC target: `ROOT::VMC` or `VMCLibrary`.
+- Use the targets of ROOT with the prefix `ROOT::`, for example `ROOT::Core`. FairRoot uses the
+  CMake package of ROOT since version 19.0.0.
+
+Then call `find_package2_implicit_dependencies()`. It searches each dependency that FairRoot
+recorded and that you did not find yet, with `REQUIRED`. FairRoot records each package that its
+build found with `find_package2(PUBLIC …)`, also optional packages like Geant3 or yaml-cpp
+([CMakeLists.txt](/repo/CMakeLists.txt#L172-L254)). Thus your project needs the same packages as
+the FairRoot build.
+
+## Link the FairRoot targets
+
+Link the targets that your code uses. A task needs `FairRoot::Base`, which has
+[`FairTask`](/api/FairTask/) and `FairRootManager`:
+
+```cmake
+target_link_libraries(MyTasks PUBLIC FairRoot::Base)
+```
+
+[Libraries and headers](/reference/libraries/) tells which target has which header. The targets
+link some of their dependencies as public dependencies. For example, `FairRoot::Base` brings
+`FairRoot::Tools`, `FairRoot::ParBase`, `FairRoot::GeoBase`, `FairRoot::Alignment` and ROOT targets
+like `ROOT::Core`, with their include folders
+([base/CMakeLists.txt](/repo/fairroot/base/CMakeLists.txt#L103-L124)).
+[The libraries](/concepts/architecture/#the-libraries) shows the dependencies of all targets.
+
+Each exported target requires the C++ standard of the FairRoot build. It has the interface compile
+feature `cxx_std_<N>`, so your target compiles with at least this standard
+([FairRootTargets.cmake](/repo/cmake/private/FairRootTargets.cmake#L19-L28)). Set
+`CMAKE_CXX_STANDARD` too, and check it against ROOT with `fairroot_check_root_cxxstd_compatibility()`
+from `FairMacros.cmake`:
+
+<Snippet file="cmake/modules/FairMacros.cmake" start="function(fairroot_check_root_cxxstd_compatibility)" end="^endfunction" title="cmake/modules/FairMacros.cmake" />
+
+The function does nothing if `CMAKE_CXX_STANDARD` is not set. If ROOT does not list the standard,
+it prints a warning. It does not stop the configuration.
+
+## Make a ROOT dictionary
+
+ROOT needs a dictionary for each class that a macro uses or that goes into a file.
+`fairroot_target_root_dictionary()` from `FairRootTargetRootDictionary.cmake` adds one dictionary to
+a library target. All FairRoot libraries with a dictionary use this function:
+
+```cmake
+fairroot_target_root_dictionary(<target>
+  HEADERS <header>...
+  LINKDEF <linkdef>
+  [EXTRA_INCLUDE_DIRS <folder>...]
+)
+```
+
+| Argument | Meaning |
+| --- | --- |
+| `<target>` | Required. The library target. Create it before the call. |
+| `HEADERS` | Required. The headers of the classes, relative to the current `CMakeLists.txt`. |
+| `LINKDEF` | Required. The LinkDef file, relative to the current `CMakeLists.txt`. |
+| `EXTRA_INCLUDE_DIRS` | More include folders for `rootcling`. The FairRoot libraries give the include folder of the installation here. |
+| `BASENAME` | Ignored. CMake prints `BASENAME parameter is deprecated. Will be ignored`. |
+
+At build time, `rootcling` writes `G__<name>.cxx` into the current build folder. The function puts
+`G__<name>_rdict.pcm` and `lib<name>.rootmap` into `${CMAKE_BINARY_DIR}/lib`. The name is the
+`OUTPUT_NAME` of the target, or else the target name
+([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L89-L106)).
+The function adds the dictionary source to the target and links `ROOT::RIO`. It installs the
+rootmap and pcm files to `CMAKE_INSTALL_LIBDIR`.
+
+Keep these rules:
+
+- Include `GNUInstallDirs` before the call. Without it, `CMAKE_INSTALL_LIBDIR` is empty and CMake
+  stops with `install FILES given no DESTINATION!`
+  ([FairRootTargetRootDictionary.cmake](/repo/cmake/modules/FairRootTargetRootDictionary.cmake#L181)).
+- Set `OUTPUT_NAME` before the call, because the function reads it at the call.
+- Put your libraries into `${CMAKE_BINARY_DIR}/lib`. The function ignores the library folder of the
+  target, so this keeps the library, its rootmap file and its pcm file together. FairRoot and the
+  templates do the same with `LIBRARY_OUTPUT_PATH` ([CMakeLists.txt](/repo/CMakeLists.txt#L104)).
+- Give relative paths. An absolute path or a missing file stops CMake with an error.
+
+`rootcling` gets the include folders and the compile definitions of the target. Thus call
+`target_include_directories()` and `target_link_libraries()` before or after the function, but for
+the same target.
+
+## A complete project
+
+This project builds the library `MyTasks` with the task `NewTask` from the template folder
+`templates/NewTask`. [Your first task](/start/first-task/) explains the code of the task.
+
+<FileTree>
+- MyTasks/
+  - CMakeLists.txt
+  - MyTasksLinkDef.h
+  - NewTask.h copy of `templates/NewTask/NewTask.h`
+  - NewTask.cxx copy of `templates/NewTask/NewTask.cxx`
+</FileTree>
+
+```cmake title="MyTasks/CMakeLists.txt"
+cmake_minimum_required(VERSION 3.18)
+project(MyTasks VERSION 0.1.0 LANGUAGES CXX)
+
+include(GNUInstallDirs)
+
+# The install prefix of FairRoot, and its CMake modules
+if(NOT DEFINED ENV{FAIRROOTPATH})
+  message(FATAL_ERROR "Set the environment variable FAIRROOTPATH")
+endif()
+set(FAIRROOTPATH $ENV{FAIRROOTPATH})
+list(PREPEND CMAKE_MODULE_PATH ${FAIRROOTPATH}/share/fairbase/cmake/modules)
+
+find_package(FairCMakeModules 1.0 REQUIRED)
+include(FairFindPackage2)
+
+# Loads FindFairRoot.cmake, which loads the CMake package of FairRoot
+find_package2(PUBLIC FairRoot VERSION 19.0 REQUIRED)
+find_package2(PUBLIC ROOT REQUIRED)
+include(ROOTMacros)
+if(NOT ROOT_vmc_FOUND)
+  find_package2(PUBLIC VMC REQUIRED)
+endif()
+find_package2(PUBLIC FairLogger VERSION 1.2.0 REQUIRED)
+find_package2_implicit_dependencies()
+
+include(FairMacros)
+include(WriteConfigFile)
+include(FairRootTargetRootDictionary)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD ${FairRoot_CXX_STANDARD})
+endif()
+fairroot_check_root_cxxstd_compatibility()
+
+# The library, its rootmap file and its pcm file in one folder
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+add_library(MyTasks SHARED NewTask.cxx NewTask.h)
+target_include_directories(MyTasks PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(MyTasks PUBLIC FairRoot::Base FairLogger::FairLogger)
+fairroot_target_root_dictionary(MyTasks
+  HEADERS NewTask.h
+  LINKDEF MyTasksLinkDef.h
+)
+
+install(TARGETS MyTasks LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(FILES NewTask.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# config.sh in the build folder, for ROOT macros
+set(LD_LIBRARY_PATH ${FAIRROOT_LIBRARY_DIR})
+set(ROOT_INCLUDE_PATH ${FAIRROOT_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+set(VMCWORKDIR ${CMAKE_SOURCE_DIR})
+WRITE_CONFIG_FILE(config.sh)
+```
+
+The LinkDef file tells `rootcling` which classes get a dictionary. It has the same form as the
+LinkDef files of FairRoot:
+
+```cpp title="MyTasks/MyTasksLinkDef.h"
+#ifdef __CINT__
+
+#pragma link off all globals;
+#pragma link off all classes;
+#pragma link off all functions;
+
+#pragma link C++ class NewTask+;
+
+#endif
+```
+
+Configure and build the project. `CMAKE_PREFIX_PATH` gives CMake the dependencies, here from
+FairSoft:
+
+```sh
+export FAIRROOTPATH="$HOME/fairroot_install"
+cmake -S MyTasks -B MyTasks/build -DCMAKE_PREFIX_PATH="$SIMPATH"
+cmake --build MyTasks/build
+```
+
+The build folder then contains `lib/libMyTasks.so`, `lib/libMyTasks.rootmap`,
+`lib/G__MyTasks_rdict.pcm` and `config.sh`. On macOS, the library has the extension `.dylib`.
+
+## Write config.sh for macros
+
+A ROOT macro uses your classes through the interpreter of ROOT. ROOT must find the library, its
+rootmap file and the headers. The rootmap file tells ROOT which library has a class, so a macro can
+use the class without an `#include` line.
+
+`WRITE_CONFIG_FILE(config.sh)` from `WriteConfigFile.cmake` writes such a script into the build
+folder. It is a macro, and it reads these variables of your `CMakeLists.txt`
+([WriteConfigFile.cmake](/repo/cmake/modules/WriteConfigFile.cmake#L8-L187)):
+
+| Variable | What the script gets |
+| --- | --- |
+| `LD_LIBRARY_PATH` | `LD_LIBRARY_PATH`, after `${CMAKE_BINARY_DIR}/lib`. On macOS, `DYLD_LIBRARY_PATH`. |
+| `ROOT_INCLUDE_PATH` | `ROOT_INCLUDE_PATH`, after the include folders of Geant3 |
+| `VMCWORKDIR` | `VMCWORKDIR` |
+| `FAIRROOTPATH` | `FAIRROOTPATH`. The macro also takes the script templates from this prefix. |
+| `SIMPATH` | `SIMPATH`, and some folders of `PYTHONPATH` |
+| `FULL_CONFIG_FILE` | If `true`, the default, the script also sets the variables of Geant3, Geant4, Geant4VMC and Pythia. Use `true` or `false`, because the script runs the value as a command. |
+
+Call `WRITE_CONFIG_FILE()` at the end of the top-level `CMakeLists.txt`:
+
+- The script sources `check_system.sh` from the top build folder, and the macro writes this file
+  into the current build folder.
+- The macro changes variables of your scope. It removes `${CMAKE_BINARY_DIR}/lib` from
+  `LD_LIBRARY_PATH`, and it turns `ROOT_INCLUDE_PATH`, `ROOT_LIBRARIES` and other lists into strings
+  with colons.
+
+Source the script before you start ROOT:
+
+```sh
+source MyTasks/build/config.sh
+```
+
+The script checks the system first, as `FairRootConfig.sh` does. [Install FairRoot](/start/install/)
+explains this check, and [Environment variables](/reference/environment/) lists all variables of
+the script.
+
+A file name that contains `install` gives a script for the install prefix. The script then uses
+the library folder of the prefix, and `check_system.sh` from `CMAKE_INSTALL_FULL_LIBEXECDIR`.
+FairRoot writes its `FairRootConfig.sh` this way and installs `check_system.sh` to this folder
+([CMakeLists.txt](/repo/CMakeLists.txt#L318-L344)).
+
+### Run a macro as a test
+
+`GENERATE_ROOT_TEST_SCRIPT(<macro>)` from `ROOTMacros.cmake` writes a script that runs a macro
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L122-L162)). Give the full path of the
+macro. The script has the name of the macro with the extension `.sh`, in the build folder that
+matches the folder of the macro. It joins its arguments with commas and runs ROOT in batch mode
+(`-q -b`) with the macro and these arguments.
+
+The script gets `LD_LIBRARY_PATH` and `ROOT_INCLUDE_PATH` from the CMake variables at the call. Put
+`${CMAKE_BINARY_DIR}/lib` into `LD_LIBRARY_PATH` before the call, as the templates do
+([CMakeLists.txt](/repo/templates/project_root_containers/CMakeLists.txt#L133-L134)). Tutorial 1
+makes a test from its script:
+
+<Snippet file="examples/simulation/Tutorial1/macros/CMakeLists.txt" start="add_test(NAME ex_sim_tutorial1_${mcEngine}" end="^  \)$" title="examples/simulation/Tutorial1/macros/CMakeLists.txt" />
+
+For the engine `TGeant4`, the macro gets the arguments `10` and `"TGeant4"`. The test passes if the
+output contains `Macro finished successfully`. [Tests](/tools/testing/) shows more tests.
+
+## The older macros of the templates
+
+The project templates build their libraries with `GENERATE_LIBRARY()` from `ROOTMacros.cmake`. This
+macro takes no arguments. It reads variables that you set before the call:
+
+<Snippet file="templates/project_root_containers/NewDetector/CMakeLists.txt" start="set(SRCS" end="GENERATE_LIBRARY()" title="templates/project_root_containers/NewDetector/CMakeLists.txt" />
+
+With `LINKDEF`, `GENERATE_LIBRARY()` calls `FAIRROOT_GENERATE_DICTIONARY()`. That macro runs
+`rootcint` through the script `generate_dictionary_G__<library>Dict.sh` in the build folder. It stops with
+`Do not call from inside FairRoot` if the CMake variable `FAIRROOTPATH` is not set
+([ROOTMacros.cmake](/repo/cmake/modules/ROOTMacros.cmake#L46-L119)). The two ways compare like
+this:
+
+| | `fairroot_target_root_dictionary()` | `GENERATE_LIBRARY()` |
+| --- | --- | --- |
+| Input | A target and arguments | Variables like `LIBRARY_NAME`, `SRCS` and `LINKDEF` |
+| Dictionary tool | `rootcling` | `rootcint` |
+| Include folders for the tool | The include folders of the target | The variables `INCLUDE_DIRECTORIES` and `SYSTEM_INCLUDE_DIRECTORIES` |
+| Library | You create it | The macro creates a shared library |
+| Install | The rootmap and pcm files | The headers to `include`, the library, rootmap and pcm files to `lib` |
+
+The [CMake reference](/reference/cmake/) lists all variables of `GENERATE_LIBRARY()`.
+[Start a project from a template](/start/new-project/) shows a complete project with these macros.
+
+## Related pages
+
+- [Your first task](/start/first-task/): write a task, add it to the LinkDef file and run it in a macro.
+- [Start a project from a template](/start/new-project/): a project with a detector, data classes and macros.
+- [CMake reference](/reference/cmake/): all functions, variables and targets.
+- [Environment variables](/reference/environment/): what `config.sh` sets.
+- [Libraries and headers](/reference/libraries/): which target has which header.

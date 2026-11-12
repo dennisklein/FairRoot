@@ -1,0 +1,219 @@
+---
+title: 'MQ: pixel detector'
+description: 'A pixel detector simulated and reconstructed in ROOT macros and in FairMQ devices: the macros, the device executables, the start scripts, ROOT and binary payloads, and the test.'
+sidebar:
+  order: 9
+code: [examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessor.h,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelSamplerBin.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelTaskProcessorBin.h,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelFileSinkBin.cxx,
+  examples/MQ/pixelDetector/src/devices/FairMQPixelMerger.cxx, examples/MQ/pixelDetector/src/PixelPayload.h,
+  examples/MQ/pixelDetector/src/PixelDigiWriteToBinFile.cxx, examples/MQ/pixelDetector/macros/run_sim.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+import { Steps, FileTree } from '@astrojs/starlight/components';
+
+The pixel detector has three stations with four pixel sensors each. Its tasks make digis from the MC
+points, find hits, find tracks and fit them. The same tasks run in ROOT macros and in FairMQ
+devices. In the devices, a sampler sends the events, task processors run the tasks, and a sink
+writes the result.
+[Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/) explains the device classes.
+
+## Files
+
+<FileTree>
+
+- examples/MQ/pixelDetector/
+  - src/ detector, data classes, tasks, sources and writers (library `ExPixel`)
+    - devices/ the FairMQ devices
+  - macros/ ROOT macros
+  - param/
+    - pixel_digi.par ASCII parameters of the digitization
+  - run/ main functions of the executables
+    - scripts/ start scripts and DDS topologies
+
+</FileTree>
+
+## The macros
+
+| Macro and arguments | Input | Tasks | Output |
+| --- | --- | --- | --- |
+| `run_sim.C(nEvents = 10, mcEngine = "TGeant3", fileId = 0, isMT = kFALSE)` | none | `FairRunSim` with cave and `Pixel`, 5 pions in each event | `pixel_<engine>.mc.root`, `pixel_<engine>.params.root`, `geofile_full.root` |
+| `run_digi.C(mcEngine, fileId = 0)` | `.mc.root` | `PixelDigitize` | `.digi.root` |
+| `run_hits.C(mcEngine)` | `.digi.root` | `PixelFindHits` | `.hits.root` |
+| `run_tracks.C(mcEngine)` | `.hits.root` | `PixelFindTracks` | `.tracks.root` |
+| `run_reco.C(mcEngine)` | `.mc.root` | the four tasks | `.reco.root` |
+| `run_digiToBin.C(divideLevel = 1, mcEngine)` | `.mc.root` | `PixelDigitize`, `PixelDigiWriteToBinFile` | `digisBin.dat` or `digisBin.p<i>.dat`, `.digiToBin.root` |
+| `run_digiToAscii.C(mcEngine)` | `.mc.root` | `PixelDigitize`, `PixelDigiWriteToFile` | `digis.p0.dat` to `digis.p2.dat`, `.digiToAscii.root` |
+| `run_dBinSource.C(mcEngine)` | `digisBin.dat` | source `PixelDigiBinSource`, `PixelFindHits` | `.viaBinSource.hits.root` |
+| `run_dAsciiSource.C(mcEngine)` | `digis.p0.dat` | source `PixelDigiSource`, `PixelFindHits` | `.viaAsciiSource.hits.root` |
+
+The default transport engine of all macros is `TGeant3`. Except `geofile_full.root`, the ROOT files
+start with `pixel_<engine>`, for example `pixel_TGeant4.digi.root`. The digitization also reads
+`param/pixel_digi.par`. The divide level of the writers sets the number of files. Level 0 makes one
+file, level 1 one file for each station, and level 2 one file for each sensor. For each event, the
+binary file has four `int` values: run ID, MC entry number, part number and number of digis. Then
+it has four `short` values for each digi: detector ID, front-end ID, column and row
+([PixelDigiWriteToBinFile.cxx](/source/examples/MQ/pixelDetector/src/PixelDigiWriteToBinFile.cxx/#L64-L89)).
+The file has no charge, so `PixelDigiBinSource` makes digis with the charge 0.
+
+## The executables
+
+CMake builds the executables into `run/` of the build tree. The parameter server `parmq-server` is
+in `bin/` of the build tree.
+
+| Executable | Device | Options of the main function (default) |
+| --- | --- | --- |
+| `pixel-sampler` | `FairMQPixelSampler` | `--file-name` (one or more), `--branch-name` (one or more, required), `--max-index` (`-1`: all events), `--sampler-type` (`FairFileSource`, or `PixelDigiSource` and `PixelDigiBinSource`), `--out-channel` (`data-out`), `--ack-channel` |
+| `pixel-processor` | `FairMQPixelTaskProcessor<T>` | `--task-name` (required: `PixelDigitize`, `PixelFindHits`, `PixelFindTracks`, `PixelFitTracks`), `--keep-data`, `--in-channel` (`data-in`), `--out-channel` (`data-out`), `--par-channel` (`param`), `--static-pars` (`false`) |
+| `pixel-sink` | `FairMQPixelFileSink` | `--file-name`, `--in-channel` (`data-in`), `--ack-channel` |
+| `pixel-sampler-bin` | `FairMQPixelSamplerBin` | as `pixel-sampler`, without `--sampler-type`; `--branch-name` is not required |
+| `pixel-processor-bin` | `FairMQPixelTaskProcessorBin<PixelFindHits>` | as `pixel-processor`, only `PixelFindHits` |
+| `pixel-sink-bin` | `FairMQPixelFileSinkBin` | `--file-name`, pairs of `--class-name` and `--branch-name`, `--in-channel` (`data-in`), `--ack-channel` |
+| `pixel-merger` | `FairMQPixelMerger` | none: channels `data-in` and `data-out`, three parts for each event |
+| `pixel-sim` | `FairMQSimDevice` | `--nof-events` (required), `--transport-name` (`TGeant3`), `--random-seed` (`0`), `--fairroot-config-dir`, `--param-channel-name` (`updateChannel`), `--run-digi-tasks` (`false`) |
+
+The devices read their settings from the options in `Init()` or `InitTask()`. These values replace
+the values of setters like `AddInputFileName()`
+([FairMQPixelSampler.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelSampler.cxx/#L45-L51)).
+`pixel-sink` makes one branch for each object of the first message, with the name of the object.
+
+The merger collects the parts of an event from the three processors, one for each station. It uses
+the run ID, the MC entry number and the part number of the `PixelEventHeader`
+([FairMQPixelMerger.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelMerger.cxx/#L58-L90)).
+It compares the names of the arrays as `const char*` pointers, so it never adds the arrays of the
+other parts. It sends only the arrays of the part that arrives last
+([FairMQPixelMerger.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelMerger.cxx/#L113-L154)).
+
+`pixel-sim` runs a simulation with `FairRunSim` in the device. For each event, the device sends the
+branches to `pixel-sink` on the channel `data#all#`.
+[Send the output of a run](/online/fairmq-devices/#send-the-output-of-a-run) explains how.
+
+## ROOT and binary payloads
+
+The devices without `bin` send ROOT objects: each part of a message holds one object that
+`RootSerializer` wrote into a `TMessage`. This works for each class with a dictionary, and the
+receiver finds the objects by name. The `bin` devices send the classes of `PixelPayload.h`, without
+serialization:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelPayload.h" start="class Digi" title="PixelPayload.h" />
+
+| Class | Members |
+| --- | --- |
+| `PixelPayload::EventHeader` | `fRunId`, `fMCEntryNo`, `fPartNo` |
+| `PixelPayload::Digi` | `fDetectorID`, `fFeID`, `fCharge`, `fCol`, `fRow` |
+| `PixelPayload::Hit` | `fDetectorID`, `posX`, `posY`, `posZ`, `dposX`, `dposY`, `dposZ` |
+| `PixelPayload::Track` | `fX0`, `fAX`, `fY0`, `fAY` and their errors |
+
+Part 0 holds one `EventHeader`, part 1 an array of digis or hits. The receiver calculates the number
+of elements from the size of the part. `pixel-sampler-bin` makes the parts in the order of
+`--branch-name`, thus give `EventHeader.` first. `FairMQPixelTaskProcessorBin` makes a
+`TClonesArray` of `PixelDigi` from the array, runs `PixelFindHits`, and copies the hits back into an
+array of `PixelPayload::Hit`. Both sides must use the same memory layout of the classes, thus the same
+compiler and platform. The [alternative example](/examples/mq-pixel-alternative/) sends only such
+arrays.
+
+## The start scripts
+
+CMake writes the scripts from `run/scripts/*.sh.in` into `run/` of the build tree. The input files
+are in `macros/` of the work folder. The engine in the file names is `TGeant4`, because
+[`examples/CMakeLists.txt`](/repo/examples/CMakeLists.txt) sets it for the MQ examples.
+
+| Script | Devices | Input | Output |
+| --- | --- | --- | --- |
+| `startFairMQPixel.sh` | server, sampler, `-p` processors (3), sink | `pixel_TGeant4.digi.root` | `MQ.pixel_TGeant4.hits.root` |
+| `startFairMQPixel_3Levels.sh` | server, sampler, two chains of hit finder, track finder and track fitter, sink | `pixel_TGeant4.digi.root` | `MQ.pixel_TGeant4.3Levels.fitTracks.root` |
+| `startFairMQPixelBin.sh` | server, `bin` sampler, 5 `bin` processors, `bin` sink | `pixel_TGeant4.digi.root` | `MQ.pixel_TGeant4.bin.hits.root` |
+| `startFairMQPixelBinProxy.sh` | server, 2 `bin` samplers, 2 `fairmq-proxy`, 4 `bin` processors, 2 `bin` sinks | `.digi.root` and `.digi.f1.root` | `MQ.pixel_TGeant4.bin.hits1.root`, `...hits2.root` |
+| `startFairMQPixelMerger.sh` | server, 3 samplers with `PixelDigiBinSource`, 3 processors, merger, sink | `digisBin.p0.dat` to `digisBin.p2.dat` | `MQ.pixel_TGeant4.hitsFromBinary.root` |
+| `startFairMQPixelSimulation.sh` | server, `-s` simulation devices (1), sink | none | `MQ.simulation_<engine>.data.root` and `.pars.root` |
+
+Only `startFairMQPixel.sh` and `startFairMQPixelSimulation.sh` have the options `--work-dir` and
+`--command` (`print`, `interactive` or `static`). The other scripts start each device in an `xterm`.
+`startFairMQPixelBinProxy.sh` starts `fairmq-proxy` from `$SIMPATH/bin`. The simulation script uses
+`TGeant3`, and `-g TGeant4` selects Geant4.
+
+:::caution[Work folder in the build tree]
+In the build tree, the scripts of `pixelDetector` use the `run` folder as the work folder
+([run/CMakeLists.txt](/repo/examples/MQ/pixelDetector/run/CMakeLists.txt)). The shell scripts of
+the macros write their files into `macros/` next to it. Thus give
+`--work-dir <build>/examples/MQ/pixelDetector` to `startFairMQPixel.sh` and
+`startFairMQPixelSimulation.sh`. The other four scripts have no such option: in the build tree they
+look for `run/macros/` and `run/param/`, which the build does not make.
+:::
+
+With `-f PixelFindTracks` or `-f PixelFitTracks`, `startFairMQPixel.sh` reads the output of the
+previous step. `pixel-sink` writes this file without the folder and the `BranchList` that
+`FairFileSource` needs
+([FairMQPixelFileSink.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx/#L57-L88)).
+`startFairMQPixel_3Levels.sh` runs all steps in one topology instead.
+
+## Run the test
+
+CTest runs the topology of `startFairMQPixel.sh` in static mode as the test `ex_MQ_pixel_static`.
+Its fixtures are the macro tests `ex_pixel_sim_TGeant4` (1000 events), `ex_pixel_digi_TGeant4` and
+`ex_pixel_digi_to_bin_TGeant4` ([macros/CMakeLists.txt](/repo/examples/MQ/pixelDetector/macros/CMakeLists.txt)).
+CTest adds these setup tests when you select the test:
+
+```sh
+cd <build>
+ctest -R ex_MQ_pixel_static --output-on-failure
+```
+
+To run the steps yourself:
+
+<Steps>
+
+1. Simulate 1000 events and make the digis in the macro folder of the build tree. The build made
+   shell scripts for some macros there. They give their arguments to ROOT, so keep the quotes:
+
+   ```sh
+   cd <build>/examples/MQ/pixelDetector/macros
+   ./run_sim.sh 1000 '"TGeant4"'
+   ./run_digi.sh '"TGeant4"'
+   ```
+
+2. Start the topology with the options of the test:
+
+   ```sh
+   ../run/startFairMQPixel.sh --work-dir <build>/examples/MQ/pixelDetector -p 3 --command static --force-kill true
+   ```
+
+</Steps>
+
+In static mode, the script writes a log file for each device, for example
+`sampler_<date>_<time>.out.log`. It waits for the end of the sampler, at most `--max-running-time`
+seconds (100). Then it stops the other devices and compares the number of entries of the tree
+`cbmsim` in the input and the output file. If they are equal, its last line is
+`Shell script finished successfully.` Without `--command static`, the devices start in `xterm`
+windows.
+
+## The DDS test
+
+The test `ex_MQ_pixel_simulation` runs `pixel-sim` with [DDS](https://github.com/FairRootGroup/DDS).
+CMake adds it only if FairMQ has `fairmq-dds-command-ui`, DDS has the version 3.5 or newer and
+FairMQ has the version 1.4.23 or newer
+([run/CMakeLists.txt](/repo/examples/MQ/pixelDetector/run/CMakeLists.txt)). Its fixture is
+`ex_MQ_pixel_static`, thus CTest runs the static test first.
+
+The script `test-pixelSim.sh` starts a DDS session with five agents on `localhost`. It activates the
+topology `pixel-dds-simulation.xml`: three `pixel-sim` devices with 1000 events each, one
+`pixel-sink` and one `parmq-server`. It moves the devices to `RUNNING` with
+`fairmq-dds-command-ui`. When the `pixel-sim` devices go from `RUNNING` to `READY`, the script stops
+all devices ([test-pixelSim.sh.in](/repo/examples/MQ/pixelDetector/run/scripts/test-pixelSim.sh.in)).
+
+With DDS, the sink puts the DDS session ID into the name of its file
+([FairMQPixelFileSink.cxx](/source/examples/MQ/pixelDetector/src/devices/FairMQPixelFileSink.cxx/#L44-L50)).
+The test passes if `DDS.simulation_TGeant4.data.<session ID>.root` in `run/` of the build tree has
+3000 events. Then the last line of the script is `Shell script finished successfully.`
+
+## Related pages
+
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the device classes.
+- [Serialize FairRoot data for messages](/online/serialization/): ROOT, Boost and binary payloads.
+- [Parameters over FairMQ](/online/parameters/): the parameter server of the topologies.
+- [MQ: pixel detector, alternative](/examples/mq-pixel-alternative/): devices with arrays only.
+- [MQ: split simulation](/examples/mq-pixel-sim-split/): the simulation split over devices.

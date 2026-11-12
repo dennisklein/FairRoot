@@ -1,0 +1,950 @@
+---
+// Time-based processing on one time axis, step by step: the source gives the events their times, the
+// digitizer gives the digis time stamps, a FairWriteoutBuffer writes them into tree entries, a FairRingSorter
+// sorts them by time stamp, and the reconstruction reads them in time windows with GetData(). Two drawings of
+// the same stage: a wide one, and a narrow one for phones (container query on .tb-box). The step classes go on
+// the outer SVG. The frontmatter computes the entries, the sorter output and the GetData() calls with the rules
+// of the code below, so the drawing follows from the sample.
+//
+// Facts (FairRoot, paths relative to the repository):
+// - FairFileSource: fEventTime starts at 0 (fairroot/base/source/FairFileSource.cxx:72). SetEventTime() runs once
+//   for each entry and adds GetDeltaEventTime() to the time of the previous event (609-625). SetEventMeanTime(mean):
+//   gaps from the TF1 "(1/[0])*exp(-x/[0])" between 0 and 10 × mean (584-591). SetEventTimeInterval(min, max):
+//   uniform gaps (593-601, 634). SetBeamTime(beamTime, gapTime) (603-607): do { add a gap } while
+//   (fmod(fEventTime, fBeamTime + fGapTime) > fBeamTime) (618-621). Times in ns (FairFileSource.h:82-88).
+//   Tutorial 3 calls SetEventMeanTime(50) (examples/advanced/Tutorial3/macro/run_digi_timebased.C:49). No code in
+//   FairRoot calls SetBeamTime(); step 2 shows what it does.
+// - Tutorial 3 digitizer (examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeDigiTask.cxx):
+//   CalcTimeStamp() = event time + time of flight + gRandom->Gaus(0, fTimeResolution), 0 if negative (97-109;
+//   fTimeResolution 100 ns, line 24). FillNewData(digi, timeOfFlight + eventTime, digi->GetTimeStamp() + 10) (87):
+//   start time = time of the hit, active time = time stamp + 10 ns. Init() registers the buffer with
+//   RegisterWriteoutBuffer() (48-51); RunTimeBased() switches the buffering on (FairTestDetectorTimeDigiTask.h:36,
+//   ActivateBuffering(fTimeOrderedDigi) at line 51). Its FairTestDetectorDigiWriteoutBuffer changes only
+//   AddNewDataToTClonesArray() and the maps for pile-up (FairTestDetectorDigiWriteoutBuffer.h:27-40).
+// - FairRunAna::Run(Int_t Ev_start, Int_t Ev_end) (fairroot/base/steer/FairRunAna.cxx:256-347), for each event: ReadEvent(i) (313),
+//   StoreWriteoutBufferData(GetEventTime()) (325), then the tasks (326), Fill() (327), DeleteOldWriteoutBufferData()
+//   (328). After the loop: StoreAllWriteoutBufferData() (339), FinishTask() (340), LastFill() (344).
+//   FairRootManager::StoreWriteoutBufferData() calls WriteOutData(t) of each buffer (FairRootManager.cxx:872-877).
+// - FairWriteoutBuffer (fairroot/base/steer/FairWriteoutBuffer.cxx): FillNewData() keeps a clone in the start-time
+//   map (138-152). WriteOutData(t) (36-63) moves the data with start time < t into the dead-time map (241-252),
+//   then writes the data with active time < t, in the order of the active time, into the TClonesArray of the
+//   branch (65-96, 118-131). So entry i gets the digis of earlier events whose start and active time are before t_i.
+// - FairRingSorter (fairroot/base/steer/FairRingSorter.cxx): AddElement() puts the data into the cell
+//   (timestamp / width) mod size (20-48, CalcIndex 104-111). A time stamp ≥ lower bound + size × width writes out
+//   the cells from the lower bound up to its cell (38-45, 63-85), and the window moves so that it ends at the end
+//   of this cell (SetLowerBound 50-61). A time stamp ≥ lower bound + 2 × size × width writes out all cells and moves
+//   the window in the same way (30-37). A time stamp below the lower bound is dropped (23-27). A cell is a multimap
+//   sorted by time stamp (FairRingSorter.h:67); the first lower bound is 0 (FairRingSorter.h:34).
+//   FairRingSorterTask::Exec() gives each element of the input array to AddElement() and puts the output into the
+//   output branch (FairRingSorterTask.cxx:52-80). FinishTask() gives the input array to the sorter, calls
+//   WriteOutAll() and SetLastFill() (91-122), so LastFill() fills one more entry. Tutorial 3:
+//   FairTestDetectorDigiSorterTask(5000, 50, "FairTestDetectorDigi", "FairTestDetectorSortedDigi", "toy")
+//   (run_digi_timebased.C:61-63), after the digitizer. It changes only AddNewDataToTClonesArray() and InitSorter()
+//   (FairTestDetectorDigiSorterTask.h:25-41), and its FairTestDetectorDigiRingSorter changes only CreateElement()
+//   (FairTestDetectorDigiRingSorter.h:23-31).
+// - Reconstruction: RunWithTimeStamps() before Init() (run_reco_timebased.C:46, FairRunAna.cxx:595-603). Run() then
+//   calls RunTSBuffers() (260-261), which calls the tasks until AllDataProcessed() (473-497).
+//   FairTestDetectorTimeRecoTask (examples/advanced/Tutorial3/timeBasedSimulation/FairTestDetectorTimeRecoTask.cxx):
+//   fTime starts at 0 (25, 33); Exec(): fTime += 200, then GetData("FairTestDetectorSortedDigi", fFunctor, fTime)
+//   with fFunctor = new StopTime() (55, 68-70). FairRootManager::GetData() makes
+//   a FairTSBufferFunctional for the branch at the first call (FairRootManager.cxx:284-291). Its GetData() reads the
+//   next filled entries until the functor says stop, returns the data before it and keeps the rest
+//   (FairTSBufferFunctional.cxx:45-131, 213-225). StopTime::Call(): stop at a time stamp > b. TimeGap::Call(): stop
+//   when the time stamp is more than b after the one before (FairTSBufferFunctional.h:56-99, 106-134).
+// Not shown: pile-up on one detector element (Modify()); FairRunAna::Run(Double_t delta_t), whose loop never runs
+// (FairRootManager::ReadNextEvent() returns kFALSE, FairRootManager.cxx:479-484).
+// Example values of the drawing: the event gaps, the time stamps (closer to the event times than with the 100 ns
+// resolution of Tutorial 3, so that the drawing stays readable), 2 ns time of flight, beamTime 250 ns, gapTime
+// 150 ns, a ring of 4 cells of 50 ns (Tutorial 3: 5000 cells), and 100 ns as parameter b of TimeGap. The sorter
+// is drawn once for each entry: two moves of the window in one entry show as one move.
+import Explainer from './Explainer.astro';
+
+const steps = [
+  {
+    cap: 'For each new event, the source adds a random time gap to the time of the previous event. With SetEventMeanTime(50), the gaps have an exponential distribution with a mean of 50 ns.',
+    code: 'fFileSource->SetEventMeanTime(50);',
+  },
+  {
+    cap: 'SetBeamTime(beamTime, gapTime) adds beam pauses. While an event time is in the gap time, the source adds one more random gap.',
+    code: '} while (fmod(fEventTime, fBeamTime + fGapTime) > fBeamTime);',
+  },
+  {
+    cap: 'The digitizer gives each digi a time stamp: the event time, plus the time of flight, plus a random time for the time resolution. The digis of neighboring events overlap in time.',
+    code: 'Double_t result = eventTime + timeOfFlight + detectionTime;',
+  },
+  {
+    cap: 'The digitizer gives each digi to a FairWriteoutBuffer, with the time stamp + 10 ns as active time. When the run reads the next event, the buffer writes the digis whose active time ended into the entry of this event.',
+    code: 'FillNewData(digi, timeOfFlight + eventTime, digi->GetTimeStamp() + 10);',
+  },
+  {
+    cap: 'The buffer writes before the digitizer adds the digis of the new event. So entry 3 gets the digi of event 2 at 118 ns, but entry 2 has a digi at 135 ns: the tree is not in time order.',
+    code: 'fRootManager->StoreWriteoutBufferData(fRootManager->GetEventTime());',
+  },
+  {
+    cap: 'FairRingSorterTask puts each digi into the cell of its time stamp in a FairRingSorter (Tutorial 3: 5000 cells of 50 ns). When a later time stamp moves the window, the cells that leave the window go out in time order.',
+    code: 'fSorter->AddElement(myData, myData->GetTimeStamp());',
+  },
+  {
+    cap: 'With RunWithTimeStamps(), the run calls the tasks until all data is read. Each call adds 200 ns to fTime, and GetData() with StopTime returns the next digis up to fTime, from one or more entries.',
+    code: 'GetData("FairTestDetectorSortedDigi", fFunctor, fTime)',
+  },
+  {
+    cap: 'The functor decides where the data stops. With TimeGap, GetData() returns the data up to the next time gap that is larger than its parameter: here, one beam time in each call.',
+    code: 'if (aTime - fOldTime > b) {',
+  },
+];
+
+// ---------- The sample (ns) ----------
+const T_END = 600; // end of the axis
+const BEAM = 250; // SetBeamTime(beamTime, gapTime) of the drawing
+const GAP = 150;
+const TOF = 2; // time of flight
+interface EvIn {
+  t: number;
+  hops?: number[]; // times that fell into the gap time (step 2)
+  ts: number[]; // time stamps of the digis
+}
+const evs: EvIn[] = [
+  { t: 40, ts: [22, 78] },
+  { t: 110, ts: [95, 135, 168] },
+  { t: 150, ts: [118, 196] },
+  { t: 230, ts: [214, 255] },
+  { t: 440, hops: [300, 365], ts: [421, 470] },
+  { t: 490, ts: [478, 530] },
+];
+const N = evs.length; // the entry N is the one of LastFill()
+const nStep1 = 4; // events of step 1; the others come in step 2
+
+interface Digi {
+  ev: number;
+  ts: number;
+  start: number;
+  active: number;
+  entry: number; // entry of FairTestDetectorDigi (writeout buffer)
+  slot: number; // place in this entry
+  sEntry: number; // entry of FairTestDetectorSortedDigi (sorter)
+}
+const digis: Digi[] = evs.flatMap((e, ev) =>
+  e.ts.map((ts) => ({ ev, ts, start: e.t + TOF, active: ts + 10, entry: -1, slot: 0, sEntry: -1 }))
+);
+
+// FairRunAna::Run() + FairWriteoutBuffer::WriteOutData(t_i): before the tasks of event i, entry i gets the digis of
+// earlier events with start time < t_i and active time < t_i, in the order of the active time. The rest goes into
+// the entry of LastFill().
+const entries: Digi[][] = [];
+for (let i = 0; i <= N; i++) {
+  const t = i < N ? evs[i].t : Infinity;
+  const out = digis
+    .filter((d) => d.entry < 0 && d.ev < i && d.start < t && d.active < t)
+    .sort((a, b) => a.active - b.active);
+  out.forEach((d, k) => {
+    d.entry = i;
+    d.slot = k;
+  });
+  entries.push(out);
+}
+
+// FairRingSorter::AddElement() with a ring of CELLS cells of CELL ns, fed by FairRingSorterTask::Exec() with the
+// entries in order; FinishTask() adds the last entry and calls WriteOutAll().
+const CELL = 50;
+const CELLS = 4;
+const WIN = CELL * CELLS;
+const range = (a: number, b: number) => Array.from({ length: Math.max(0, b - a) }, (_, k) => a + k);
+const ring: Digi[][] = range(0, CELLS).map(() => []);
+let lb = 0;
+let lbCell = 0;
+let outBuf: Digi[] = [];
+const cellOf = (t: number) => Math.floor(t / CELL) % CELLS;
+const writeCell = (i: number) => {
+  outBuf.push(...ring[i].sort((a, b) => a.ts - b.ts));
+  ring[i] = [];
+};
+const writeUpTo = (end: number) =>
+  (lbCell >= end ? [...range(lbCell, CELLS), ...range(0, end)] : range(lbCell, end)).forEach(writeCell);
+const setLowerBound = (t: number) => {
+  lbCell = cellOf(t + CELL);
+  lb = (Math.floor(t / CELL) + 1) * CELL - WIN;
+};
+const addElement = (d: Digi) => {
+  const i = cellOf(d.ts);
+  if (d.ts >= lb + 2 * WIN) {
+    writeUpTo(lbCell);
+    setLowerBound(d.ts);
+  } else if (d.ts >= lb + WIN) {
+    writeUpTo(i + 1);
+    setLowerBound(d.ts);
+  }
+  ring[i].push(d);
+};
+const sorted: Digi[][] = [];
+const lbAfter: number[] = [];
+for (let k = 0; k <= N; k++) {
+  entries[k].forEach(addElement);
+  if (k === N) writeUpTo(lbCell);
+  outBuf.forEach((d) => (d.sEntry = k));
+  sorted.push(outBuf);
+  outBuf = [];
+  lbAfter.push(lb);
+}
+// Animation stages of the sorter: a new stage for each entry that moves the window or writes data.
+const stageOf: number[] = [];
+let nStages = 0;
+for (let k = 0; k <= N; k++) {
+  if ((k > 0 && lbAfter[k] !== lbAfter[k - 1]) || sorted[k].length > 0 || k === N) nStages++;
+  stageOf.push(nStages);
+}
+const lbEnd = range(0, nStages + 1).map((s) => lbAfter[stageOf.lastIndexOf(s)]);
+
+// FairTSBufferFunctional::GetData(p) on the entries of the sorted branch, one call after the other.
+function getDataCalls(stop: (d: Digi, p: number) => boolean, params: number[]): Digi[][] {
+  let bi = -1;
+  let buf: Digi[] = [];
+  const readNextFilled = () => {
+    let inp: Digi[] = [];
+    while (inp.length === 0 && bi + 1 < sorted.length) inp = sorted[++bi];
+    return inp;
+  };
+  return params.map((p) => {
+    if (buf.length === 0) buf = buf.concat(readNextFilled());
+    if (buf.length === 0) return [];
+    let pos = 0;
+    while (!stop(buf[pos], p)) {
+      pos++;
+      if (pos === buf.length) buf = buf.concat(readNextFilled());
+      if (pos === buf.length) break;
+    }
+    if (pos < buf.length && pos > 0) return buf.splice(0, pos);
+    if (pos >= buf.length && pos > 0 && bi + 1 >= sorted.length) return buf.splice(0);
+    return [];
+  });
+}
+const stopTimes = [200, 400, 600]; // fTime += 200 in each call
+const stopCalls = getDataCalls((d, b) => d.ts > b, stopTimes);
+const P_GAP = 100;
+let oldTime = -1;
+const gapCalls = getDataCalls(
+  (d, b) => {
+    const a = d.ts;
+    if (oldTime < 0) {
+      oldTime = a;
+      return false;
+    }
+    const s = a - oldTime > b;
+    oldTime = a;
+    return s;
+  },
+  [P_GAP, P_GAP]
+);
+const gapLo = gapCalls[0][gapCalls[0].length - 1].ts;
+const gapHi = gapCalls[1][0].ts;
+
+// The digi that comes late: a digi in a later entry than a digi with a later time stamp (step 5).
+const late = digis.find((b) => digis.some((a) => a.entry < b.entry && a.ts > b.ts))!;
+const early = digis
+  .filter((a) => a.entry < late.entry && a.ts > late.ts)
+  .sort((a, b) => b.entry - a.entry || b.ts - a.ts)[0];
+const pair = [late, early]; // in the order of the caption of step 5
+
+// ---------- Timing (s) ----------
+const sec = (n: number) => `${Math.round(n * 100) / 100}s`;
+// Steps 1 and 2: the arcs of the time gaps, then the event markers.
+interface Arc {
+  a: number;
+  b: number;
+  ev: number;
+  step: number;
+  d: number;
+}
+const arcs: Arc[] = [];
+let tPrev = 0;
+evs.forEach((e, ev) => {
+  for (const b of [...(e.hops ?? []), e.t]) {
+    arcs.push({ a: tPrev, b, ev, step: ev < nStep1 ? 1 : 2, d: 0 });
+    tPrev = b;
+  }
+});
+arcs.filter((a) => a.step === 1).forEach((a, j) => (a.d = 0.15 + j * 0.55));
+arcs.filter((a) => a.step === 2).forEach((a, j) => (a.d = 0.45 + j * 0.5));
+const evDelay = evs.map((e, ev) => arcs.filter((a) => a.ev === ev && a.b === e.t)[0].d + 0.3);
+const ghosts = arcs.filter((a) => a.b !== evs[a.ev].t).map((a) => ({ t: a.b, ev: a.ev, d: a.d + 0.3 }));
+// Step 3: the digis of event i leave the event marker.
+const flyDelay = (ev: number) => 0.15 + ev * 0.38;
+// Step 4: the run reads event k at slot k; entry N is LastFill().
+const slot = (k: number) => 0.15 + k * 0.42;
+const SLOT = 0.42;
+// Step 5: first the late digi, then the early one.
+const pairAt = (k: number) => 0.2 + k * 0.7;
+// Step 6: the sorter stages.
+const stageAt = (s: number) => 0.15 + s * 0.78;
+// Steps 7 and 8: the GetData() calls.
+const callAt = (k: number) => 0.2 + k * 1.05;
+
+// ---------- Layouts ----------
+type P = [number, number];
+interface Lay {
+  key: string;
+  W: number;
+  H: number;
+  X0: number;
+  K: number;
+  r: number; // dot radius
+  bw: number; // width of an entry box
+}
+const wide: Lay = { key: 'w', W: 640, H: 324, X0: 30, K: 0.96, r: 4.5, bw: 16 };
+const narrow: Lay = { key: 'n', W: 340, H: 324, X0: 14, K: 0.52, r: 3.9, bw: 12 };
+const f1 = (n: number) => Math.round(n * 10) / 10;
+// Rows (y). The digis of even and odd events have their own row in each lane, so that close digis do not overlap.
+const Y = {
+  beamLbl: 17,
+  beamLine: 22,
+  evLbl: 33,
+  evTop: 40,
+  axis: 58,
+  tickLbl: 74,
+  d1: [92, 106],
+  lane2: 134,
+  boxTop: 141,
+  boxH: 42,
+  slot0: 152,
+  slotDy: 12,
+  entLbl: 197,
+  lastLbl: 209,
+  lane3: 224,
+  winTop: 231,
+  winH: 32,
+  ring: [242, 254],
+  out: [280, 292],
+  bandTop: 268,
+  bandBot: 299,
+  stopLbl: 247,
+  br: 303,
+  brLbl: 316,
+};
+const evColor = (ev: number) => `c${ev % 3}`;
+const T_LAST = 575; // place of the entry of LastFill() on the axis
+const lays = [wide, narrow].map((L) => {
+  const x = (t: number) => f1(L.X0 + t * L.K);
+  const xe = (k: number) => (k < N ? x(evs[k].t) : x(T_LAST));
+  const row = (lane: number[], d: Digi) => lane[d.ev % 2];
+  const slotY = (d: Digi) => Y.slot0 + d.slot * Y.slotDy;
+  const px = (n: number) => `${f1(n)}px`;
+  return {
+    L,
+    x,
+    xe,
+    ticks: range(0, T_END / 100 + 1).map((k) => k * 100),
+    d1: digis.map((d) => ({
+      d,
+      cx: x(d.ts),
+      cy: row(Y.d1, d),
+      style:
+        `--fx:${px(x(evs[d.ev].t) - x(d.ts))};--fy:${px(Y.axis - row(Y.d1, d))};--d:${sec(flyDelay(d.ev))};--dw:${sec(slot(d.entry) + 0.12)}` +
+        (pair.includes(d) ? `;--dh:${sec(pairAt(pair.indexOf(d)))}` : ''),
+    })),
+    d2: digis.map((d) => ({
+      d,
+      cx: xe(d.entry),
+      cy: slotY(d),
+      style: `--fx:${px(x(d.ts) - xe(d.entry))};--fy:${px(row(Y.d1, d) - slotY(d))};--d:${sec(slot(d.entry) + 0.12)}`,
+    })),
+    d3: digis.map((d) => ({
+      d,
+      cx: x(d.ts),
+      cy: row(Y.out, d),
+      outer: `--ox:${px(xe(d.entry) - x(d.ts))};--oy:${px(slotY(d) - row(Y.ring, d))};--d:${sec(stageAt(stageOf[d.entry]))}`,
+      inner: `--iy:${px(row(Y.ring, d) - row(Y.out, d))};--d:${sec(stageAt(stageOf[d.sEntry]) + 0.6)}`,
+    })),
+    slides: range(1, nStages + 1).map((s) => ({
+      s,
+      last: s === nStages,
+      style: `--dx:${px((lbEnd[s] - lbEnd[s - 1]) * L.K)};--d:${sec(stageAt(s) + 0.38)};--df:${sec(stageAt(s) + 0.65)}`,
+    })),
+  };
+});
+
+// One id for each instance, so that two explainers on one page do not share the pattern.
+const uid = 'tb' + Math.random().toString(36).slice(2, 8);
+const label =
+  'Six events on a time axis from 0 to 600 ns, with a beam pause from 250 to 400 ns. Each event makes digis with time stamps, and the digis of neighboring events overlap. A FairWriteoutBuffer writes the digis into the entries of FairTestDetectorDigi at the times of later events, not in time order. A FairRingSorter sorts them by time stamp into FairTestDetectorSortedDigi. GetData() reads them in time windows: up to a stop time with StopTime, or up to a time gap with TimeGap.';
+---
+
+<Explainer title="Six events on one time axis" meta="Tutorial3 · time-based" steps={steps}>
+  <div class="tb-box">
+    <svg class="tb" data-stage role="img" aria-label={label}>
+      <defs>
+        <pattern id={`${uid}-hatch`} width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="7" class="hatch"></line>
+        </pattern>
+      </defs>
+      {
+        lays.map(({ L, x, xe, ticks, d1, d2, d3, slides }) => (
+          <svg class={`lay lay-${L.key}`} viewBox={`0 0 ${L.W} ${L.H}`} width="100%" height="100%">
+            {/* Beam time and gap time (step 2) */}
+            <g class="beam">
+              <rect class="gapband" fill={`url(#${uid}-hatch)`} x={x(BEAM)} y={Y.beamLine} width={f1((GAP * L.K))} height={L.H - Y.beamLine - 4} />
+              <path class="bl" d={`M${x(0)} ${Y.beamLine + 3} V${Y.beamLine} H${x(BEAM) - 2} V${Y.beamLine + 3} M${x(BEAM) + 2} ${Y.beamLine + 3} V${Y.beamLine} H${x(BEAM + GAP)} V${Y.beamLine + 3}`} />
+              <text class="t" x={x(BEAM / 2)} y={Y.beamLbl} text-anchor="middle">
+                beamTime
+              </text>
+              <text class="t" x={x(BEAM + GAP / 2)} y={Y.beamLbl} text-anchor="middle">
+                gapTime
+              </text>
+            </g>
+
+            {/* Grid and time axis */}
+            {ticks.map((t) => (
+              <line class="grid" x1={x(t)} y1={Y.tickLbl + 6} x2={x(t)} y2={Y.bandBot} />
+            ))}
+            <line class="axis" x1={x(0)} y1={Y.axis} x2={x(T_END)} y2={Y.axis} />
+            {ticks.map((t) => (
+              <>
+                <line class="axis" x1={x(t)} y1={Y.axis} x2={x(t)} y2={Y.axis + 4} />
+                <text class="t" x={t === 0 ? x(t) - 3 : x(t)} y={Y.tickLbl} text-anchor={t === 0 ? 'start' : 'middle'}>
+                  {t === 0 ? '0 ns' : t}
+                </text>
+              </>
+            ))}
+
+            {/* Lane 1: events and digis */}
+            <g class="ln1">
+              <g class="arcs">
+                {arcs.map((a) => (
+                  <path
+                    class={`arc s${a.step} ${evColor(a.ev)}`}
+                    d={`M${x(a.a)} ${Y.axis - 2} Q${f1((x(a.a) + x(a.b)) / 2)} ${Y.axis - 18} ${x(a.b)} ${Y.axis - 2}`}
+                    pathLength="1"
+                    style={`--d:${sec(a.d)}`}
+                  />
+                ))}
+              </g>
+              {ghosts.map((g) => (
+                <path
+                  class={`gh ${evColor(g.ev)}`}
+                  d={`M${x(g.t) - 4} ${Y.axis - 4} L${x(g.t) + 4} ${Y.axis + 4} M${x(g.t) + 4} ${Y.axis - 4} L${x(g.t) - 4} ${Y.axis + 4}`}
+                  style={`--d:${sec(g.d)}`}
+                />
+              ))}
+              {evs.map((e, ev) => (
+                <g class={`ev s${ev < nStep1 ? 1 : 2} ${evColor(ev)}`} style={`--d:${sec(evDelay[ev])}`}>
+                  <line x1={x(e.t)} y1={Y.evTop} x2={x(e.t)} y2={Y.axis} />
+                  <circle cx={x(e.t)} cy={Y.axis} r="2.6" />
+                  <text x={x(e.t)} y={Y.evLbl} text-anchor="middle">
+                    e{ev}
+                  </text>
+                </g>
+              ))}
+              {d1.map((p) => (
+                <circle class={`d1 ${evColor(p.d.ev)}${pair.includes(p.d) ? ' hl' : ''}`} cx={p.cx} cy={p.cy} r={L.r} style={p.style} />
+              ))}
+              <text class="t lbl1" x={L.W - 8} y={Y.d1[0] + 4} text-anchor="end">
+                digis
+              </text>
+            </g>
+
+            {/* Lane 2: the writeout buffer and the entries of FairTestDetectorDigi */}
+            <g class="ln2">
+              {/* The run reads event k (step 4). Before the lane label, so that the halo of the label hides the line. */}
+              {range(0, N).map((k) => (
+                <line class="cur" x1={xe(k)} y1={Y.evTop - 2} x2={xe(k)} y2={Y.boxTop + Y.boxH + 2} style={`--d:${sec(slot(k))};--T:${SLOT}s`} />
+              ))}
+              <text class="lane l2" x="8" y={Y.lane2}>
+                FairWriteoutBuffer → FairTestDetectorDigi
+              </text>
+              {range(0, N + 1).map((k) => (
+                <g class="ent" style={`--d:${sec(slot(k))}`}>
+                  <rect x={f1(xe(k) - L.bw / 2)} y={Y.boxTop} width={L.bw} height={Y.boxH} rx="2" />
+                  <text class="t" x={xe(k)} y={Y.entLbl} text-anchor="middle">
+                    {k}
+                  </text>
+                  {k === N && (
+                    <text class="t" x={L.W - 6} y={Y.lastLbl} text-anchor="end">
+                      LastFill()
+                    </text>
+                  )}
+                </g>
+              ))}
+              {d2.map((p) => (
+                <circle class={`d2 ${evColor(p.d.ev)}${pair.includes(p.d) ? ' hl' : ''}`} cx={p.cx} cy={p.cy} r={L.r} style={p.style} />
+              ))}
+              {/* Step 5: the two digis in the wrong order, with their time stamps */}
+              {pair.map((d, k) => (
+                <g class="inv" style={`--d:${sec(pairAt(k))}`}>
+                  <circle class="ring" cx={xe(d.entry)} cy={Y.slot0 + d.slot * Y.slotDy} r={L.r + 3} />
+                  <text class="tsl" x={f1(xe(d.entry) + L.bw / 2 + 5)} y={Y.slot0 + d.slot * Y.slotDy + 4}>
+                    {d.ts}
+                  </text>
+                </g>
+              ))}
+            </g>
+
+            {/* Lane 3: the ring sorter, the sorted branch and the GetData() calls */}
+            <g class="ln3">
+              <text class="lane l3a" x="8" y={Y.lane3}>
+                FairRingSorter → FairTestDetectorSortedDigi
+              </text>
+              <text class="lane l3b" x="8" y={Y.lane3}>
+                FairTestDetectorSortedDigi → GetData()
+              </text>
+              {/* GetData() with StopTime: one band for each call */}
+              {stopCalls.map((c, k) => (
+                <g class="st" style={`--d:${sec(callAt(k))}`}>
+                  <rect class="band" x={x(k === 0 ? 0 : stopTimes[k - 1])} y={Y.bandTop} width={f1((stopTimes[k] - (k === 0 ? 0 : stopTimes[k - 1])) * L.K)} height={Y.bandBot - Y.bandTop} />
+                  <line class="stop" x1={x(stopTimes[k])} y1={Y.winTop + 4} x2={x(stopTimes[k])} y2={Y.bandBot} />
+                  <text class="t lit" x={x(stopTimes[k]) - 5} y={Y.stopLbl} text-anchor="end">
+                    fTime = {stopTimes[k]}
+                  </text>
+                  <text class="t" x={x(stopTimes[k]) - 5} y={Y.stopLbl + 13} text-anchor="end">
+                    {c.length} digis
+                  </text>
+                </g>
+              ))}
+              {/* GetData() with TimeGap */}
+              {gapCalls.map((c, k) => (
+                <g class="tg" style={`--d:${sec(callAt(k))}`}>
+                  <rect class="band" x={f1(x(c[0].ts) - 9)} y={Y.bandTop} width={f1(x(c[c.length - 1].ts) - x(c[0].ts) + 18)} height={Y.bandBot - Y.bandTop} />
+                </g>
+              ))}
+              <g class="tg gapm" style={`--d:${sec(callAt(0))}`}>
+                <path class="garr" d={`M${f1(x(gapLo) + 9)} ${Y.stopLbl + 6} H${f1(x(gapHi) - 9)}`} />
+                <path class="gah" d={`M${f1(x(gapLo) + 15)} ${Y.stopLbl + 2} L${f1(x(gapLo) + 9)} ${Y.stopLbl + 6} L${f1(x(gapLo) + 15)} ${Y.stopLbl + 10} M${f1(x(gapHi) - 15)} ${Y.stopLbl + 2} L${f1(x(gapHi) - 9)} ${Y.stopLbl + 6} L${f1(x(gapHi) - 15)} ${Y.stopLbl + 10}`} />
+                <text class="t lit" x={f1((x(gapLo) + x(gapHi)) / 2)} y={Y.stopLbl - 2} text-anchor="middle">
+                  gap &gt; b
+                </text>
+              </g>
+
+              {/* The window of the ring: one nested group for each move */}
+              <g class="win">
+                {(() => {
+                  const inner = (
+                    <>
+                      <rect class="wbox" x={x(lbEnd[0])} y={Y.winTop} width={f1(WIN * L.K)} height={Y.winH} rx="2" />
+                      {range(1, CELLS).map((c) => (
+                        <line class="wcell" x1={x(lbEnd[0] + c * CELL)} y1={Y.winTop + 1} x2={x(lbEnd[0] + c * CELL)} y2={Y.winTop + Y.winH - 1} />
+                      ))}
+                    </>
+                  );
+                  return slides.reduceRight(
+                    (acc, s) => (
+                      <g class={`sl${s.last ? ' last' : ''}`} style={s.style}>
+                        {acc}
+                      </g>
+                    ),
+                    inner
+                  );
+                })()}
+              </g>
+
+              {/* Entries of the sorted branch. The bracket ends just outside the first and the last digi, so that the
+                  brackets of entries 4 and 5 do not touch in the narrow drawing. */}
+              {sorted.map((ds, k) =>
+                ds.length === 0 ? null : (
+                  <g class="br" style={`--d:${sec(stageAt(stageOf[k]) + 0.65)}`}>
+                    <path d={`M${f1(x(ds[0].ts) - L.r - 0.5)} ${Y.br - 4} V${Y.br} H${f1(x(ds[ds.length - 1].ts) + L.r + 0.5)} V${Y.br - 4}`} />
+                    <text class="t" x={f1((x(ds[0].ts) + x(ds[ds.length - 1].ts)) / 2)} y={Y.brLbl} text-anchor="middle">
+                      {k}
+                    </text>
+                  </g>
+                )
+              )}
+
+              {d3.map((p) => (
+                <g class="d3o" style={p.outer}>
+                  <g class="d3i" style={p.inner}>
+                    <circle class={evColor(p.d.ev)} cx={p.cx} cy={p.cy} r={L.r} />
+                  </g>
+                </g>
+              ))}
+            </g>
+          </svg>
+        ))
+      }
+    </svg>
+  </div>
+</Explainer>
+
+<style>
+  .tb-box {
+    container-type: inline-size;
+  }
+  .tb {
+    aspect-ratio: 640 / 324;
+  }
+  .lay-n {
+    display: none;
+  }
+  /* Below this width the text of the wide drawing would be smaller than 11 px. */
+  @container (max-width: 589.98px) {
+    .tb {
+      aspect-ratio: 340 / 324;
+      max-width: 470px;
+      margin-inline: auto;
+    }
+    .lay-w {
+      display: none;
+    }
+    .lay-n {
+      display: inline;
+    }
+  }
+
+  /* Colors of the events */
+  .c0 {
+    --c: var(--fr-saffron);
+  }
+  .c1 {
+    --c: var(--fr-sky-bright);
+  }
+  .c2 {
+    --c: var(--fr-mint);
+  }
+
+  /* Text. A halo in the color of the stage keeps the grid lines and the hatch away from the letters. */
+  .lay text {
+    paint-order: stroke;
+    stroke: var(--fr-stage);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .t {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+  }
+  .t.lit {
+    fill: var(--fr-stage-ink);
+    font-weight: 600;
+  }
+  .lane {
+    fill: var(--fr-stage-dim);
+    font-size: 12px;
+    font-weight: 600;
+    transition: fill 0.3s;
+  }
+  .tb.now4 .l2,
+  .tb.now5 .l2,
+  .tb.now6 .l3a,
+  .tb.r7 .l3b {
+    fill: var(--fr-stage-ink);
+  }
+  .l3b,
+  .tb.r7 .l3a {
+    display: none;
+  }
+  .tb.r7 .l3b {
+    display: inline;
+  }
+
+  /* Axis, grid, beam */
+  .axis {
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .grid {
+    stroke: var(--fr-stage-rule);
+    stroke-width: 1;
+  }
+  .hatch {
+    stroke: var(--fr-stage-cell);
+    stroke-width: 2.5;
+  }
+  .bl {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1;
+  }
+  .beam {
+    opacity: 0;
+    transition: opacity 0.5s;
+  }
+  .tb.r2 .beam {
+    opacity: 1;
+  }
+
+  /* Lane 1: arcs of the time gaps, rejected times, events and digis */
+  .arc {
+    fill: none;
+    stroke: var(--c);
+    stroke-width: 1.3;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    transition: stroke-dashoffset 0.35s ease-out;
+  }
+  .tb.now1 .arc.s1,
+  .tb.now2 .arc {
+    stroke-dashoffset: 0;
+  }
+  .tb.now1 .arc.s1,
+  .tb.now2 .arc.s2 {
+    transition-delay: var(--d);
+  }
+  .arcs {
+    transition: opacity 0.4s;
+  }
+  .tb.r3 .arcs {
+    opacity: 0;
+  }
+  .gh {
+    fill: none;
+    stroke: var(--c);
+    stroke-width: 1.6;
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .tb.now2 .gh {
+    opacity: 0.85;
+    transition-delay: var(--d);
+  }
+  .ev {
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .tb.r1 .ev.s1,
+  .tb.r2 .ev.s2 {
+    opacity: 1;
+  }
+  .tb.now1 .ev.s1,
+  .tb.now2 .ev.s2 {
+    transition-delay: var(--d);
+  }
+  .ev line {
+    stroke: var(--c);
+    stroke-width: 1.6;
+  }
+  .ev circle {
+    fill: var(--c);
+  }
+  .ev text {
+    fill: var(--c);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .d1 {
+    fill: var(--c);
+    stroke: var(--c);
+    stroke-width: 1.3;
+    opacity: 0;
+    transform: translate(var(--fx), var(--fy));
+    transition:
+      opacity 0.3s,
+      transform 0.55s cubic-bezier(0.3, 0, 0.2, 1),
+      fill-opacity 0.3s;
+  }
+  .tb.r3 .d1 {
+    opacity: 1;
+    transform: none;
+  }
+  .tb.now3 .d1 {
+    transition-delay: var(--d);
+  }
+  /* A digi that went into an entry stays as an outline at its time stamp. */
+  .tb.r4 .d1 {
+    fill-opacity: 0.12;
+  }
+  .tb.now4 .d1 {
+    transition-delay: var(--dw);
+  }
+  .lbl1 {
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .tb.r3 .lbl1 {
+    opacity: 1;
+  }
+
+  /* Lane 2: the run reads the events (cursor), the buffer fills the entries */
+  .cur {
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.2;
+    stroke-dasharray: 3 3;
+    opacity: 0;
+  }
+  .tb.now4 .cur {
+    animation: tb-cur var(--T) linear var(--d) both;
+  }
+  @keyframes tb-cur {
+    0% {
+      opacity: 0;
+    }
+    10%,
+    80% {
+      opacity: 0.9;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  .ent {
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .tb.r4 .ent {
+    opacity: 1;
+  }
+  .tb.now4 .ent {
+    transition-delay: var(--d);
+  }
+  .ent rect {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+  .d2 {
+    fill: var(--c);
+    opacity: 0;
+    transform: translate(var(--fx), var(--fy));
+    transition:
+      opacity 0.2s,
+      transform 0.4s cubic-bezier(0.45, 0, 0.2, 1);
+  }
+  .tb.r4 .d2 {
+    opacity: 1;
+    transform: none;
+  }
+  .tb.now4 .d2 {
+    transition-delay: var(--d);
+  }
+  .tb.now5 .d2:not(.hl) {
+    opacity: 0.3;
+  }
+  .inv {
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .tb.now5 .inv {
+    opacity: 1;
+    transition-delay: var(--d);
+  }
+  /* The same two digis at their time stamps: the order on the axis is the other one. */
+  .tb.now5 .d1.hl {
+    fill-opacity: 1;
+    transition-delay: var(--dh);
+  }
+  .ring {
+    fill: none;
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.4;
+  }
+  .tsl {
+    fill: var(--fr-stage-ink);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  /* Lanes 1 and 2 belong to the digitization: dim in the reconstruction. */
+  .ln1,
+  .ln2 {
+    transition: opacity 0.5s;
+  }
+  .tb.r7 .ln1,
+  .tb.r7 .ln2 {
+    opacity: 0.28;
+  }
+
+  /* Lane 3: the window of the ring sorter */
+  .win {
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .tb.now6 .win {
+    opacity: 1;
+  }
+  .wbox {
+    fill: var(--fr-stage-2);
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.2;
+  }
+  .wcell {
+    stroke: var(--fr-stage-line);
+    stroke-width: 1;
+  }
+  .sl {
+    transition:
+      transform 0.35s cubic-bezier(0.45, 0, 0.2, 1),
+      opacity 0.4s;
+  }
+  .tb.now6 .sl {
+    transform: translateX(var(--dx));
+    transition-delay: var(--d), var(--df);
+  }
+  /* After WriteOutAll() the ring is empty. */
+  .tb.now6 .sl.last {
+    opacity: 0.3;
+  }
+
+  /* Lane 3: the digis go into the ring, then out into the sorted branch. */
+  .d3o {
+    opacity: 0;
+    transform: translate(var(--ox), var(--oy));
+    transition:
+      opacity 0.2s,
+      transform 0.45s cubic-bezier(0.45, 0, 0.2, 1);
+  }
+  .tb.r6 .d3o {
+    opacity: 1;
+    transform: none;
+  }
+  .tb.now6 .d3o {
+    transition-delay: var(--d);
+  }
+  .d3i {
+    transform: translate(0, var(--iy));
+    transition: transform 0.3s cubic-bezier(0.45, 0, 0.2, 1);
+  }
+  .tb.r6 .d3i {
+    transform: none;
+  }
+  .tb.now6 .d3i {
+    transition-delay: var(--d);
+  }
+  .d3o circle {
+    fill: var(--c);
+  }
+  .br {
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .tb.r6 .br {
+    opacity: 1;
+  }
+  .tb.now6 .br {
+    transition-delay: var(--d);
+  }
+  .br path {
+    fill: none;
+    stroke: var(--fr-stage-line);
+    stroke-width: 1.2;
+  }
+
+  /* Lane 3: the GetData() calls */
+  .st,
+  .tg {
+    opacity: 0;
+    transition: opacity 0.35s;
+  }
+  .tb.now7 .st,
+  .tb.now8 .tg {
+    opacity: 1;
+    transition-delay: var(--d);
+  }
+  .band {
+    fill: color-mix(in srgb, var(--fr-stage-ink) 9%, transparent);
+    stroke: var(--fr-stage-line);
+    stroke-width: 1;
+  }
+  .stop {
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.3;
+  }
+  .garr,
+  .gah {
+    fill: none;
+    stroke: var(--fr-stage-ink);
+    stroke-width: 1.3;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tb * {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+</style>

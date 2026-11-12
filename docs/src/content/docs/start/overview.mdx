@@ -1,0 +1,190 @@
+---
+title: 'What FairRoot is'
+description: 'FairRoot is a C++ framework on ROOT and the Virtual Monte Carlo for simulation, reconstruction and analysis. This page shows its parts and the path of one event.'
+sidebar:
+  order: 1
+code: [fairroot/base/steer/FairRun.h, fairroot/base/steer/FairRunSim.h, fairroot/base/steer/FairRunAna.h, fairroot/base/steer/FairTask.h, fairroot/base/steer/FairRootManager.h, fairroot/base/sim/FairMCApplication.h, examples/simulation/Tutorial4/macros/run_tutorial4.C, examples/simulation/Tutorial4/macros/run_reco.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+FairRoot is a C++ framework for the simulation, reconstruction and analysis of particle physics
+experiments. It is built on [ROOT](https://root.cern/) and the
+[Virtual Monte Carlo (VMC)](https://vmc-project.github.io/). An experiment writes its detectors,
+event generators and reconstruction steps as subclasses of FairRoot base classes. FairRoot connects
+them to the transport engine, to the ROOT files and to the parameters.
+
+## Two jobs: simulation and reconstruction
+
+FairRoot has one run class for each job. Both classes derive from [`FairRun`](/api/FairRun/). Only
+one run can exist at a time in a thread
+([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L55-L60)).
+
+| Job | Run class | Input | What happens | Output |
+| --- | --- | --- | --- | --- |
+| Simulation | [`FairRunSim`](/api/FairRunSim/) | A primary generator | A transport engine moves the particles through the geometry. The detectors make MC points. | MC tracks, MC points and the MC event header in a ROOT file |
+| Reconstruction and analysis | [`FairRunAna`](/api/FairRunAna/) | Branches from a source, usually the output file of a simulation | Tasks read branches and make new branches. | The new branches in a ROOT file |
+
+A third run class, [`FairRunOnline`](/api/FairRunOnline/), processes data from a data acquisition
+system. It is in the `Online` library, see [Online processing and FairMQ](/online/overview/).
+
+### A simulation run
+
+A simulation macro makes the run, gives it the modules, the detectors and a primary generator, and
+then calls `Init()` and `Run()`. Tutorial 4 starts like this:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_tutorial4.C" start="FairRunSim run{};" end="run.SetSink(" title="examples/simulation/Tutorial4/macros/run_tutorial4.C" />
+
+Then the macro adds the cave and the detector with
+[`AddModule()`](/api/FairRunSim/#AddModule), and a primary generator with
+[`SetGenerator()`](/api/FairRunSim/#SetGenerator). At the end it calls
+[`Init()`](/api/FairRunSim/#Init) and [`Run()`](/api/FairRunSim/#Run)
+([run_tutorial4.C](/source/examples/simulation/Tutorial4/macros/run_tutorial4.C/#L87-L150)).
+[Write a simulation macro](/simulation/run-macro/) explains each step.
+
+The name of the run selects the transport engine, for example `TGeant3` or `TGeant4`. The default
+engine configuration uses this name to find the configuration macro of the engine
+([`FairGenericVMCConfig::Setup()`](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L54-L120)).
+The code of a detector does not change with the engine, because it gets the data of each step from
+the VMC interface `TVirtualMC`
+([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L155-L211)).
+The tests run the same macros with each engine in the list `mcEngine_list`
+([examples/CMakeLists.txt](/repo/examples/CMakeLists.txt#L12-L17)). See
+[Transport engines and their configuration](/simulation/engines/).
+
+### A reconstruction run
+
+A reconstruction macro makes a `FairRunAna`, gives it a source and a sink, and adds tasks. This is
+the reconstruction of Tutorial 4:
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_reco.C" start="FairRunAna* fRun = new FairRunAna();" end="fRun->SetSink(" title="examples/simulation/Tutorial4/macros/run_reco.C" />
+
+<Snippet file="examples/simulation/Tutorial4/macros/run_reco.C" start="FairTutorialDet4HitProducerIdealMisalign* hitProducer" end="fRun->AddTask(fitter);" title="examples/simulation/Tutorial4/macros/run_reco.C" />
+
+[`Init()`](/api/FairRunAna/#Init) calls `Init()` of each task. [`Run()`](/api/FairRunAna/#Run)
+reads one event after the other from the source and calls the tasks for each event
+([run_reco.C](/source/examples/simulation/Tutorial4/macros/run_reco.C/#L94-L97)).
+[Write a reconstruction macro](/reconstruction/run-macro/) explains each step.
+
+## The parts of FairRoot
+
+| Part | Classes | What it does |
+| --- | --- | --- |
+| [Run](/concepts/runs/) | [`FairRun`](/api/FairRun/), [`FairRunSim`](/api/FairRunSim/), [`FairRunAna`](/api/FairRunAna/) | Steers one job. It holds the tasks, the source, the sink and the event header, and it starts the event loop. |
+| [Task](/concepts/tasks/) | [`FairTask`](/api/FairTask/) | One processing step. `Init()` gets the input branches and registers the output branches. `Exec()` processes one event. |
+| [I/O manager](/concepts/io/) | [`FairRootManager`](/api/FairRootManager/) | Holds the branches of the current event. It reads them from the source, gives them to the tasks by name and writes the persistent ones to the sink. |
+| [Source](/reconstruction/sources/) | [`FairSource`](/api/FairSource/), for example [`FairFileSource`](/api/FairFileSource/) and [`FairMixedSource`](/api/FairMixedSource/) | Reads the events into the I/O manager. |
+| [Sink](/reconstruction/output/) | [`FairSink`](/api/FairSink/), for example [`FairRootFileSink`](/api/FairRootFileSink/) | Writes the output tree and the file header. |
+| [Runtime database](/concepts/parameters/) | [`FairRuntimeDb`](/api/FairRuntimeDb/) | Holds the parameter containers ([`FairParSet`](/api/FairParSet/)). It reads them for the current run ID and writes them to the parameter output. |
+| [Container factory](/concepts/parameters/#container-factories) | [`FairContFact`](/api/FairContFact/) | Makes the parameter containers of one library when the runtime database asks for them. |
+| [MC application](/simulation/overview/) | [`FairMCApplication`](/api/FairMCApplication/) | The VMC application of FairRoot. The transport engine calls it to build the geometry, to get the primaries, at each step and at the end of each event. |
+| [Module and detector](/simulation/detectors/#modules-and-detectors) | [`FairModule`](/api/FairModule/), [`FairDetector`](/api/FairDetector/) | A module puts its volumes into the geometry. A detector is a module with sensitive volumes; its `ProcessHits()` makes the MC points. |
+| [Primary generator](/simulation/generators/) | [`FairPrimaryGenerator`](/api/FairPrimaryGenerator/), [`FairGenerator`](/api/FairGenerator/) | Calls each generator once for each event, and gives the primary particles to the stack. |
+| [Stack](/simulation/stack/) | [`FairGenericStack`](/api/FairGenericStack/) | Holds the particles that the engine transports, and makes the MC tracks. |
+| [Field](/simulation/fields/) | [`FairField`](/api/FairField/) | The magnetic field that the transport engine uses. |
+| [Event header](/concepts/event-headers/) | [`FairEventHeader`](/api/FairEventHeader/), [`FairMCEventHeader`](/api/FairMCEventHeader/) | `FairEventHeader` has the run ID, the event time, the input file ID and the MC entry number of the current event. `FairMCEventHeader` has the run ID, the event ID, the vertex and the number of primaries of a simulated event. |
+| [Data classes](/concepts/data-classes/) | [`FairMCPoint`](/api/FairMCPoint/), [`FairHit`](/api/FairHit/) | Base classes for MC points and hits. |
+| [Logger](/tools/logging/) | [`FairLogger`](/api/FairLogger/) and the `LOG()` macro | Log messages. `FairLogger.h` includes the header `<fairlogger/Logger.h>` of the [FairLogger](https://github.com/FairRootGroup/FairLogger) library, which defines `LOG()`. |
+
+The name of each part links to the page that explains it. The page
+[Architecture](/concepts/architecture/) shows how these parts find each other and who owns them.
+
+## The life of an event
+
+Tutorial 4 has one detector, a hit producer and a straight-line track fit. One event goes this way
+through FairRoot.
+
+In the simulation:
+
+1. The transport engine calls
+   [`FairMCApplication::GeneratePrimaries()`](/api/FairMCApplication/#GeneratePrimaries). This
+   calls [`FairPrimaryGenerator::GenerateEvent()`](/api/FairPrimaryGenerator/#GenerateEvent), which
+   makes the vertex and calls [`ReadEvent()`](/api/FairGenerator/#ReadEvent) of each generator
+   ([FairPrimaryGenerator.cxx](/source/fairroot/base/sim/FairPrimaryGenerator.cxx/#L224-L285)).
+2. Each generator gives its particles to
+   [`AddTrack()`](/api/FairPrimaryGenerator/#AddTrack). `AddTrack()` puts each particle on the stack
+   with [`PushTrack()`](/api/FairGenericStack/#PushTrack).
+3. The engine transports the particles. At each step,
+   [`FairMCApplication::Stepping()`](/api/FairMCApplication/#Stepping) checks if the current volume
+   is a sensitive volume. If it is, it calls [`ProcessHits()`](/api/FairDetector/#ProcessHits) of
+   the detector that owns the volume
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L513-L558)).
+4. `FairTutorialDet4::ProcessHits()` adds up the energy loss of the track in the volume. When the
+   track leaves the volume or stops in it, it adds an MC point to its array, if the energy loss is
+   not zero. The detector registered this array as the branch `TutorialDetPoint`
+   ([FairTutorialDet4.cxx](/source/examples/simulation/Tutorial4/src/mc/FairTutorialDet4.cxx/#L215-L224)).
+5. At the end of the event, [`FairMCApplication::FinishEvent()`](/api/FairMCApplication/#FinishEvent)
+   tells the stack to make the MC tracks, runs the tasks of the simulation, and calls
+   [`FairRootManager::Fill()`](/api/FairRootManager/#Fill). The sink writes the event to the
+   output tree. Then `FinishEvent()` calls [`EndOfEvent()`](/api/FairDetector/#EndOfEvent) of each
+   detector, and Tutorial 4 clears its array there
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L645-L671)).
+
+In the reconstruction:
+
+6. [`FairRunAna::Run()`](/api/FairRunAna/#Run) calls
+   [`FairRootManager::ReadEvent()`](/api/FairRootManager/#ReadEvent). The source reads the event
+   from the simulation file.
+7. The task `FairTutorialDet4HitProducerIdealMisalign` reads the branch `TutorialDetPoint` and
+   makes the branch `TutorialDetHit`
+   ([FairTutorialDet4HitProducerIdealMisalign.cxx](/source/examples/simulation/Tutorial4/src/reco/FairTutorialDet4HitProducerIdealMisalign.cxx/#L85-L94)).
+8. The task `FairTutorialDet4StraightLineFitter` reads `TutorialDetHit`, fits a straight line, and
+   makes the branch `TutorialDetTrack`.
+9. `FairRunAna` calls `Fill()`, and the sink writes the new branches to the output tree
+   ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L313-L329)).
+
+A task finds its input by the name of the branch. It does not know which task or detector made the
+branch. This is the `Init()` of the fitter:
+
+<Snippet file="examples/simulation/Tutorial4/src/reco/FairTutorialDet4StraightLineFitter.cxx" start="InitStatus FairTutorialDet4StraightLineFitter::Init()" />
+
+[`GetObject()`](/api/FairRootManager/#GetObject) returns the array of a branch.
+[`Register()`](/api/FairRootManager/#Register-2) adds a new branch. With the last argument `kTRUE`,
+the sink writes the branch to the output file
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L164-L171)).
+
+### The output tree cbmsim
+
+The sink `FairRootFileSink` writes the events into a ROOT tree with the default name `cbmsim`
+([`FairRootManager::GetTreeName()`](/api/FairRootManager/#GetTreeName)), and `FairFileSource`
+reads a tree with the same name. Next to the tree, the sink writes a ROOT folder with the default
+name `cbmroot` in a simulation and `cbmout` in the other runs. Macros that read the output often
+write the tree name directly, for example `TChain chain("cbmsim");` in
+[run_tutorial1.C](/source/examples/simulation/Tutorial1/macros/run_tutorial1.C/#L170).
+[Tree and folder names](/concepts/io/#tree-and-folder-names) shows how to change both names.
+
+## What is not in FairRoot
+
+FairRoot gives the framework, not a complete experiment. These parts come from other places:
+
+- **The software of your experiment.** The geometry, the detectors, the digitizers and the
+  reconstruction tasks are in your own project. The [templates](/repo/templates/) show the layout of
+  such a project, see [Start a project from a template](/start/new-project/).
+- **A stack, passive modules and engine configurations.** The FairRoot libraries have only the base
+  class `FairGenericStack`. The examples share these parts, and your project copies them or has
+  its own:
+  - the stack `FairStack` and the MC track `FairMCTrack`
+    ([examples/common/mcstack](/repo/examples/common/mcstack/))
+  - the cave, the pipe, the magnet and a constant field
+    ([examples/common/passive](/repo/examples/common/passive/))
+  - the engine configuration files ([examples/common/gconfig](/repo/examples/common/gconfig/))
+- **The external software.** ROOT, VMC, Geant3, Geant4 and the other dependencies are not in
+  FairRoot. [FairSoft](https://github.com/FairRootGroup/FairSoft) installs them, see
+  [Install FairRoot](/start/install/).
+- **FairMQ.** [FairMQ](https://fairrootgroup.github.io/FairMQ/) is a separate project for
+  distributed processing with messages. The FairRoot libraries `FairMQ`, `BaseMQ` and `ParMQ` use
+  it, see [Online processing and FairMQ](/online/overview/).
+- **Logging and CMake helpers.** The `LOG()` macro comes from
+  [FairLogger](https://github.com/FairRootGroup/FairLogger). The build uses
+  [FairCMakeModules](https://fairrootgroup.github.io/FairCMakeModules/latest/).
+
+## Where to go next
+
+- [Install FairRoot](/start/install/): get the dependencies and build FairRoot.
+- [Your first simulation](/start/first-simulation/): run a simulation macro and look at the output
+  file.
+- [Your first task](/start/first-task/): write a task that reads a branch and makes a new one.
+- [Start a project from a template](/start/new-project/): make the project of your experiment.
+- [Architecture](/concepts/architecture/): the libraries, the central objects and the data path.
+- [Tutorial 4](/examples/tutorial4/): the example of this page.
+- [Glossary](/reference/glossary/): the terms of FairRoot and the page that explains each one.

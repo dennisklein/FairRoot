@@ -1,0 +1,148 @@
+---
+// Not found. The old site had Doxygen pages under /FairRoot/html/, for example
+// /FairRoot/html/d1/d2b/classFairTask.html. A script sends these URLs to the new API, source and
+// docs pages.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { model, base } from '../lib/model.mjs';
+
+const m = model();
+// Doxygen compound id (without the kind prefix) → new URL, without the base.
+const types: Record<string, string> = {};
+const strip = (u: string) => (u.startsWith(base + '/') ? u.slice(base.length) : u);
+for (const t of m.types()) types[t.id.replace(/^(class|struct|union)/, '')] = strip(t.url);
+for (const ns of m.namespaces()) types['ns:' + ns.id.replace(/^namespace/, '')] = strip(ns.url);
+for (const { e } of m.namespaceEnums()) types[e.qualified.replace(/::/g, '_1_1')] = strip(e.page);
+// Doxygen file id → source page.
+const files: Record<string, string> = {};
+for (const f of m.files.values()) if (m.sourceFiles.includes(f.path)) files[f.id] = `/source/${f.path}/`;
+// The old README pages (md_… and …README_8md) → the docs page that replaces them. The first match wins.
+const readmes: [string, string][] = [
+  ['Tutorial1', '/examples/tutorial1/'],
+  ['Tutorial2', '/examples/tutorial2/'],
+  ['Tutorial4', '/examples/tutorial4/'],
+  ['Tutorial3', '/examples/tutorial3/'],
+  ['MbsTutorial', '/examples/mbs-tutorial/'],
+  ['MQ_Lmd', '/examples/mq-lmd/'],
+  ['MQ_parameters', '/examples/mq-parameters/'],
+  ['pixelAlternative', '/examples/mq-pixel-alternative/'],
+  ['pixelDetector', '/examples/mq-pixel-detector/'],
+  ['pixelSimSplit', '/examples/mq-pixel-sim-split/'],
+  ['serialization', '/examples/mq-serialization/'],
+  ['histogramServer', '/examples/mq-histogram-server/'],
+  ['examples_MQ', '/online/overview/'],
+  ['examples_common', '/examples/common/'],
+  ['examples', '/examples/overview/'],
+  ['MCStepLogger', '/tools/step-logger/'],
+  ['mcsteplogger', '/tools/step-logger/'],
+  ['MbsAPI', '/online/mbs/'],
+  ['mbsapi', '/online/mbs/'],
+  ['base_MQ', '/online/overview/'],
+  ['basemq', '/online/overview/'],
+  ['parmq', '/online/parameters/'],
+  ['online', '/online/run-online/'],
+  ['alignment', '/reconstruction/alignment/'],
+  ['datamatch', '/reconstruction/mc-matching/'],
+  ['eventdisplay', '/reconstruction/event-display/'],
+  ['geane', '/reconstruction/tracks/'],
+  ['trackbase', '/reconstruction/tracks/'],
+  ['generators', '/simulation/generators/'],
+  ['geobase', '/simulation/geometry/'],
+  ['parbase', '/concepts/parameters/'],
+  ['base_field', '/simulation/fields/'],
+  ['base_sim', '/simulation/overview/'],
+  ['base_source', '/reconstruction/sources/'],
+  ['base_steer', '/concepts/runs/'],
+  ['base_event', '/concepts/data-classes/'],
+  ['base', '/concepts/architecture/'],
+  ['fairtools', '/tools/logging/'],
+  ['tools', '/tools/logging/'],
+  ['cmake', '/reference/cmake/'],
+  ['templates', '/tools/templates/'],
+  ['doxygen', '/'],
+];
+const data = JSON.stringify({ t: types, f: files, r: readmes });
+---
+
+<StarlightPage frontmatter={{ title: 'Page not found', description: 'This page does not exist.', pagefind: false, editUrl: false, lastUpdated: false, eyebrow: 'Error 404' }}>
+  <div data-moved hidden>
+    <p>This page moved. Your browser goes to the new page now.</p>
+    <p><a data-moved-link href="#">Go to the new page</a></p>
+  </div>
+  <div data-missing>
+    <p>The page does not exist. The documentation has a new structure: the old Doxygen pages are now the <a href={`${base}/api/`}>API reference</a> and the <a href={`${base}/source/`}>source browser</a>.</p>
+    <p>Use the search at the top of the page, or start from one of these pages:</p>
+    <ul>
+      <li><a href={`${base}/`}>Home</a></li>
+      <li><a href={`${base}/start/overview/`}>What FairRoot is</a></li>
+      <li><a href={`${base}/examples/overview/`}>Examples</a></li>
+      <li><a href={`${base}/api/`}>API reference</a></li>
+    </ul>
+  </div>
+  <script type="application/json" id="fr-moved" set:html={data} />
+</StarlightPage>
+
+<script>
+  // Old URLs: /FairRoot/html/index.html, /FairRoot/html/d1/d2b/classFairTask.html,
+  // /FairRoot/html/d3/d4e/FairTask_8h_source.html, /FairRoot/html/md__tmp_…_README.html …
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+  const { t, f, r } = JSON.parse(document.getElementById('fr-moved')!.textContent!) as {
+    t: Record<string, string>;
+    f: Record<string, string>;
+    r: [string, string][];
+  };
+  // The file id that shares the most trailing path parts with the old id:
+  // examples_2common_2gconfig_2g3Config_8C → common_2gconfig_2g3Config_8C.
+  const fileByName = (id: string) => {
+    const want = id.split('_2');
+    let best: string | null = null;
+    let score = 0;
+    for (const k of Object.keys(f)) {
+      const have = k.split('_2');
+      let n = 0;
+      while (n < have.length && n < want.length && have[have.length - 1 - n] === want[want.length - 1 - n]) n++;
+      if (n > score) {
+        score = n;
+        best = k;
+      }
+    }
+    return best ? f[best] : null;
+  };
+  const readme = (id: string) => r.find(([key]) => new RegExp(`(^|_)${key}(_|$)`).test(id))?.[1] ?? '/';
+  const target = (() => {
+    const rel = decodeURIComponent(location.pathname.slice(base.length)).replace(/^\/+/, '');
+    const m = /^html(?:\/(?:d[0-9a-f]\/d[0-9a-f]{2}\/)?(.*))?$/.exec(rel);
+    if (!m) return null;
+    const page = (m[1] ?? '').replace(/\.html$/, '');
+    if (page === '' || page === 'index' || page === 'pages') return '/';
+    if (/^(annotated|classes|hierarchy|inherits|namespaces|namespacemembers.*|functions.*|variables.*|globals.*|graph_legend)$/.test(page)) return '/api/';
+    if (page === 'files' || page.startsWith('dir_')) return '/source/';
+    if (page === 'examples' || /-example$/.test(page)) return '/examples/overview/';
+    if (page.startsWith('md_')) return readme(page.replace(/^md_+/, ''));
+    if (/README_8md(?:_source)?$/.test(page)) return readme(page.replace(/_2/g, '_').replace(/_?README_8md(?:_source)?$/, ''));
+    const type = /^(?:class|struct|union)(.+?)(?:-members|__coll__graph|__inherit__graph)?$/.exec(page);
+    if (type) {
+      const id = type[1];
+      if (t[id]) return t[id];
+      // A nested type that is gone: go to its parent.
+      const parts = id.split('_1_1');
+      while (parts.length > 1) {
+        parts.pop();
+        const p = parts.join('_1_1');
+        if (t[p]) return t[p];
+      }
+      return '/api/';
+    }
+    const ns = /^namespace(.+)$/.exec(page);
+    if (ns) return t['ns:' + ns[1]] ?? '/api/';
+    const file = /^(.+?)(?:_source|__incl|__dep__incl)?$/.exec(page)![1];
+    return f[file] ?? fileByName(file) ?? '/source/';
+  })();
+  if (target) {
+    // The anchors of the Doxygen pages do not exist on the new pages.
+    const url = base + target;
+    document.querySelector<HTMLElement>('[data-moved]')!.hidden = false;
+    document.querySelector<HTMLElement>('[data-missing]')!.hidden = true;
+    document.querySelector<HTMLAnchorElement>('[data-moved-link]')!.href = url;
+    location.replace(url);
+  }
+</script>

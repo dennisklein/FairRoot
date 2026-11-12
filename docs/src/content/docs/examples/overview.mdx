@@ -1,0 +1,197 @@
+---
+title: 'Examples'
+description: 'The examples of FairRoot: simulation tutorials, advanced examples and FairMQ examples. What each one shows, when CMake builds it, where the build puts it, and how to run it.'
+sidebar:
+  order: 1
+code: [examples/simulation/Tutorial1/macros/run_tutorial1.C]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+The folder [`examples/`](/repo/examples/) holds complete applications of FairRoot: detector
+simulations, digitization and reconstruction, and FairMQ devices. Most examples have a library with
+their classes, ROOT macros or programs that use it, and CTest tests that run them. Read the example
+that is closest to your task. For a new project, start from a [template](/tools/templates/).
+
+## The examples
+
+The column **Tests** gives the names of the CTest tests. `…` stands for the transport engine or for
+another suffix. [Tests](/tools/testing/) tells how these tests work.
+
+### Simulation
+
+| Example | Folder | What it shows | Tests |
+| --- | --- | --- | --- |
+| [Tutorial 1](/examples/tutorial1/) | [`simulation/Tutorial1/`](/repo/examples/simulation/Tutorial1/) | A simple detector with an ASCII geometry and the box generator. Variants with Pythia 6 or Pythia 8 as decayer, with UrQMD input, with dose meshes, and with fast simulation. The program `tut1` runs the simulation with command line options. | `ex_sim_tutorial1_…`, `ExSimulation1::…` |
+| [Tutorial 2](/examples/tutorial2/) | [`simulation/Tutorial2/`](/repo/examples/simulation/Tutorial2/) | A digitizer task that gets its parameters from an ASCII file, the random seed in the parameter file, custom data between tasks, and the mixing of signal and background events | `ex_sim_tutorial2…`, `ExSimulation2::…` |
+| [Tutorial 4](/examples/tutorial4/) | [`simulation/Tutorial4/`](/repo/examples/simulation/Tutorial4/) | A geometry from a ROOT file, misalignment, a straight-line fit of the hits, and the input for Millepede-II | `ex_sim_tutorial4_…`, `ExSimulation4::…` |
+| [Rutherford experiment](/examples/rutherford/) | [`simulation/rutherford/`](/repo/examples/simulation/rutherford/) | Alpha particles on a gold foil, stored trajectories for the event display, and a radiation length scan | `ex_sim_rutherford_…`, `ex_sim_run_rad_…`, `ExRutherford::…` |
+
+### Advanced
+
+| Example | Folder | What it shows | Tests |
+| --- | --- | --- | --- |
+| [Tutorial 3](/examples/tutorial3/) | [`advanced/Tutorial3/`](/repo/examples/advanced/Tutorial3/) | Simulation, digitization and reconstruction, event-based and time-based. FairMQ devices that run the reconstruction task with five serialization formats. | `ex_tutorial3_…`, `ExTestDetector::…` |
+| [Propagator](/examples/propagator/) | [`advanced/propagator/`](/repo/examples/advanced/propagator/) | Track propagation in a constant magnetic field with `FairRKPropagator`, the residuals to the MC truth, and simple hits and tracks for the event display | `runPropagatorMC`, `runPropagator`, `runPropagatorPull`, `ExPropagator::…` |
+| [MBS tutorial](/examples/mbs-tutorial/) | [`advanced/MbsTutorial/`](/repo/examples/advanced/MbsTutorial/) | Unpacking of MBS data from an LMD file with `FairLmdSource` and `FairRunOnline` | `ex_unpack_mbs` |
+
+### FairMQ
+
+| Example | Folder | What it shows | Tests |
+| --- | --- | --- | --- |
+| [Pixel detector](/examples/mq-pixel-detector/) | [`MQ/pixelDetector/`](/repo/examples/MQ/pixelDetector/) | Simulation and digitization with macros. Then hit finding in FairMQ devices that get their parameters from `parmq-server`. | `ex_pixel_…`, `ex_MQ_pixel_static`, `ex_MQ_pixel_simulation`, `ExPixel::…` |
+| [Pixel detector, alternative](/examples/mq-pixel-alternative/) | [`MQ/pixelAlternative/`](/repo/examples/MQ/pixelAlternative/) | The hit finding of the pixel detector with a binary payload instead of a `TClonesArray` | `ex_MQ_pixel_alt_static` |
+| [Split simulation](/examples/mq-pixel-sim-split/) | [`MQ/pixelSimSplit/`](/repo/examples/MQ/pixelSimSplit/) | The simulation in FairMQ devices: a primary generator, the transport, and a merger of the event chunks | `ex_MQ_pixel_split`, `ex_MQ_pixel_split_DDS` |
+| [Serialization](/examples/mq-serialization/) | [`MQ/serialization/`](/repo/examples/MQ/serialization/) | Data that FairMQ devices send with Boost or ROOT serialization | `ex_MQ_serialization` |
+| [Parameter server](/examples/mq-parameters/) | [`MQ/parameters/`](/repo/examples/MQ/parameters/) | A device that requests a parameter container from `parmq-server` | `ex_MQ_parameters` |
+| [Histogram server](/examples/mq-histogram-server/) | [`MQ/histogramServer/`](/repo/examples/MQ/histogramServer/) | Devices that send histograms to a server, which shows them with a ROOT `THttpServer` | none |
+| [LMD sampler and unpacker](/examples/mq-lmd/) | [`MQ/Lmd/`](/repo/examples/MQ/Lmd/) | An LMD file read and unpacked in FairMQ devices | none |
+
+Some tests exist only with optional software:
+
+- Tutorial 1: Pythia 6 or Pythia 8.
+- Tutorial 3: Flatbuffers or Protobuf. The PROOF test needs `BUILD_PROOF_SUPPORT=ON`.
+- Pixel examples: the DDS support of FairMQ, for some tests.
+
+### Common parts
+
+The examples share the parts in [`common/`](/repo/examples/common/). [Common parts](/examples/common/)
+describes them.
+
+| Folder | Content |
+| --- | --- |
+| `passive/` | Library `ExPassive`: the passive modules cave, pipe, magnet and target, and a constant magnetic field with its parameters |
+| `mcstack/` | Library `ExMCStack`: the stack `FairStack`, the MC track `FairMCTrack`, and the detector IDs in `FairDetectorList.h` |
+| `gconfig/` | The configuration macros and YAML files of the transport engines. Library `ExGConfig` with `FairVMCConfig`. |
+| `geometry/` | The geometry files of the detectors and the passive modules |
+| `input/` | The input files of the UrQMD example |
+| `eventdisplay/` | Library `ExEventDisplay`: the MC tracks in the event display |
+
+## Build the examples
+
+CMake builds the examples if the option `BUILD_EXAMPLES` is `ON`, which is the default
+([CMakeLists.txt](/repo/CMakeLists.txt#L131)). The file [examples/CMakeLists.txt](/repo/examples/CMakeLists.txt)
+adds each example only if the software that it needs is there:
+
+| Examples | CMake adds them if |
+| --- | --- |
+| `common/passive`, `common/mcstack`, Tutorial 2, Tutorial 4, Rutherford experiment | Always |
+| Tutorial 1 | The targets `FairRoot::FastSim` and `Boost::program_options` exist. FairRoot builds FastSim only with Geant4 and Geant4 VMC. |
+| Propagator | The target `FairRoot::TrackBase` exists. FairRoot always builds TrackBase. |
+| MBS tutorial | `BUILD_MBS` and `BUILD_ONLINE` are `ON`. `BUILD_MBS` is `OFF` by default. |
+| Tutorial 3, and the FairMQ examples except LMD | CMake found FairMQ and Boost |
+| LMD sampler and unpacker | CMake found FairMQ and Boost, and `BUILD_MBS` and `BUILD_ONLINE` are `ON` |
+| `common/gconfig` | CMake found Geant3, and the target `MCConfigurator` exists |
+| `common/eventdisplay` | CMake found Geant3, and the target `FairRoot::EventDisplay` exists |
+
+The FairMQ examples are in one block:
+
+<Snippet file="examples/CMakeLists.txt" start="if(FairMQ_FOUND AND Boost_FOUND)" end="/^endif\(\)$/" />
+
+With the default `BUILD_BASEMQ=ON`, CMake requires FairMQ, so these examples are part of the default
+build. With `-DBUILD_BASEMQ=OFF`, CMake does not look for FairMQ and skips them.
+
+The Catch2 tests of the example geometries are in [`tests/examples/`](/repo/tests/examples/). CMake adds
+them with `BUILD_TESTING=ON`. It adds the test of an example only if the library of the example exists.
+
+## Where the build puts the files
+
+The build tree has the same folders as the source tree. For example, the build folder of
+`examples/simulation/Tutorial1/macros/` is `<build>/examples/simulation/Tutorial1/macros/`.
+
+| Files | In the build tree | After the install |
+| --- | --- | --- |
+| Libraries, for example `libExSimulation1` | `<build>/lib/` | The library folder of the prefix, for example `<prefix>/lib/` |
+| Programs, for example `tut1` | The build folder of the `CMakeLists.txt` that defines the program, for example `<build>/examples/simulation/Tutorial1/src/` | `<prefix>/share/fairbase/examples/<example>/bin/` |
+| `parmq-server` | `<build>/bin/` | `<prefix>/bin/` |
+| Macros | Not copied. The scripts run the macros from the source tree. | Below `<prefix>/share/fairbase/examples/` |
+| The script for each macro, for example `run_tutorial1.sh` | The build folder of the macro | Not installed |
+| The environment script | `<build>/config.sh` | `<prefix>/bin/FairRootConfig.sh` |
+
+The environment script sets `VMCWORKDIR` to the folder of the examples. In `config.sh`, the value is
+`<source>/examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L66)). In `FairRootConfig.sh`, it is
+`<prefix>/share/fairbase/examples` ([CMakeLists.txt](/repo/CMakeLists.txt#L342-L343)). The scripts of
+the macro tests use `<source>/examples`, as `config.sh` does.
+
+The simulation macros use `VMCWORKDIR` to find the common geometry files and the configuration of the
+transport engines:
+
+<Snippet file="examples/simulation/Tutorial1/macros/run_tutorial1.C" start='string dir = getenv("VMCWORKDIR");' end='gSystem->Setenv("CONFIG_DIR"' />
+
+For a file name without a path,
+[`FairModule::SetGeometryFileName()`](/api/FairModule/#SetGeometryFileName) looks in `GEOMPATH` first,
+and then in `$VMCWORKDIR/geometry/` ([FairModule.cxx](/source/fairroot/base/sim/FairModule.cxx/#L188-L210)).
+The configuration macros of the transport engine come from `CONFIG_DIR` first
+([FairGenericVMCConfig.cxx](/source/fairroot/base/sim/FairGenericVMCConfig.cxx/#L44-L75)).
+
+## Run the examples
+
+Build and install FairRoot first, as [Tests](/tools/testing/) shows. Then run the examples in the
+same way as the tests do.
+
+### Run the macros with ctest
+
+Each macro test calls the script of the macro with the arguments of the macro. For example, the
+Tutorial 1 test for each transport engine:
+
+<Snippet file="examples/simulation/Tutorial1/macros/CMakeLists.txt" start="add_test(NAME ex_sim_tutorial1_${mcEngine}" end="/^  \)$/" />
+
+Select the tests of an example by their names:
+
+```sh
+cd build
+ctest -N -R ex_sim_tutorial1
+ctest -R '^ex_sim_tutorial1_TGeant4$' --output-on-failure
+ctest -R ex_tutorial3_reco_TGeant4
+```
+
+The first command lists the tests of Tutorial 1 and runs none. The last command also runs
+`ex_tutorial3_sim_TGeant4` and `ex_tutorial3_digi_TGeant4` first, because the reconstruction needs
+their output files. CTest adds these setup tests through the test properties `FIXTURES_REQUIRED` and
+`FIXTURES_SETUP`.
+
+With `-DENABLE_GEANT3_TESTING=ON` and Geant3, CMake adds a `TGeant3` variant of most tests of
+Tutorial 1, Tutorial 4, the Rutherford experiment and Tutorial 3.
+
+### Run a macro script
+
+Start the script of a macro directly to give other arguments:
+
+```sh
+build/examples/simulation/Tutorial1/macros/run_tutorial1.sh 10 '"TGeant4"'
+```
+
+The script sets the environment and goes to its own folder. Then it runs `root -q -b` with the macro
+from the source tree ([root_macro.sh.in](/repo/cmake/scripts/root_macro.sh.in)). It joins its
+arguments with commas: here, the call is `run_tutorial1.C(10,"TGeant4")`. Thus give a string argument
+with its double quotes. The output files of the macro go to the folder of the script.
+
+### Start the FairMQ examples
+
+The device tests run scripts that CMake writes into the build folder of each example. Other scripts
+start the same devices for a manual run. They open an `xterm` window for each device, so they need
+`xterm` and a display.
+
+| Example | Script in the build tree |
+| --- | --- |
+| Tutorial 3 | `examples/advanced/Tutorial3/start.sh` |
+| Pixel detector | `examples/MQ/pixelDetector/run/startFairMQPixel.sh` |
+| Pixel detector, alternative | `examples/MQ/pixelAlternative/run/startFairMQPixAlt.sh` |
+| Serialization | `examples/MQ/serialization/startSerializationEx.sh` |
+| Parameter server | `examples/MQ/parameters/start-mq-ex-params.sh` |
+| Histogram server | `examples/MQ/histogramServer/fairmq-start-ex-histo.sh` |
+| LMD sampler and unpacker | `examples/MQ/Lmd/startMQExLmd.sh` |
+
+The scripts of the pixel examples select the mode with `--command`. The default mode `interactive`
+opens the `xterm` windows, and the tests use `--command static`. The page of each example tells which
+input the devices need and how to start them.
+
+## Related pages
+
+- [Tutorial 1](/examples/tutorial1/): the first example to read, a simple detector simulation.
+- [Common parts](/examples/common/): the passive modules, the stack and the engine configuration.
+- [Your first simulation](/start/first-simulation/): run a simulation step by step.
+- [Tests](/tools/testing/): how the tests run the macros and the devices.
+- [CMake reference](/reference/cmake/): `BUILD_EXAMPLES`, `ENABLE_GEANT3_TESTING` and the other options.
+- [Run FairRoot tasks in FairMQ devices](/online/fairmq-devices/): the base of the FairMQ examples.
+- [Environment variables](/reference/environment/): `VMCWORKDIR`, `GEOMPATH`, `CONFIG_DIR` and others.

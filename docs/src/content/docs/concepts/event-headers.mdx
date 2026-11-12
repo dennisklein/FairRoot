@@ -1,0 +1,364 @@
+---
+title: 'Event headers and run IDs'
+description: 'Each event header carries the run ID, the event time and the input entry. The MC event header adds the event ID, the vertex and the impact parameter. The run ID selects the parameters.'
+sidebar:
+  order: 7
+code: [fairroot/base/event/FairEventHeader.h, fairroot/base/event/FairMCEventHeader.h, fairroot/base/event/FairFileHeader.h, fairroot/base/event/FairRunInfo.cxx, fairroot/base/sim/FairRunIdGenerator.cxx, fairroot/base/steer/FairRun.cxx, fairroot/base/steer/FairRunAna.cxx, fairroot/base/source/FairFileSource.cxx]
+---
+
+import Snippet from '../../../components/Snippet.astro';
+
+Each event has a header: a small object with the run ID and the time of the event. The simulation
+writes an MC event header with the event ID, the vertex and the impact parameter. The run ID connects
+the events to their parameters, because the runtime database selects the parameter versions by the
+run ID.
+
+## The header classes
+
+| Class | Where it is | Content |
+| --- | --- | --- |
+| [`FairMCEventHeader`](/api/FairMCEventHeader/) | Branch `MCEventHeader.` of the simulation output | The run ID, the event ID, the vertex, the impact parameter and the number of primaries of each event |
+| [`FairEventHeader`](/api/FairEventHeader/) | Branch `EventHeader.` of the output of `FairRunAna` and `FairRunOnline` | The run ID, the event time, the input file ID and the MC entry number of each event |
+| [`FairFileHeader`](/api/FairFileHeader/) | Key `FileHeader` in the output file | The run ID and the class names of the tasks, once for each file |
+| [`FairRunInfo`](/api/FairRunInfo/) | A separate file `FairRunInfo_<name>.root` | The time and the memory of each event, as histograms |
+| [`FairRecoEventHeader`](/api/FairRecoEventHeader/) | No run writes it | The run ID, the event time with its error, and an identifier. Only the event builder uses it (CMake option `BUILD_EVENT_BUILDER`, default `OFF`). |
+
+## The event header
+
+[`FairEventHeader`](/api/FairEventHeader/) has four fields:
+
+<Snippet file="fairroot/base/event/FairEventHeader.h" start="/** Run Id" end="Int_t fMCEntryNo{0};" title="FairEventHeader.h" />
+
+| Field | Get it with | Default | Content |
+| --- | --- | --- | --- |
+| Run ID | [`GetRunId()`](/api/FairEventHeader/#GetRunId) | 0 | The run ID of the event |
+| Event time | [`GetEventTime()`](/api/FairEventHeader/#GetEventTime) | -1 | The time of the event. A negative value means that the time is not set. See [Event time](#event-time). |
+| Input file ID | [`GetInputFileId()`](/api/FairEventHeader/#GetInputFileId) | 0 | The input of the event. `FairMixedSource` sets the signal identifier, and 0 for background. `FairFileSource` always sets 0. |
+| MC entry number | [`GetMCEntryNumber()`](/api/FairEventHeader/#GetMCEntryNumber) | 0 | The simulated event. `FairFileSource` copies it from the input, see below. `FairMixedSource` sets the entry number in the input chain. |
+
+The header has no event number. To get the number of the current entry, call
+[`FairRootManager::GetEntryNr()`](/api/FairRootManager/#GetEntryNr).
+
+### Which object the run uses
+
+- [`FairRun::GetEventHeader()`](/api/FairRun/#GetEventHeader) returns the event header of the run. If
+  you did not set one, it makes a `FairEventHeader`
+  ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L162-L168)).
+- To use a class of your own, give an object to
+  [`SetEventHeader()`](/api/FairRun/#SetEventHeader) before `Init()`. See
+  [Custom headers](#custom-headers).
+- `FairRunAna::Init()` registers the header as the branch `EventHeader.` in the folder `EvtHeader`
+  ([FairEventHeader.cxx](/source/fairroot/base/event/FairEventHeader.cxx/#L17-L20)). The branch goes
+  to the output if the run has a sink. After
+  [`SetEventHeaderPersistence(kFALSE)`](/api/FairRunAna/#SetEventHeaderPersistence), the branch stays
+  in memory.
+- `FairRunOnline::Init()` registers the header in the folder `Event`, and writes it if the run has a
+  sink.
+- `FairRunSim` makes no `FairEventHeader`. The simulation output has only the MC event header.
+
+### How the run fills the header
+
+For each entry, `FairRunAna` and `FairRunOnline` call `FillEventHeader()`. The run gives its header
+to the source:
+
+<Snippet file="fairroot/base/steer/FairRun.cxx" start="void FairRun::FillEventHeader()" title="FairRun.cxx" />
+
+The base class `FairSource` sets only the run ID: the value of
+[`FairSource::SetRunId()`](/api/FairSource/#SetRunId), with the default 0
+([FairSource.cxx](/source/fairroot/base/source/FairSource.cxx/#L31-L36)). `FairFileSource` fills
+all fields:
+
+<Snippet file="fairroot/base/source/FairFileSource.cxx" start="void FairFileSource::FillEventHeader(FairEventHeader* feh)" title="FairFileSource.cxx" />
+
+Thus, with a `FairFileSource`:
+
+1. The event time comes from `GetEventTime()`, see [Event time](#event-time).
+2. The run ID and the MC entry number come from the branch `EventHeader.` of the input, if the input
+   has this branch.
+3. If the input has the branch `MCEventHeader.`, its run ID and its event ID replace these values.
+   The MC entry number then holds the event ID of the MC event header.
+4. The input file ID is 0.
+
+### Read the header in a task
+
+Get the header in `Init()` of your task. The sampler task of Tutorial 3 does it like this:
+
+<Snippet file="examples/advanced/Tutorial3/MQ/samplerTask/SamplerTask.h" start="InitStatus Init() override" title="SamplerTask.h" />
+
+`FairRunAna` registers its header before it calls `Init()` of the tasks
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L185-L238)). Thus
+[`GetObject("EventHeader.")`](/api/FairRootManager/#GetObject) returns the header of the run, and the
+run fills it again for each entry. `FairRun::Instance()->GetEventHeader()` returns the same object.
+
+:::note
+`FairRootManager` keeps the first object that is registered with a name. If your source registers an
+object of its own as `EventHeader.` in its `Init()`, like `PixelDigiSource`, the tasks get the object
+of the source. The output still gets the header of the run.
+:::
+
+## The MC event header
+
+[`FairMCEventHeader`](/api/FairMCEventHeader/) describes one simulated event. These are its getters,
+with the units from the code comments:
+
+<Snippet file="fairroot/base/event/FairMCEventHeader.h" start="UInt_t GetRunID() const" end="Double_t GetRotZ() const" title="FairMCEventHeader.h" />
+
+### How the simulation fills it
+
+1. [`FairRunSim::GetMCEventHeader()`](/api/FairRunSim/#GetMCEventHeader) makes a `FairMCEventHeader`,
+   if you did not set your own with [`SetMCEventHeader()`](/api/FairRunSim/#SetMCEventHeader). The
+   run deletes the header.
+2. During `Init()`, `FairMCApplication` gives the header to the primary generator. It registers the
+   header as the branch `MCEventHeader.` in the folder `Event`, and it always marks this branch for
+   the output ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L945-L979)).
+3. It writes the run ID into the header and logs `Simulation RunID: <run ID>`
+   ([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L853-L880)).
+4. For each event, `FairPrimaryGenerator::GenerateEvent()` calls [`Reset()`](/api/FairMCEventHeader/#Reset).
+   `Reset()` clears all fields except the run ID
+   ([FairMCEventHeader.cxx](/source/fairroot/base/event/FairMCEventHeader.cxx/#L73-L80)).
+5. The primary generator sets the vertex. After
+   [`SetBeamAngle()`](/api/FairPrimaryGenerator/#SetBeamAngle), it also sets the rotations around x
+   and y. After [`SetEventPlane()`](/api/FairPrimaryGenerator/#SetEventPlane), it sets the rotation
+   around z.
+6. It calls the generators. Then it sets the event ID, if no generator did, and the number of
+   primaries:
+
+<Snippet file="fairroot/base/sim/FairPrimaryGenerator.cxx" start="// Set the event number if not set already" end="fEvent->SetNPrim(fNTracks);" title="FairPrimaryGenerator.cxx" />
+
+The counter of the event IDs starts at 1. [`SetEventNr(n)`](/api/FairPrimaryGenerator/#SetEventNr)
+sets the counter, and the next event gets the ID n+1. A generator can also fill the header.
+`FairUrqmdGenerator` sets the event ID and the impact parameter from its input file, if no generator
+did that before. Then it calls `MarkSet(kTRUE)`, so that the next generators see a filled header
+([FairUrqmdGenerator.cxx](/source/fairroot/generators/FairUrqmdGenerator.cxx/#L175-L181)).
+
+No generator in FairRoot sets the event time of the MC event header. Thus, with these generators, the
+simulation writes the time 0 for each event.
+
+### Read the MC event header
+
+A task of a later step gets the MC event header of the input with
+`GetObject("MCEventHeader.")`. A ROOT macro can read the branch directly, like the analysis macro of
+Tutorial 4:
+
+<Snippet file="examples/simulation/Tutorial4/macros/plots.C" start="FairMCEventHeader *MCEventHeader = new FairMCEventHeader();" end="/SetBranchAddress\(.MCTrack/" title="plots.C" />
+
+## Custom headers
+
+### Your own event header
+
+Derive your class from `FairEventHeader`, and give it a ROOT dictionary. The pixel detector example
+adds a part number:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelEventHeader.h" start="class PixelEventHeader : public FairEventHeader" title="PixelEventHeader.h" />
+
+Give an object to the run before `Init()`:
+
+<Snippet file="examples/MQ/pixelDetector/macros/run_dBinSource.C" start="FairRunAna run{};" end="run.SetSink(" title="run_dBinSource.C" />
+
+The sources of FairRoot fill only the fields of `FairEventHeader`. Your source fills the other fields
+in its `FillEventHeader()`:
+
+<Snippet file="examples/MQ/pixelDetector/src/PixelDigiBinSource.cxx" start="void PixelDigiBinSource::FillEventHeader(FairEventHeader* feh)" title="PixelDigiBinSource.cxx" />
+
+:::caution[The run ID of your source]
+`FairSource::FillEventHeader()` copies the protected member `fRunId` of `FairSource` into the header.
+`PixelDigiSource` and `PixelDigiBinSource` declare a second, private `fRunId`, which hides that member
+([PixelDigiBinSource.h](/source/examples/MQ/pixelDetector/src/PixelDigiBinSource.h/#L74)). Thus the
+header of the run gets the run ID 0, and `FairRunAna::Init()` initializes the parameters for the run
+ID 0. In your source, set the member of `FairSource`, for example with `SetRunId()`, and do not
+declare a member with the same name.
+:::
+
+:::caution[Check the class of the header]
+`FairRootManager` also calls `FillEventHeader()` of the source, with an object of its own of the
+class `FairEventHeader`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L409-L430)). The
+`static_cast` of the example then writes past the end of this object. In your source, use
+`dynamic_cast`, and set the extra fields only if the cast succeeds.
+:::
+
+### Your own MC event header
+
+Derive your class from `FairMCEventHeader`, and give an object to `FairRunSim` with
+`SetMCEventHeader()` before `Init()`. The split simulation example uses
+[`FairMCSplitEventHeader`](/source/examples/MQ/pixelSimSplit/src/FairMCSplitEventHeader.h/), which
+adds the number of chunks and the first chunk of an event:
+
+<Snippet file="examples/MQ/pixelSimSplit/src/devices/FairMQTransportDevice.cxx" start="fMCSplitEventHeader = new FairMCSplitEventHeader(fRunId, 0, 0, 0);" end="fRunSim->SetRunId(fRunSim->GetMCEventHeader()->GetRunID());" title="FairMQTransportDevice.cxx" />
+
+If your class overrides `Register()`, keep the branch names `EventHeader.` and `MCEventHeader.`. A
+`FairFileSource` finds the headers of its input by these names
+([FairFileSource.cxx](/source/fairroot/base/source/FairFileSource.cxx/#L255-L265)).
+
+:::caution[Geant4 in multithreaded mode]
+Each worker run gets a copy of the MC event header. `FairMCApplication::CloneForWorker()` makes the
+copy with the copy constructor of `FairMCEventHeader`
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L443)). Thus a header
+class of your own loses its extra fields on the workers.
+:::
+
+## Run IDs
+
+The run ID is an unsigned integer that names a run. The headers carry it, and the runtime database
+stores the parameter versions for each run ID.
+
+### Where the run ID comes from
+
+| Run | Run ID | `SetRunId()` before `Init()` |
+| --- | --- | --- |
+| `FairRunSim` | The value of `SetRunId()`. Without it, a new run ID from `FairRunIdGenerator` ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L178-L184)). | Used |
+| `FairRunAna` with a source | The run ID of the first entry of the source ([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L185-L213)) | Ignored |
+| `FairRunAna` without a source | A new run ID from `FairRunIdGenerator` | Ignored |
+| `FairRunOnline` | The value of `SetRunId()`. Else the run ID of the source. Else a new run ID ([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L134-L151)). | Used, and given to the source |
+
+With a `FairMixedSource`, select the input that gives the run ID. Call
+[`UseRunIdFromBG()`](/api/FairMixedSource/#UseRunIdFromBG) for the background, or
+[`UseRunIdfromSG(identifier)`](/api/FairMixedSource/#UseRunIdfromSG) for a signal input (note the
+lowercase `f`). If you call none or both, `SpecifyRunId()` logs a fatal error and the run ID stays
+0. A fatal error stops the program only if FairLogger has a fatal handler, see
+[Logging](/tools/logging/).
+
+### How FairRunIdGenerator makes a run ID
+
+[`FairRunIdGenerator::generateId()`](/api/FairRunIdGenerator/#generateId) returns the current Unix
+time in seconds ([FairRunIdGenerator.cxx](/source/fairroot/base/sim/FairRunIdGenerator.cxx/#L377-L395)).
+It also makes a time-based UUID, but it does not use it. Thus two runs that start in the same second
+get the same run ID. To give parallel jobs different run IDs, call `SetRunId()` of `FairRunSim` or
+`FairRunOnline` before `Init()`.
+
+### Find the run ID
+
+- The log shows it. The simulation logs `Simulation RunID: <run ID>`. `FairRunAna` logs
+  `--- Initialize with RunId  --- <run ID>` when it gets the run ID from the input. The runtime
+  database logs `initialisation for run id <run ID>`.
+- In your code, call [`FairRun::GetRunId()`](/api/FairRun/#GetRunId) after `Init()`. It returns an
+  `Int_t`. [`FairRunAna::getRunId()`](/api/FairRunAna/#getRunId) returns the `UInt_t` value.
+- In a file, read the run ID from a header: `GetRunId()` of the event header and of the file header,
+  [`GetRunID()`](/api/FairMCEventHeader/#GetRunID) of the MC event header.
+
+## Run IDs and parameter versions
+
+The runtime database keeps a version of each parameter container for each run ID. A ROOT parameter
+file stores one `FairRtdbRun` object for each run ID, with the run ID as its name. Thus the run ID of
+your data must be in the parameter file.
+[Run IDs and versions in a ROOT file](/concepts/parameters/#run-ids-and-versions-in-a-root-file)
+explains the versions.
+
+1. `FairRunSim::Init()` adds its run ID to the runtime database. It marks `FairBaseParSet` and
+   `FairGeoParSet` as changed for this run ID
+   ([FairRunSim.cxx](/source/fairroot/base/steer/FairRunSim.cxx/#L244-L253)). Then `saveOutput()`
+   in the macro writes them under this run ID.
+2. `FairRunAna::Init()` gets the run ID from the input. Then
+   [`initContainers(runId)`](/api/FairRuntimeDb/#initContainers) reads the parameter versions of this
+   run ID from the inputs of the runtime database.
+3. If a ROOT parameter file does not have the run ID, `FairParRootFile::readVersions()` logs the
+   warning `Reading run <run ID> failed`
+   ([FairParRootFileIo.cxx](/source/fairroot/parbase/FairParRootFileIo.cxx/#L67-L77)). The containers
+   then get no values from this input, and the runtime database tries the second input.
+4. An ASCII parameter file has no versions. It gives the same values for all run IDs.
+
+A digitization step can add parameter containers for the run ID of its input. After `Init()`,
+Tutorial 2 marks the container of its digitizer for this run ID and writes it to the parameter file:
+
+<Snippet file="examples/simulation/Tutorial2/macros/create_digis.C" start="DigiPar->setChanged();" end="rtdb->saveOutput();" title="create_digis.C" />
+
+## When the run ID changes
+
+The input of `FairRunAna` can hold events of more than one run ID, for example a chain of files from
+different simulation runs. After `Run()` fills the event header of an entry, it calls
+[`CheckRunIdChanged()`](/api/FairRunAna/#CheckRunIdChanged):
+
+<Snippet file="fairroot/base/steer/FairRunAna.cxx" start="void FairRunAna::CheckRunIdChanged()" title="FairRunAna.cxx" />
+
+When the run ID changes, the run does these steps:
+
+1. It calls [`Reinit()`](/api/FairRunAna/#Reinit), which initializes the parameter containers for
+   the new run ID.
+2. It calls `ReInit()` of all active tasks. A task that returns `kERROR` becomes inactive. `kFATAL`
+   logs a fatal error ([FairTask.cxx](/source/fairroot/base/steer/FairTask.cxx/#L66-L79)), which
+   stops the program only if FairLogger has a fatal handler.
+
+The messages have the level `debug`. `Reinit()` reads the new values into the same container objects,
+so pointers to the containers stay valid. Values that your task copied in `Init()` do not change:
+copy them again in `ReInit()`.
+
+With [`SetContainerStatic(kTRUE)`](/api/FairRunAna/#SetContainerStatic), the run keeps the parameters
+of the first run ID and does not call `ReInit()`. `FairRunOnline` does the same check, with messages
+at the level `info`. It also calls `ReInitUnpackers()` of the source. A failure logs a fatal error
+and ends the event loop
+([FairRunOnline.cxx](/source/fairroot/online/steer/FairRunOnline.cxx/#L336-L357)).
+
+:::caution[RunSingleEntry() and RunMQ()]
+These functions call `CheckRunIdChanged()` and the tasks before `FillEventHeader()`
+([FairRunAna.cxx](/source/fairroot/base/steer/FairRunAna.cxx/#L443-L469)). Thus the check and the
+tasks see the event header of the previous entry.
+:::
+
+## Event time
+
+Time-based reconstruction needs a time for each event. The source sets it in `GetEventTime()`, and
+the tasks read it from the event header or with
+[`FairRootManager::GetEventTime()`](/api/FairRootManager/#GetEventTime).
+[Give each event a time](/reconstruction/time-based/#give-each-event-a-time) shows where the source
+takes the time from and the functions that set a distribution of the time gaps. The simulation
+writes the time 0, see [How the simulation fills it](#how-the-simulation-fills-it).
+
+## The file header
+
+In `Init()`, each run writes a `FairFileHeader` to the sink, with the key `FileHeader`
+([FairRootManager.cxx](/source/fairroot/base/steer/FairRootManager.cxx/#L813-L817)). It holds:
+
+- the run ID;
+- the class names of the tasks and their subtasks, in the order of the `AddTask()` calls
+  ([FairRun.cxx](/source/fairroot/base/steer/FairRun.cxx/#L116-L129)). A subtask that you add to a
+  task after `AddTask()` is not in the list.
+
+The file header also has a list of input files, [`AddInputFile()`](/api/FairFileHeader/#AddInputFile),
+but no code in FairRoot fills it. Read the file header like any ROOT object:
+
+```cpp title="read_file_header.C"
+TFile file("output.root");
+auto header = file.Get<FairFileHeader>("FileHeader");
+std::cout << "Run ID: " << header->GetRunId() << std::endl;
+header->GetListOfTasks()->Print();
+```
+
+## Time and memory of each event
+
+After [`SetGenerateRunInfo(kTRUE)`](/api/FairRun/#SetGenerateRunInfo), `FairRunSim` and `FairRunAna`
+measure the time and the memory of each event with `FairRunInfo`. The macros `run_sim.C`,
+`run_digi.C` and `run_reco.C` of Tutorial 3 set it.
+
+1. Before the first event, the run notes the time.
+2. After each event, [`StoreInfo()`](/api/FairRunInfo/#StoreInfo) stores the time since the previous
+   event, and the resident and the virtual memory of the process in MB.
+3. At the end of the run, [`WriteInfo()`](/api/FairRunInfo/#WriteInfo) writes six histograms to the
+   file `FairRunInfo_<name>.root`. `<name>` is the name of the current ROOT file (`gFile`) without
+   `.root`, and the new file goes into the same folder
+   ([FairRunInfo.cxx](/source/fairroot/base/event/FairRunInfo.cxx/#L150-L194)).
+
+| Histogram | Content |
+| --- | --- |
+| `ResidentMemoryVsEvent`, `VirtualMemoryVsEvent` | The memory in MB for each event |
+| `ResidentMemoryVsTime`, `VirtualMemoryVsTime` | The memory in MB as a function of the run time in s |
+| `TimePerEvent` | The distribution of the time per event |
+| `EventtimeVsEvent` | The time per event for each event number |
+
+`FairRunOnline` does not support the run information. With Geant4 in multithreaded mode, the MC
+application stores no values per event
+([FairMCApplication.cxx](/source/fairroot/base/sim/FairMCApplication.cxx/#L687-L689)). Use the run
+information only in sequential mode. The old functions `SetWriteRunInfoFile()` and
+`GetWriteRunInfoFile()` are deprecated.
+
+## Related pages
+
+- [Runs](/concepts/runs/): the run objects that fill the headers.
+- [Tasks](/concepts/tasks/): `Init()` and `ReInit()` of a task.
+- [Branches, sources and sinks](/concepts/io/): the branches of the headers and the source that fills them.
+- [Parameters and the runtime database](/concepts/parameters/): the parameter versions for each run ID.
+- [Time-based simulation and reconstruction](/reconstruction/time-based/): the use of the event time.
+- [Input sources, friends and event mixing](/reconstruction/sources/): `FairFileSource` and
+  `FairMixedSource`.
+- [Primary generators](/simulation/generators/): the generators that fill the MC event header.
+- [MQ: pixel detector](/examples/mq-pixel-detector/): the example with a custom event header.
+- [Measure time and memory](/tools/monitor/): other tools for time and memory.

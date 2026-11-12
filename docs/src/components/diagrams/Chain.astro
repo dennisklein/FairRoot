@@ -1,0 +1,963 @@
+---
+// The hero diagram of the home page: the chain of FairRoot in one picture. A simulation run writes the
+// events to a file; a reconstruction run reads the file back and runs its tasks in order.
+// The names are those of the pixel detector example: examples/MQ/pixelDetector/macros/run_sim.C and
+// run_reco.C (paths below are relative to the FairRoot repository).
+//
+// Facts and where they come from:
+// - Engine: run_sim.C:21,63 calls run->SetName(mcEngine), default "TGeant3". FairRunSim::SetMCConfig()
+//   (fairroot/base/steer/FairRunSim.cxx:300-320) gives GetName() to the config code:
+//   FairGenericVMCConfig::Setup() knows "TGeant4", "TGeant3" and "TFluka" (fairroot/base/sim/FairGenericVMCConfig.cxx:54,88,122);
+//   FairYamlVMCConfig::Setup() accepts only "TGeant4" and "TGeant3" (fairroot/mcconfigurator/FairYamlVMCConfig.cxx:44-46).
+//   The example tests use TGeant4, and also TGeant3 when Geant3 is found and ENABLE_GEANT3_TESTING is ON
+//   (examples/CMakeLists.txt:12-16, mcEngine_list; the option is OFF by default, CMakeLists.txt:121).
+// - Generator: run_sim.C:85-95, a FairPrimaryGenerator with a FairBoxGenerator: 5 pi+ (PDG 211, run_sim.C:33),
+//   p 1-2 GeV/c, theta 0-40 deg, phi 0-360 deg. FairBoxGenerator::ReadEvent() samples theta and phi uniformly
+//   (fairroot/generators/FairBoxGenerator.cxx:182-219); the vertex is (0, 0, 0) (FairBaseMCGenerator.cxx:19-21).
+// - FairMCApplication::GeneratePrimaries() calls FairPrimaryGenerator::GenerateEvent(stack)
+//   (fairroot/base/sim/FairMCApplication.cxx:982-992); FairPrimaryGenerator::AddTrack() calls stack->PushTrack()
+//   (fairroot/base/sim/FairPrimaryGenerator.cxx:382). The stack is a FairStack (examples/common/gconfig/g3Config.C:27-30,
+//   g4Config.C:48-51). FairStack::Register() registers the branch "MCTrack" (examples/common/mcstack/FairStack.cxx:315-320).
+//   The stack meter shows only how many tracks wait: the pop order depends on the engine (FairStack::PopNextTrack(),
+//   PopPrimaryForTracking(), FairStack.cxx:134-175).
+// - Order in one event, kept by the animation (the steps do not overlap): GeneratePrimaries() puts all five primaries
+//   on the stack in one call (FairBoxGenerator::ReadEvent() adds them in a loop) before the engine pops the first one.
+//   The engine transports one track at a time: FairStack::PopNextTrack() sets the one current track (FairStack.cxx:134-156),
+//   and FairMCApplication::PreTrack() and PostTrack() run for each track (FairMCApplication.cxx:405,592).
+//   FinishEvent() fills the tree before the next event starts (single-threaded run: isMT = kFALSE, run_sim.C:21,64).
+// - FairMCApplication::Stepping() calls ProcessHits() of the detector in a sensitive volume (FairMCApplication.cxx:491-528).
+//   Pixel::ProcessHits() adds a PixelPoint when the track leaves the volume (examples/MQ/pixelDetector/src/Pixel.cxx:75-128).
+//   Pixel::Register() registers "PixelPoint" (Pixel.cxx:134-142).
+// - Geometry: examples/common/geometry/pixel.geo, three stations at z = 50, 100, 200 mm, half size 25, 50, 100 mm,
+//   with a beam hole of half size 5, 5, 10 mm. run_sim.C sets no field, so the tracks are straight lines.
+//   The side view uses a smaller scale across the beam than along it.
+// - End of event: FairMCApplication::FinishEvent() calls FairRootManager::Fill() (FairMCApplication.cxx:633-662), which calls
+//   the sink (fairroot/base/steer/FairRootManager.cxx:331-335); FairRootFileSink::Fill() fills the tree
+//   (fairroot/base/sink/FairRootFileSink.cxx:302-309).
+// - Tree: FairRootManager::GetTreeName() returns "cbmsim" by default (FairRootManager.cxx:932-944). FairRootFileSink makes
+//   the TTree with this name (FairRootFileSink.cxx:245) and FairFileSource reads it (fairroot/base/source/FairFileSource.cxx:156).
+//   run_sim.C:147 reads the TTree "cbmsim" back.
+// - Reconstruction: run_reco.C:34-60 makes a FairRunAna with a FairFileSource and a FairRootFileSink, and adds the tasks in this
+//   order: PixelDigitize, PixelFindHits, PixelFindTracks, PixelFitTracks. Each task gets its input in Init() and registers
+//   its output: PixelPoint -> PixelDigis (src/PixelDigitize.cxx:230-234), PixelDigis -> PixelHits (src/PixelFindHits.cxx:198-205),
+//   PixelHits -> PixelTracks (src/PixelFindTracks.cxx:192-199), PixelHits and PixelTracks -> PixelFitTracks
+//   (src/PixelFitTracks.cxx:205-214). FairRun::AddTask() adds to the main task (fairroot/base/steer/FairRun.cxx:110-114);
+//   FairTask::ExecuteTasks() runs the tasks in list order (fairroot/base/steer/FairTask.cxx:170-184). For each event,
+//   FairRunAna::Run() calls ReadEvent(i), ExecuteTask("") and Fill() (fairroot/base/steer/FairRunAna.cxx:313-327).
+// - File names: the macro chooses them (FairRootFileSink(outFile), FairFileSource(inFile)). The pixel macros use
+//   pixel_<engine>.mc.root and pixel_<engine>.reco.root (run_sim.C:41, run_reco.C:27-28). The diagram shows sim.root (the
+//   input file of the macro on the home page, components/home/HomeCode.astro) and reco.root, so that only the engine box
+//   changes with the switch.
+// - The pixel example is built only with FairMQ and Boost (examples/CMakeLists.txt:43-49). Its tests run run_sim.C with
+//   TGeant4 (examples/CMakeLists.txt:48, examples/MQ/pixelDetector/macros/CMakeLists.txt:24-25); run_reco.C is installed
+//   but not tested (macros/CMakeLists.txt:51).
+
+type P = [number, number];
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+interface Layout {
+  id: 'wide' | 'narrow';
+  W: number;
+  H: number;
+  t1: P;
+  t2: P;
+  t2wrap?: boolean;
+  gen: Box;
+  stack: Box;
+  eng: Box;
+  frm: Box;
+  sim: Box;
+  src: Box;
+  tbl: Box;
+  reco: Box;
+  view: { vx: number; vy: number; kz: number; ky: number; clip: Box };
+  eLabel: P;
+  pLabel: P;
+  rows: number[];
+  rail: number;
+  col: { name: number; a0: number; a1: number; glyph: number; out: number };
+  edges: string[];
+  routes: Record<'push' | 'pop' | 'fill1' | 'fill2' | 'read' | 'inR' | 'outR', P[]>;
+}
+
+// Wide: the simulation runs from left to right, the files are in the right column, the reconstruction
+// runs from the right column into the task list and back.
+const wide: Layout = {
+  id: 'wide',
+  W: 480,
+  H: 306,
+  t1: [0, 12],
+  t2: [0, 190],
+  gen: { x: 0, y: 22, w: 148, h: 28 },
+  stack: { x: 24, y: 73, w: 100, h: 40 },
+  eng: { x: 164, y: 22, w: 184, h: 138 },
+  view: { vx: 176, vy: 93, kz: 0.772, ky: 0.47, clip: { x: 168, y: 44, w: 176, h: 98 } },
+  eLabel: [174, 39],
+  pLabel: [174, 155],
+  frm: { x: 364, y: 76, w: 116, h: 34 },
+  sim: { x: 364, y: 124, w: 116, h: 64 },
+  src: { x: 364, y: 202, w: 116, h: 28 },
+  tbl: { x: 0, y: 201, w: 348, h: 96 },
+  reco: { x: 364, y: 259, w: 116, h: 46 },
+  rows: [216, 238, 260, 282],
+  rail: 332,
+  col: { name: 14, a0: 122, a1: 172, glyph: 182, out: 192 },
+  edges: ['M74 50V73', 'M124 93H164', 'M348 93H364', 'M422 110V124', 'M422 188V202', 'M364 216H348', 'M332 282H364'],
+  routes: {
+    push: [
+      [74, 48],
+      [74, 75],
+    ],
+    pop: [
+      [124, 93],
+      [176, 93],
+    ],
+    fill1: [
+      [300, 93],
+      [364, 93],
+    ],
+    fill2: [
+      [422, 110],
+      [422, 126],
+    ],
+    read: [
+      [422, 188],
+      [422, 204],
+    ],
+    inR: [
+      [364, 216],
+      [332, 216],
+    ],
+    outR: [
+      [332, 282],
+      [364, 282],
+    ],
+  },
+};
+
+// Narrow (phones): one column. The files and the task rail are on the left.
+const narrow: Layout = {
+  id: 'narrow',
+  W: 320,
+  H: 484,
+  t1: [0, 12],
+  t2: [124, 295],
+  t2wrap: true,
+  gen: { x: 0, y: 22, w: 148, h: 28 },
+  stack: { x: 0, y: 104, w: 76, h: 40 },
+  eng: { x: 90, y: 56, w: 230, h: 144 },
+  view: { vx: 102, vy: 124, kz: 0.986, ky: 0.44, clip: { x: 94, y: 78, w: 222, h: 92 } },
+  eLabel: [100, 73],
+  pLabel: [100, 192],
+  frm: { x: 200, y: 214, w: 120, h: 34 },
+  sim: { x: 0, y: 206, w: 110, h: 64 },
+  src: { x: 0, y: 284, w: 110, h: 28 },
+  tbl: { x: 0, y: 326, w: 320, h: 96 },
+  reco: { x: 0, y: 436, w: 110, h: 46 },
+  rows: [342, 364, 386, 408],
+  rail: 55,
+  col: { name: 67, a0: 176, a1: 196, glyph: 206, out: 215 },
+  edges: ['M38 50V104', 'M76 124H90', 'M260 200V214', 'M200 231H110', 'M55 270V284', 'M55 312V326', 'M55 408V436'],
+  routes: {
+    push: [
+      [38, 48],
+      [38, 106],
+    ],
+    pop: [
+      [76, 124],
+      [102, 124],
+    ],
+    fill1: [
+      [260, 150],
+      [260, 216],
+    ],
+    fill2: [
+      [200, 231],
+      [112, 231],
+    ],
+    read: [
+      [55, 270],
+      [55, 286],
+    ],
+    inR: [
+      [55, 312],
+      [55, 342],
+    ],
+    outR: [
+      [55, 408],
+      [55, 438],
+    ],
+  },
+};
+
+const layouts = [wide, narrow];
+
+// The pixel detector (pixel.geo): z of the stations, half size, half size of the beam hole, in mm.
+const Z = [50, 100, 200];
+const HALF = [25, 50, 100];
+const HOLE = [5, 5, 10];
+const ZEND = 240;
+// One event of the box generator, shown before the animation starts and when motion is reduced:
+// [theta, phi] in degrees, inside the ranges of run_sim.C. Four tracks hit all three stations, with points
+// that do not overlap in the side view; the track at theta 36 deg misses the stations (above them).
+const still = [
+  [24, 70],
+  [10, 120],
+  [12, 315],
+  [26, 250],
+  [36, 95],
+].map(([th, ph]) => {
+  const t = Math.tan((th * Math.PI) / 180);
+  return { tx: t * Math.cos((ph * Math.PI) / 180), ty: t * Math.sin((ph * Math.PI) / 180) };
+});
+const hit = (tr: { tx: number; ty: number }, i: number) => {
+  const x = Z[i] * tr.tx;
+  const y = Z[i] * tr.ty;
+  return Math.abs(x) <= HALF[i] && Math.abs(y) <= HALF[i] && !(Math.abs(x) < HOLE[i] && Math.abs(y) < HOLE[i]);
+};
+const at = (L: Layout, z: number, y: number): P => [L.view.vx + z * L.view.kz, L.view.vy - y * L.view.ky];
+const f = (n: number) => +n.toFixed(1);
+
+const tasks = [
+  { name: 'PixelDigitize', out: 'PixelDigis', g: 'dg' },
+  { name: 'PixelFindHits', out: 'PixelHits', g: 'ht' },
+  { name: 'PixelFindTracks', out: 'PixelTracks', g: 'tk' },
+  { name: 'PixelFitTracks', out: 'PixelFitTracks', g: 'ft' },
+];
+const glyphs = ['pt', 'dg', 'ht', 'tk', 'ft'];
+const uid = 'ch' + Math.random().toString(36).slice(2, 8);
+const label =
+  'The FairRoot chain, with the names of the pixel detector example. Simulation with FairRunSim: FairPrimaryGenerator gives the primary particles to FairStack. ' +
+  'The transport engine, TGeant3 or TGeant4, tracks them through the detector. In the detector, Pixel::ProcessHits() makes PixelPoint objects. ' +
+  'FairRootManager and FairRootFileSink write each event to sim.root, into the TTree cbmsim, with the branches MCTrack and PixelPoint. ' +
+  'Reconstruction with FairRunAna: FairFileSource reads sim.root. The tasks PixelDigitize, PixelFindHits, PixelFindTracks and PixelFitTracks run in this order. ' +
+  'They register the branches PixelDigis, PixelHits, PixelTracks and PixelFitTracks, which go to reco.root.';
+const geo = (L: Layout) =>
+  JSON.stringify({ vx: L.view.vx, vy: L.view.vy, kz: L.view.kz, ky: L.view.ky, rail: L.rail, rows: L.rows, still, ...L.routes });
+const doc = (b: Box) => `M${b.x} ${b.y}H${b.x + b.w - 9}L${b.x + b.w} ${b.y + 9}V${b.y + b.h}H${b.x}Z`;
+const fold = (b: Box) => `M${b.x + b.w - 9} ${b.y}V${b.y + 9}H${b.x + b.w}`;
+---
+
+<div class="fr-chain not-content">
+  <div class="ch-head">
+    <div class="ch-switch" role="group" aria-label="Transport engine">
+      <button type="button" data-engine="TGeant3" aria-pressed="true">TGeant3</button>
+      <button type="button" data-engine="TGeant4" aria-pressed="false">TGeant4</button>
+    </div>
+    <span>names from the pixel detector example</span>
+  </div>
+  {
+    layouts.map((L) => {
+      const cl = `${uid}-${L.id}-clip`;
+      const ah = `${uid}-${L.id}-ah`;
+      const v = L.view;
+      return (
+        <svg class={`ch ch-${L.id}`} viewBox={`0 0 ${L.W} ${L.H}`} role="img" aria-label={label} data-geo={geo(L)}>
+          <defs>
+            <marker id={ah} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" class="ah" />
+            </marker>
+            <clipPath id={cl}>
+              <rect x={v.clip.x} y={v.clip.y} width={v.clip.w} height={v.clip.h} />
+            </clipPath>
+          </defs>
+
+          <text class="lane" x={L.t1[0]} y={L.t1[1]}>
+            SIMULATION<tspan class="run" dx="8">FairRunSim</tspan>
+          </text>
+          <text class="lane" x={L.t2[0]} y={L.t2[1]}>
+            RECONSTRUCTION{L.t2wrap ? <tspan class="run" x={L.t2[0]} dy="14">FairRunAna</tspan> : <tspan class="run" dx="8">FairRunAna</tspan>}
+          </text>
+
+          <g class="ed">
+            {L.edges.map((d) => (
+              <path d={d} marker-end={`url(#${ah})`} />
+            ))}
+          </g>
+
+          <g class="bxg" data-box="gen">
+            <rect class="bx" x={L.gen.x} y={L.gen.y} width={L.gen.w} height={L.gen.h} rx="2" />
+            <text class="nm" x={L.gen.x + L.gen.w / 2} y={L.gen.y + L.gen.h / 2 + 4} text-anchor="middle">
+              FairPrimaryGenerator
+            </text>
+          </g>
+          <g class="bxg" data-box="stack">
+            <rect class="bx" x={L.stack.x} y={L.stack.y} width={L.stack.w} height={L.stack.h} rx="2" />
+            <text class="nm" x={L.stack.x + L.stack.w / 2} y={L.stack.y + 16} text-anchor="middle">
+              FairStack
+            </text>
+            {[0, 1, 2, 3, 4].map((i) => (
+              <rect class="cell" x={L.stack.x + L.stack.w / 2 - 26 + i * 11} y={L.stack.y + 23} width="8" height="7" />
+            ))}
+          </g>
+
+          <g class="eng">
+            <rect class="bx" x={L.eng.x} y={L.eng.y} width={L.eng.w} height={L.eng.h} rx="2" />
+            <text class="en" x={L.eLabel[0]} y={L.eLabel[1]}>
+              <tspan data-slot="engine">TGeant3</tspan>
+            </text>
+            <text class="tag" x={L.eLabel[0] + 59} y={L.eLabel[1]}>
+              VMC
+            </text>
+            <path class="ax" d={`M${v.vx} ${v.vy}H${v.clip.x + v.clip.w}`} />
+            {Z.map((z, i) => (
+              <rect class="st" x={f(v.vx + z * v.kz - 1.2)} y={f(v.vy - HALF[i] * v.ky)} width="2.4" height={f(2 * HALF[i] * v.ky)} />
+            ))}
+            <circle class="vtx" cx={v.vx} cy={v.vy} r="2.2" />
+            <g class="trk" clip-path={`url(#${cl})`}>
+              {still.map((tr) => {
+                const [x2, y2] = at(L, ZEND, ZEND * tr.ty);
+                return <line class="tr" x1={v.vx} y1={v.vy} x2={f(x2)} y2={f(y2)} />;
+              })}
+              {still.map((tr) =>
+                Z.map((z, i) => {
+                  const [cx, cy] = at(L, z, z * tr.ty);
+                  return <circle class="pt" cx={f(cx)} cy={f(cy)} r={hit(tr, i) ? 2.8 : 0} />;
+                })
+              )}
+              {still.map(() => (
+                <rect class="tok head" width="6" height="6" x="-10" y="-10" style="visibility:hidden" />
+              ))}
+            </g>
+            <circle class="g-pt" cx={L.pLabel[0] + 3} cy={L.pLabel[1] - 3.5} r="3" />
+            <text class="sub" x={L.pLabel[0] + 11} y={L.pLabel[1]}>
+              Pixel::ProcessHits()
+            </text>
+          </g>
+
+          <g class="bxg" data-box="frm">
+            <rect class="bx" x={L.frm.x} y={L.frm.y} width={L.frm.w} height={L.frm.h} rx="2" />
+            <text class="nm" x={L.frm.x + L.frm.w / 2} y={L.frm.y + 14} text-anchor="middle">
+              FairRootManager
+            </text>
+            <text class="sub" x={L.frm.x + L.frm.w / 2} y={L.frm.y + 27} text-anchor="middle">
+              FairRootFileSink
+            </text>
+          </g>
+
+          <g class="bxg file" data-box="sim">
+            <path class="bx" d={doc(L.sim)} />
+            <path class="fold" d={fold(L.sim)} />
+            <text class="nm" x={L.sim.x + 9} y={L.sim.y + 15}>
+              sim.root
+            </text>
+            <text class="sub" x={L.sim.x + 9} y={L.sim.y + 29}>
+              TTree cbmsim
+            </text>
+            <path class="g-mc" d={`M${L.sim.x + 13} ${L.sim.y + 39.5}h10`} />
+            <text class="sub br" x={L.sim.x + 28} y={L.sim.y + 43}>
+              MCTrack
+            </text>
+            <circle class="g-pt" cx={L.sim.x + 18} cy={L.sim.y + 53.5} r="3" />
+            <text class="sub br" x={L.sim.x + 28} y={L.sim.y + 57}>
+              PixelPoint
+            </text>
+          </g>
+
+          <g class="bxg" data-box="src">
+            <rect class="bx" x={L.src.x} y={L.src.y} width={L.src.w} height={L.src.h} rx="2" />
+            <text class="nm" x={L.src.x + L.src.w / 2} y={L.src.y + L.src.h / 2 + 4} text-anchor="middle">
+              FairFileSource
+            </text>
+          </g>
+
+          <g class="tbl">
+            <rect class="bx" x={L.tbl.x} y={L.tbl.y} width={L.tbl.w} height={L.tbl.h} rx="2" />
+            {tasks.map((t, i) => (
+              <g class="row" data-row={i}>
+                <rect class="hl" x={L.tbl.x + 3} y={L.rows[i] - 10} width={L.tbl.w - 6} height="20" rx="2" />
+                <text class="nm" x={L.col.name} y={L.rows[i] + 4}>
+                  {t.name}
+                </text>
+                <path class="ra" d={`M${L.col.a0} ${L.rows[i]}H${L.col.a1}`} marker-end={`url(#${ah})`} />
+                <g class={`g-${t.g}`} transform={`translate(${L.col.glyph} ${L.rows[i]})`}>
+                  {t.g === 'dg' && <rect x="-3.5" y="-3.5" width="7" height="7" />}
+                  {t.g === 'ht' && <path d="M-3.5 -3.5l7 7m0 -7l-7 7" />}
+                  {(t.g === 'tk' || t.g === 'ft') && <path d="M-5.5 3.5L5.5 -3.5" />}
+                </g>
+                <text class="sub out" x={L.col.out} y={L.rows[i] + 4}>
+                  {t.out}
+                </text>
+              </g>
+            ))}
+            <path class="rail" d={`M${L.rail} ${L.rows[0]}V${L.rows[3]}`} />
+            {L.rows.map((y) => (
+              <circle class="stop" cx={L.rail} cy={y} r="2.6" />
+            ))}
+          </g>
+
+          <g class="bxg file" data-box="reco">
+            <path class="bx" d={doc(L.reco)} />
+            <path class="fold" d={fold(L.reco)} />
+            <text class="nm" x={L.reco.x + 9} y={L.reco.y + 15}>
+              reco.root
+            </text>
+            <text class="sub" x={L.reco.x + 9} y={L.reco.y + 29}>
+              TTree cbmsim
+            </text>
+            {tasks.map((t, i) => (
+              <g class={`g-${t.g}`} transform={`translate(${L.reco.x + 18 + i * 15} ${L.reco.y + 38})`}>
+                {t.g === 'dg' && <rect x="-3.5" y="-3.5" width="7" height="7" />}
+                {t.g === 'ht' && <path d="M-3.5 -3.5l7 7m0 -7l-7 7" />}
+                {(t.g === 'tk' || t.g === 'ft') && <path d="M-5.5 3.5L5.5 -3.5" />}
+              </g>
+            ))}
+          </g>
+
+          <g class="toks">
+            {[0, 1, 2, 3, 4].map(() => (
+              <rect class="tok push" width="6" height="6" x="-10" y="-10" style="visibility:hidden" />
+            ))}
+            <rect class="tok pop" width="6" height="6" x="-10" y="-10" style="visibility:hidden" />
+            <circle class="chip" r="4" cx="-10" cy="-10" style="visibility:hidden" />
+            <g class="rt" transform="translate(-20 -20)" style="visibility:hidden">
+              {glyphs.map((k) => (
+                <g class={`g-${k}`} data-g={k}>
+                  {k === 'pt' && <circle r="3.6" />}
+                  {k === 'dg' && <rect x="-4" y="-4" width="8" height="8" />}
+                  {k === 'ht' && <path d="M-4 -4l8 8m0 -8l-8 8" />}
+                  {(k === 'tk' || k === 'ft') && <path d="M-6 4L6 -4" />}
+                </g>
+              ))}
+            </g>
+          </g>
+        </svg>
+      );
+    })
+  }
+  <p class="ch-cap" aria-live="polite" aria-atomic="true">
+    <code>run-&gt;SetName("<span data-slot="engine">TGeant3</span>")</code> selects the transport engine. Only the engine changes: the detector code
+    (<code>Pixel::ProcessHits()</code>) and the tasks stay the same.
+  </p>
+</div>
+
+<script>
+  type P = [number, number];
+  type Trk = { tx: number; ty: number };
+  interface Geo {
+    vx: number;
+    vy: number;
+    kz: number;
+    ky: number;
+    rail: number;
+    rows: number[];
+    still: Trk[];
+    push: P[];
+    pop: P[];
+    fill1: P[];
+    fill2: P[];
+    read: P[];
+    inR: P[];
+    outR: P[];
+  }
+  // The pixel detector (examples/common/geometry/pixel.geo), in mm.
+  const Z = [50, 100, 200];
+  const HALF = [25, 50, 100];
+  const HOLE = [5, 5, 10];
+  const ZEND = 240;
+  // Timeline of one simulated event, in seconds. The steps do not overlap, as in the code: all five
+  // primaries are on the stack before the engine pops the first one, the engine transports one track
+  // at a time, and the event is in the file before the next event starts.
+  const PUSH0 = 0.15; // first primary leaves the generator
+  const PUSHD = 0.12; // between two primaries
+  const PUSHT = 0.4; // generator to stack (the last primary arrives at 1.03)
+  const POP0 = 1.3; // first track leaves the stack
+  const POPT = 0.22; // stack to vertex
+  const GROW = 0.55; // vertex to the end of the view
+  const POPD = POPT + GROW + 0.04; // the next track leaves the stack when the last one is done
+  const FILL0 = POP0 + 4 * POPD + POPT + GROW + 0.3; // the event goes to the file
+  const T_SIM = FILL0 + 1.1; // the next event starts when this one is in the file
+  // Before POP0, the dimmed tracks and the fill show the end of the last event (time + T_SIM).
+  // Timeline of one reconstructed event.
+  const STOP0 = 0.85; // arrives at the first task
+  const STOPD = 1.0; // between two tasks
+  const HOLD = 0.7; // time at a task
+  const T_RECO = 5.6;
+  const OUTS = ['dg', 'ht', 'tk', 'ft'];
+
+  const lerp = (r: P[], u: number): P => [r[0][0] + (r[1][0] - r[0][0]) * u, r[0][1] + (r[1][1] - r[0][1]) * u];
+  const clamp = (u: number) => Math.max(0, Math.min(1, u));
+  const ease = (u: number) => u * u * (3 - 2 * u);
+  const within = (t: number, a: number, b: number) => t >= a && t < b;
+  // A primary of the box generator in run_sim.C: theta 0-40 deg, phi 0-360 deg, uniform.
+  const randomTrack = (): Trk => {
+    const t = Math.tan((Math.random() * 40 * Math.PI) / 180);
+    const ph = Math.random() * 2 * Math.PI;
+    return { tx: t * Math.cos(ph), ty: t * Math.sin(ph) };
+  };
+  // True if the track crosses the sensor of station i (inside the plane, outside the beam hole).
+  const hits = (tr: Trk, i: number) => {
+    const x = Z[i] * tr.tx;
+    const y = Z[i] * tr.ty;
+    return Math.abs(x) <= HALF[i] && Math.abs(y) <= HALF[i] && !(Math.abs(x) < HOLE[i] && Math.abs(y) < HOLE[i]);
+  };
+  const place = (e: SVGElement, p: P | null) => {
+    if (!p) {
+      e.style.visibility = 'hidden';
+      return;
+    }
+    e.style.visibility = '';
+    if (e instanceof SVGCircleElement) {
+      e.setAttribute('cx', p[0].toFixed(1));
+      e.setAttribute('cy', p[1].toFixed(1));
+    } else {
+      const s = Number(e.getAttribute('width') || 0) / 2;
+      e.setAttribute('x', (p[0] - s).toFixed(1));
+      e.setAttribute('y', (p[1] - s).toFixed(1));
+    }
+  };
+
+  const setup = (svg: SVGSVGElement, reduce: boolean) => {
+    const g: Geo = JSON.parse(svg.dataset.geo!);
+    const q = <T extends Element>(s: string) => [...svg.querySelectorAll<T>(s)];
+    const push = q<SVGRectElement>('.tok.push');
+    const pop = svg.querySelector<SVGRectElement>('.tok.pop')!;
+    const heads = q<SVGRectElement>('.tok.head');
+    const lines = q<SVGLineElement>('line.tr');
+    const pts = q<SVGCircleElement>('circle.pt');
+    const cells = q<SVGRectElement>('.cell');
+    const trk = svg.querySelector<SVGGElement>('.trk')!;
+    const chip = svg.querySelector<SVGCircleElement>('.chip')!;
+    const rt = svg.querySelector<SVGGElement>('.rt')!;
+    const rtGlyphs = q<SVGGElement>('.rt [data-g]');
+    const rows = q<SVGGElement>('.row');
+    const box = (name: string) => svg.querySelector<SVGGElement>(`[data-box="${name}"]`)!;
+    const boxes = { gen: box('gen'), frm: box('frm'), sim: box('sim'), src: box('src'), reco: box('reco') };
+    const P_ = (z: number, y: number): P => [g.vx + z * g.kz, g.vy - y * g.ky];
+
+    let ev: Trk[] = g.still;
+    let fresh = false; // a new event waits for its first track
+    let simT = FILL0 - 0.01; // start with the still event, complete
+    let recoT = 0;
+    let wait = 1.2; // the still event stays for a moment before the loop starts
+    let running = false;
+    let raf = 0;
+    let last = 0;
+
+    const drawSim = (t: number) => {
+      // Primaries from the generator to the stack.
+      push.forEach((e, k) => {
+        const u = (t - (PUSH0 + k * PUSHD)) / PUSHT;
+        place(e, u >= 0 && u < 1 ? lerp(g.push, ease(u)) : null);
+      });
+      let n = 0;
+      for (let k = 0; k < 5; k++) {
+        if (t >= PUSH0 + k * PUSHD + PUSHT) n++;
+        if (t >= POP0 + k * POPD) n--;
+      }
+      cells.forEach((c, i) => c.classList.toggle('on', i < n));
+      boxes.gen.classList.toggle('fl', within(t, PUSH0 - 0.1, PUSH0 + 4 * PUSHD + 0.1));
+      // Tracks: the engine takes a track from the stack and transports it through the detector.
+      const te = t < POP0 ? t + T_SIM : t;
+      let popAt: P | null = null;
+      ev.forEach((tr, k) => {
+        const t0 = POP0 + k * POPD;
+        const u = (te - t0) / POPT;
+        if (u >= 0 && u < 1) popAt = lerp(g.pop, ease(u));
+        const g0 = t0 + POPT;
+        const zh = te < g0 ? -1 : Math.min(ZEND, ((te - g0) / GROW) * ZEND);
+        const [x2, y2] = zh < 0 ? [g.vx, g.vy] : P_(zh, zh * tr.ty);
+        const ln = lines[k];
+        ln.style.visibility = zh < 0 ? 'hidden' : '';
+        ln.setAttribute('x2', x2.toFixed(1));
+        ln.setAttribute('y2', y2.toFixed(1));
+        place(heads[k], zh >= 0 && zh < ZEND ? [x2, y2] : null);
+        Z.forEach((z, i) => {
+          const c = pts[k * 3 + i];
+          const age = zh < z || !hits(tr, i) ? -1 : te - (g0 + (z / ZEND) * GROW);
+          if (age < 0) {
+            c.setAttribute('r', '0');
+            return;
+          }
+          const [cx, cy] = P_(z, z * tr.ty);
+          c.setAttribute('cx', cx.toFixed(1));
+          c.setAttribute('cy', cy.toFixed(1));
+          c.setAttribute('r', (age < 0.12 ? (3.8 * age) / 0.12 : age < 0.3 ? 3.8 - (age - 0.12) * 5.5 : 2.8).toFixed(2));
+        });
+      });
+      place(pop, popAt);
+      // The finished event stays dimmed in the view until the next event pops its first track.
+      trk.style.opacity = String(1 - 0.65 * clamp((te - FILL0) / 0.6));
+      // End of event: FairRootManager::Fill() writes the event to the file.
+      const u1 = (te - FILL0) / 0.4;
+      const u2 = (te - FILL0 - 0.65) / 0.25;
+      place(chip, u1 >= 0 && u1 < 1 ? lerp(g.fill1, ease(u1)) : u2 >= 0 && u2 < 1 ? lerp(g.fill2, ease(u2)) : null);
+      boxes.frm.classList.toggle('fl', within(te, FILL0 + 0.35, FILL0 + 0.75));
+      boxes.sim.classList.toggle('fl', within(te, FILL0 + 0.85, FILL0 + 1.15));
+    };
+
+    const showGlyph = (k: string, x: number, y: number, s: number) => {
+      rt.style.visibility = '';
+      rt.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${s.toFixed(2)})`);
+      rtGlyphs.forEach((e) => (e.style.display = e.dataset.g === k ? '' : 'none'));
+    };
+    const drawReco = (t: number) => {
+      let lit = -1;
+      let pos: P | null = null;
+      let kind = 'pt';
+      let s = 1;
+      if (t < 0.3) pos = lerp(g.read, ease(t / 0.3));
+      else if (within(t, 0.55, STOP0)) pos = lerp(g.inR, ease((t - 0.55) / (STOP0 - 0.55)));
+      for (let i = 0; i < 4; i++) {
+        const a = STOP0 + i * STOPD;
+        const m = a + 0.3; // the task converts the data here
+        if (t >= m) kind = OUTS[i];
+        if (Math.abs(t - m) < 0.12) s = 0.35 + (0.65 * Math.abs(t - m)) / 0.12;
+        if (within(t, a, a + HOLD)) {
+          pos = [g.rail, g.rows[i]];
+          lit = i;
+        } else if (i < 3 && within(t, a + HOLD, a + STOPD)) {
+          const u = ease((t - a - HOLD) / (STOPD - HOLD));
+          pos = [g.rail, g.rows[i] + (g.rows[i + 1] - g.rows[i]) * u];
+        }
+      }
+      const out0 = STOP0 + 3 * STOPD + HOLD;
+      if (within(t, out0, out0 + 0.3)) pos = lerp(g.outR, ease((t - out0) / 0.3));
+      if (pos) showGlyph(kind, pos[0], pos[1], s);
+      else rt.style.visibility = 'hidden';
+      rows.forEach((r, i) => r.classList.toggle('on', i === lit));
+      boxes.src.classList.toggle('fl', within(t, 0.25, 0.6));
+      boxes.reco.classList.toggle('fl', within(t, out0 + 0.25, out0 + 0.7));
+    };
+
+    const frame = (ts: number) => {
+      if (!running) return;
+      const dt = Math.min(0.05, (ts - (last || ts)) / 1000);
+      last = ts;
+      if (wait > 0) {
+        wait -= dt;
+        raf = requestAnimationFrame(frame);
+        return;
+      }
+      simT += dt;
+      if (simT >= T_SIM) {
+        simT -= T_SIM;
+        fresh = true;
+      }
+      if (fresh && simT >= POP0) {
+        ev = [0, 1, 2, 3, 4].map(randomTrack);
+        fresh = false;
+      }
+      recoT = (recoT + dt) % T_RECO;
+      drawSim(simT);
+      drawReco(recoT);
+      raf = requestAnimationFrame(frame);
+    };
+
+    // The still state: one complete event in the detector, no tokens.
+    drawSim(FILL0 - 0.01);
+    rt.style.visibility = 'hidden';
+    if (reduce || !('IntersectionObserver' in window)) return;
+    new IntersectionObserver(
+      (es) => {
+        for (const e of es) {
+          if (e.isIntersecting && !running) {
+            running = true;
+            last = 0;
+            raf = requestAnimationFrame(frame);
+          } else if (!e.isIntersecting && running) {
+            running = false;
+            cancelAnimationFrame(raf);
+          }
+        }
+      },
+      { threshold: 0.15 }
+    ).observe(svg);
+  };
+
+  for (const root of document.querySelectorAll<HTMLElement>('.fr-chain')) {
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    root.querySelectorAll<SVGSVGElement>('svg.ch').forEach((svg) => setup(svg, reduce));
+    const buttons = [...root.querySelectorAll<HTMLButtonElement>('[data-engine]')];
+    const engines = [...root.querySelectorAll<SVGGElement>('.eng')];
+    let timer = 0;
+    const setEngine = (name: string) => {
+      buttons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.engine === name)));
+      root.querySelectorAll('[data-slot="engine"]').forEach((e) => (e.textContent = name));
+      engines.forEach((e) => e.classList.add('sw'));
+      clearTimeout(timer);
+      timer = window.setTimeout(() => engines.forEach((e) => e.classList.remove('sw')), 900);
+    };
+    buttons.forEach((b) => b.addEventListener('click', () => setEngine(b.dataset.engine!)));
+  }
+</script>
+
+<style>
+  .fr-chain {
+    container-type: inline-size;
+    min-width: 0;
+    max-width: 40rem;
+    border: 1px solid var(--fr-rule);
+    background: var(--fr-paper);
+    border-radius: 6px;
+    padding: 0.75rem 0.75rem 0.6rem;
+  }
+  .ch-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.4rem 0.75rem;
+    flex-wrap: wrap;
+  }
+  .ch-head > span {
+    font-size: 0.78rem;
+    color: var(--fr-ink-3);
+  }
+  .ch-switch {
+    display: inline-flex;
+    border: 1px solid var(--fr-rule-strong);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .ch-switch button {
+    font: 600 0.78rem/1 var(--fr-font-mono);
+    border: 0;
+    background: var(--fr-paper);
+    color: var(--fr-ink-2);
+    padding: 0.5rem 0.9rem;
+    cursor: pointer;
+  }
+  .ch-switch button + button {
+    border-inline-start: 1px solid var(--fr-rule-strong);
+  }
+  .ch-switch button:hover {
+    color: var(--fr-ink);
+  }
+  .ch-switch button[aria-pressed='true'] {
+    background: var(--fr-ink);
+    color: var(--fr-paper);
+  }
+  /* The ring stays inside the switch (overflow: hidden). A paper ring under it keeps it visible on the
+     pressed button too. */
+  .ch-switch button:focus-visible {
+    outline-offset: -2px;
+    box-shadow: inset 0 0 0 4px var(--fr-paper);
+  }
+  svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-top: 0.6rem;
+  }
+  .ch-wide {
+    --fs: 11px;
+    --fs-s: 11px;
+  }
+  .ch-narrow {
+    --fs: 11.5px;
+    --fs-s: 11.5px;
+    display: none;
+  }
+  @container (max-width: 399.98px) {
+    .ch-wide {
+      display: none;
+    }
+    .ch-narrow {
+      display: block;
+    }
+  }
+  /* The wide layout needs 480 px for its 11 px text. On a one-column page (phones and small tablets),
+     a narrower container gets the narrow layout. The two-column hero (viewport wider than 60rem, see
+     Hero.astro) keeps the wide layout, because the narrow one is too tall there. */
+  @media (max-width: 60rem) {
+    @container (max-width: 479.98px) {
+      .ch-wide {
+        display: none;
+      }
+      .ch-narrow {
+        display: block;
+      }
+    }
+  }
+
+  .lane {
+    font: 650 11px var(--fr-font-body);
+    letter-spacing: 0.12em;
+    fill: var(--fr-ink-3);
+  }
+  .ch-narrow .lane {
+    font-size: 11.5px;
+  }
+  .run {
+    font: 500 var(--fs) var(--fr-font-mono);
+    letter-spacing: 0;
+    fill: var(--fr-ink-2);
+  }
+  .nm {
+    font: 600 var(--fs) var(--fr-font-mono);
+    fill: var(--fr-ink);
+  }
+  .sub {
+    font: 400 var(--fs-s) var(--fr-font-mono);
+    fill: var(--fr-ink-3);
+  }
+  .sub.br,
+  .sub.out {
+    fill: var(--fr-ink-2);
+  }
+  .en {
+    font: 700 12px var(--fr-font-mono);
+    fill: var(--fr-ink);
+    transition: fill 0.3s;
+  }
+  .tag {
+    font: 650 11px var(--fr-font-body);
+    letter-spacing: 0.1em;
+    fill: var(--fr-ink-3);
+  }
+  .ch-narrow .tag {
+    font-size: 11.5px;
+  }
+
+  .ed path,
+  .ra,
+  .rail {
+    fill: none;
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.4;
+  }
+  .ra {
+    stroke-width: 1.1;
+  }
+  .ah {
+    fill: var(--fr-rule-strong);
+  }
+  .bx {
+    fill: var(--fr-paper);
+    stroke: var(--fr-ink-2);
+    stroke-width: 1.2;
+    transition:
+      fill 0.25s,
+      stroke 0.25s;
+  }
+  .file .bx {
+    fill: var(--fr-paper-2);
+  }
+  .fold {
+    fill: none;
+    stroke: var(--fr-ink-2);
+    stroke-width: 1;
+  }
+  .bxg.fl .bx,
+  .eng.sw .bx {
+    fill: var(--fr-saffron-tint);
+    stroke: var(--fr-bar);
+  }
+  .eng.sw .en {
+    fill: var(--fr-accent-ink);
+  }
+  .tbl > .bx {
+    fill: var(--fr-paper);
+  }
+  .cell {
+    fill: var(--fr-paper-2);
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1;
+  }
+  .cell.on {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+  }
+
+  .ax {
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+  .st {
+    fill: var(--fr-ink-3);
+  }
+  .vtx {
+    fill: var(--fr-ink-2);
+  }
+  .tr {
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.2;
+  }
+  .pt {
+    fill: var(--fr-ruby);
+    stroke: var(--fr-paper);
+    stroke-width: 0.8;
+  }
+  .tok {
+    fill: var(--fr-saffron);
+    stroke: var(--fr-bar);
+    stroke-width: 1;
+  }
+  .chip {
+    fill: var(--fr-ruby);
+    stroke: var(--fr-paper);
+    stroke-width: 1;
+  }
+
+  .hl {
+    fill: var(--fr-saffron-tint);
+    opacity: 0;
+    transition: opacity 0.25s;
+  }
+  .row.on .hl {
+    opacity: 1;
+  }
+  .row.on .out {
+    fill: var(--fr-ink);
+  }
+  .stop {
+    fill: var(--fr-paper);
+    stroke: var(--fr-rule-strong);
+    stroke-width: 1.2;
+  }
+
+  .g-pt,
+  .g-pt circle {
+    fill: var(--fr-ruby);
+  }
+  .g-dg rect {
+    fill: var(--fr-sky);
+  }
+  .g-ht path {
+    fill: none;
+    stroke: var(--fr-teal);
+    stroke-width: 1.8;
+  }
+  .g-tk path,
+  .g-ft path {
+    fill: none;
+    stroke: var(--fr-bar);
+    stroke-width: 1.8;
+    stroke-dasharray: 2.6 1.6;
+  }
+  .g-ft path {
+    stroke-width: 2.6;
+    stroke-dasharray: none;
+  }
+  .g-mc {
+    fill: none;
+    stroke: var(--fr-ink-3);
+    stroke-width: 1.4;
+  }
+
+  .ch-cap {
+    margin: 0.5rem 0.15rem 0;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--fr-ink-2);
+  }
+  .ch-cap code {
+    font-size: 0.92em;
+    color: var(--fr-ink);
+    background: var(--fr-paper-2);
+    border: 1px solid var(--fr-rule);
+    border-radius: 3px;
+    padding: 0.02em 0.3em;
+    white-space: nowrap;
+  }
+  @media (max-width: 30rem) {
+    .fr-chain {
+      padding: 0.6rem 0.5rem 0.5rem;
+    }
+  }
+</style>
