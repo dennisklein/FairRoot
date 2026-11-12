@@ -1,0 +1,14 @@
+{
+ "label": "rerun-isa",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.685,
+ "fixed_runs_s": [
+  1.595,
+  1.713,
+  1.685
+ ],
+ "ms_per_event": 20.052252252252252,
+ "ms_per_event_err": 0.5804230223542763,
+ "maxrss_mb": 360.9
+}

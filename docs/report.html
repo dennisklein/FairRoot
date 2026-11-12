@@ -71,13 +71,15 @@ svg .muted { fill: var(--muted); }
 <section>
   <span class="eyebrow">Transformations</span>
   <h2>Measured results</h2>
-  <p>Each row adds one change to the row above it. Time per event is measured on seeds 101–105 with 1000 events each. The physics gate compares the variant with the baseline on seeds 1–5.</p>
+  <p>Each row adds one change to the row above it. The three builds ran one after the other on seeds 101–105, with 1000 events each. Time per event is CPU time minus the fixed cost, divided by 999, because CPU time is less sensitive to other load on the machine. The physics gate compares each variant with the baseline on seeds 1–5.</p>
   <div class="box"><table>
-    <tr><th>Variant</th><th class="num">ms / event</th><th class="num">Change</th><th class="num">Instr. / event</th><th>Gate</th></tr>
-    <tr><td>Baseline: upstream build settings, shared libraries</td><td class="num">23.00</td><td class="num">–</td><td class="num">203 M</td><td>reference</td></tr>
-    <tr><td>T1a: whole stack with <code>-march=x86-64-v3</code> (AVX2, FMA)</td><td class="num">20.52 ± 0.66</td><td class="num">−10.8 %</td><td class="num">181 M (−11.1 %)</td><td class="pass">pass (min p 0.10)</td></tr>
+    <tr><th>Variant</th><th class="num">CPU ms / event</th><th class="num">vs baseline</th><th class="num">Instr. / event</th><th class="num">Fixed cost</th><th>Gate</th></tr>
+    <tr><td>Baseline: upstream build settings, shared libraries</td><td class="num">22.38 ± 0.12</td><td class="num">–</td><td class="num">203 M</td><td class="num">1.85 s</td><td>reference</td></tr>
+    <tr><td>T1a: whole stack with <code>-march=x86-64-v3</code> (AVX2, FMA)</td><td class="num">19.94 ± 0.56</td><td class="num">−10.9 %</td><td class="num">181 M</td><td class="num">1.69 s</td><td class="pass">pass (min p 0.10)</td></tr>
+    <tr><td>T1b: T1a plus LTO in all packages (not in ROOT's LLVM and Cling)</td><td class="num">20.62 ± 0.21</td><td class="num">−7.9 %</td><td class="num">175 M</td><td class="num">1.68 s</td><td class="pass">pass (min p 0.085)</td></tr>
   </table></div>
-  <p>T1a removes the 1.9 M libm <code>fmaf</code> calls per event in the field map: the compiler now emits the FMA instruction inline. The field map drops from 24.5 % to 20.1 % of the instructions. TGeo navigation is now 58 % of all instructions. The bit hash changes, because FMA rounds differently, but the gate shows that the physics is equal.</p>
+  <p><b>T1a</b> removes the 1.9 M libm <code>fmaf</code> calls per event in the field map: the compiler now emits the FMA instruction inline. The field map drops from 24.5 % to 20.1 % of the instructions. TGeo navigation is now 58 % of all instructions. The bit hash changes, because FMA rounds differently, but the gate shows that the physics is equal.</p>
+  <p><b>T1b</b> removes 3 % of the instructions, but the time does not improve: the difference to T1a is within the noise. LTO works only inside one shared library. Calls between functions of the same library still go through the PLT when the function is exported, because the dynamic linker may replace an exported function at run time (symbol interposition). The PLT calls inside Geant4 drop only from 316 k to 254 k per event, and inside ROOT from 242 k to 206 k. The library boundary, not the compiler, limits LTO here. T2 removes this boundary.</p>
 </section>
 
 <section>
@@ -176,8 +178,8 @@ svg .muted { fill: var(--muted); }
   <h2>Transformations, each measured alone</h2>
   <div class="box"><table>
     <tr><th>Step</th><th>Change</th><th>Expected lever from the baseline</th></tr>
-    <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −10.8 %</td></tr>
-    <tr><td>T1b</td><td>LTO in all packages</td><td>PLT calls inside Geant4 and ROOT</td></tr>
+    <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −10.9 %</td></tr>
+    <tr><td>T1b</td><td>LTO in all packages</td><td>Done: no gain in time over T1a</td></tr>
     <tr><td>T2</td><td>Static link, no dictionaries</td><td>PLT, start-up</td></tr>
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>

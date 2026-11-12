@@ -137,22 +137,29 @@ def main():
         return
 
     # Fixed cost: runs with 1 event. Per-event time = (wall - fixed) / (events - 1).
-    fixed = []
-    for i in range(args.fixed_runs):
-        fixed.append(run_one(prefix, env, work, seeds(args.seeds)[0], 1, False, args.field, args.key_values)["wall_s"])
+    # CPU time is less sensitive to other load on the machine than wall time.
+    fixed_runs = [run_one(prefix, env, work, seeds(args.seeds)[0], 1, False, args.field, args.key_values)
+                  for _ in range(args.fixed_runs)]
+    fixed = [r["wall_s"] for r in fixed_runs]
     fixed_s = statistics.median(fixed)
+    fixed_cpu_s = statistics.median(r["cpu_s"] for r in fixed_runs)
     per_event = [(r["wall_s"] - fixed_s) / (r["events"] - 1) * 1e3 for r in rows]
+    per_event_cpu = [(r["cpu_s"] - fixed_cpu_s) / (r["events"] - 1) * 1e3 for r in rows]
     summary = {
         "label": args.label, "events": args.events, "seeds": len(rows),
         "fixed_s": fixed_s, "fixed_runs_s": fixed,
         "ms_per_event": statistics.mean(per_event),
         "ms_per_event_err": statistics.stdev(per_event) / len(per_event) ** 0.5 if len(per_event) > 1 else 0.0,
+        "fixed_cpu_s": fixed_cpu_s,
+        "cpu_ms_per_event": statistics.mean(per_event_cpu),
+        "cpu_ms_per_event_err": statistics.stdev(per_event_cpu) / len(per_event_cpu) ** 0.5 if len(per_event_cpu) > 1 else 0.0,
         "maxrss_mb": max(r["maxrss_mb"] for r in rows),
     }
     with open(os.path.join(out, "summary.json"), "w") as f:
         json.dump(summary, f, indent=1)
     print(f"{args.label}: fixed {fixed_s:.2f} s, {summary['ms_per_event']:.2f} "
-          f"+- {summary['ms_per_event_err']:.2f} ms per event", flush=True)
+          f"+- {summary['ms_per_event_err']:.2f} ms per event (wall), {summary['cpu_ms_per_event']:.2f} "
+          f"+- {summary['cpu_ms_per_event_err']:.2f} ms per event (cpu)", flush=True)
 
 
 if __name__ == "__main__":

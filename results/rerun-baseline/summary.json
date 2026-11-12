@@ -1,0 +1,14 @@
+{
+ "label": "rerun-baseline",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.846,
+ "fixed_runs_s": [
+  1.959,
+  1.846,
+  1.795
+ ],
+ "ms_per_event": 22.992992992992992,
+ "ms_per_event_err": 0.434972312480158,
+ "maxrss_mb": 356.6
+}

@@ -1,0 +1,14 @@
+{
+ "label": "t1b-lto",
+ "events": 1000,
+ "seeds": 5,
+ "fixed_s": 1.621,
+ "fixed_runs_s": [
+  1.621,
+  1.554,
+  1.633
+ ],
+ "ms_per_event": 21.093293293293296,
+ "ms_per_event_err": 0.1796838342040489,
+ "maxrss_mb": 349.8
+}
