@@ -1,0 +1,79 @@
+-------------------------------------------------------------------------
+Copyright (C) 2019 CERN and copyright holders of VMC Project.
+This software is distributed under the terms of the GNU General Public
+License v3 (GPL Version 3), copied verbatim in the file "LICENSE".
+
+See https://github.com/vmc-project/vmc for full licensing information.
+-------------------------------------------------------------------------
+
+Tags (history):
+===============
+  22/04/2026
+  v2-2:
+  - kPRadDecay process added in TMCProcess.h (PR #26)
+
+  Tested with ROOT 6.36/02
+
+  06/02/2025
+  v2-1:
+  - Updates in documentation (PR #16, #19)
+  - Updated CMake minimum version (PR #21)
+
+  Tested with ROOT 6.32/08
+
+  10/02/2022
+  v2-0:
+  - Extended Optical surface models, types and finish type enums
+    to cover all values defined in Geant4 11.0
+  - Extended TVirtualMC functions SetCerenkov() and SetMaterialProperty()
+    to allow enabling of spline interpolation of the data and user
+    properties
+  - Make the TVirtualMC interface function =0 and removed
+    the default implementation
+  - Removed deprecated TVirtualMCApplication functions for MT:
+    - virtual void InitForWorker() const;
+    - virtual void BeginWorkerRun() const;
+    - virtual void FinishWorkerRun() const;
+    The non-constant functions should be used instead;
+    - virtual void InitOnWorker();
+    - virtual void BeginRunOnWorker();
+    - virtual void FinishRunOnWorker();
+  - Updated TMCAutoLock.h, TMCtls.h
+  - Added TMCRootManager class previously provided in geant4_vmc
+
+  Tested with ROOT 6.24/06
+
+  03/12/2021
+  v1-1:
+  - Update in cmake: export install prefix
+  - Fixed generation of root dictionary map
+  - Restored the dictionaries relocability, improve security and clean up
+    for packaging
+    (Thanks to Ch. Tacke, GSI.)
+  - Fixed track indexing, geometry construction in TMCManagerStack
+    (affecting multiple engines mode only).
+
+  Tested with ROOT 6.24/06
+
+  24/02/2020
+  v1-0:
+  - First production release.
+  - Several fixes for the new multiple engine mode
+  - Updated CMake to make the installation relocatable
+  - Added printing of the version number in TVirtualMC constructor
+    and the TMCVersion.h header with the version definitions.
+
+  Tested with ROOT 6.18/04 (*)
+  (*) This version is ahead of the vmc in ROOT 6.18/04,
+  it includes fixes scheduled for the next ROOT tags 6.18/06 and 6.20/00.
+
+  19/07/2019
+  v0-1:
+    - The first tag (not yet for production).
+    - All source code/documentation files are identical with 
+      the code in ROOT (v6.18/00) vmc directory.
+    - All further updates to vmc (except for bug fixes) will
+      go to the vmc-project repository.
+ 
+
+

@@ -1,0 +1,23 @@
+# ------------------------------------------------------------------------
+# Copyright (C) 2019 CERN and copyright holders of VMC Project.
+# This software is distributed under the terms of the GNU General Public
+# License v3 (GPL Version 3), copied verbatim in the file "LICENSE".
+# 
+# See https://github.com/vmc-project/vmc for full licensing information.
+# ------------------------------------------------------------------------
+
+# Configuration file for CMake build for VMC library
+#
+# I. Hrivnacova, 09/04/2019
+
+set(PACKAGE_VERSION "@VMC_VERSION@")
+ 
+# Check whether the requested PACKAGE_FIND_VERSION is compatible
+if("${PACKAGE_VERSION}" VERSION_LESS "${PACKAGE_FIND_VERSION}")
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+else()
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+  if ("${PACKAGE_VERSION}" VERSION_EQUAL "${PACKAGE_FIND_VERSION}")
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+endif()

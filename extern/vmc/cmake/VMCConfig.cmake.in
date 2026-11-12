@@ -1,0 +1,33 @@
+# ------------------------------------------------------------------------
+# Copyright (C) 2019 CERN and copyright holders of VMC Project.
+# This software is distributed under the terms of the GNU General Public
+# License v3 (GPL Version 3), copied verbatim in the file "LICENSE".
+# 
+# See https://github.com/vmc-project/vmc for full licensing information.
+# ------------------------------------------------------------------------
+
+# Configuration file for CMake build for VMC package.
+# It defines the following variables
+#  VMC_PREFIX               - installation prefix
+#  VMC_INCLUDE_DIRS         - include directories for VMC library
+#  VMC_LIBRARIES            - libraries to link against
+#  VMC_CMAKE_INSTALL_LIBDIR - library installation directory
+#
+# I. Hrivnacova, 09/04/2019
+
+# Compute installation prefix relative to this file
+get_filename_component(_dir "${CMAKE_CURRENT_LIST_FILE}" PATH)
+get_filename_component(_prefix "${_dir}/../.." ABSOLUTE)
+
+# Import targets
+include("${_prefix}/@CMAKE_INSTALL_LIBDIR@/VMC-@VMC_VERSION@/VMCTargets.cmake")
+ 
+# Import options
+set(VMC_PREFIX "${_prefix}")
+set(VMC_CMAKE_INSTALL_LIBDIR @CMAKE_INSTALL_LIBDIR@)
+
+# These are IMPORTED targets created by VMCTargets.cmake
+set(VMC_LIBRARIES "VMCLibrary")
+
+# Set includes
+set(VMC_INCLUDE_DIRS "${_prefix}/include/vmc")
