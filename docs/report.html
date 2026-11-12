@@ -71,15 +71,18 @@ svg .muted { fill: var(--muted); }
 <section>
   <span class="eyebrow">Transformations</span>
   <h2>Measured results</h2>
-  <p>Each row adds one change to the row above it. The three builds ran one after the other on seeds 101–105, with 1000 events each. Time per event is CPU time minus the fixed cost, divided by 999, because CPU time is less sensitive to other load on the machine. The physics gate compares each variant with the baseline on seeds 1–5.</p>
+  <p>Each row adds one change to the row above it. All builds ran in one interleaved series: seed 101 on every build, then seed 102 on every build, and so on, with 1000 events per run. The machine drifts by about 5 % between sessions, which is more than some effects, so only numbers from one series are compared. Time per event is CPU time minus the fixed cost, divided by 999. The physics gate compares each variant with the baseline on seeds 1–5.</p>
   <div class="box"><table>
-    <tr><th>Variant</th><th class="num">CPU ms / event</th><th class="num">vs baseline</th><th class="num">Instr. / event</th><th class="num">Fixed cost</th><th>Gate</th></tr>
-    <tr><td>Baseline: upstream build settings, shared libraries</td><td class="num">22.38 ± 0.12</td><td class="num">–</td><td class="num">203 M</td><td class="num">1.85 s</td><td>reference</td></tr>
-    <tr><td>T1a: whole stack with <code>-march=x86-64-v3</code> (AVX2, FMA)</td><td class="num">19.94 ± 0.56</td><td class="num">−10.9 %</td><td class="num">181 M</td><td class="num">1.69 s</td><td class="pass">pass (min p 0.10)</td></tr>
-    <tr><td>T1b: T1a plus LTO in all packages (not in ROOT's LLVM and Cling)</td><td class="num">20.62 ± 0.21</td><td class="num">−7.9 %</td><td class="num">175 M</td><td class="num">1.68 s</td><td class="pass">pass (min p 0.085)</td></tr>
+    <tr><th>Variant</th><th class="num">CPU ms / event</th><th class="num">vs baseline</th><th class="num">Fixed cost</th><th>Gate</th></tr>
+    <tr><td>Baseline: upstream build settings, shared libraries</td><td class="num">21.81 ± 0.13</td><td class="num">–</td><td class="num">1.80 s</td><td>reference</td></tr>
+    <tr><td>T1a: whole stack with <code>-march=x86-64-v3</code> (AVX2, FMA)</td><td class="num">18.99 ± 0.36</td><td class="num">−12.9 %</td><td class="num">1.62 s</td><td class="pass">pass (min p 0.10)</td></tr>
+    <tr><td>T1b: T1a plus LTO in all packages (not in ROOT's LLVM and Cling)</td><td class="num">20.04 ± 0.43</td><td class="num">−8.1 %</td><td class="num">1.68 s</td><td class="pass">pass (min p 0.085)</td></tr>
+    <tr><td>T2a: T1b without symbol interposition (<code>-fno-semantic-interposition</code>, <code>-Bsymbolic-functions</code>)</td><td class="num">19.11 ± 0.20</td><td class="num">−12.4 %</td><td class="num">1.53 s</td><td class="pass">pass</td></tr>
   </table></div>
   <p><b>T1a</b> removes the 1.9 M libm <code>fmaf</code> calls per event in the field map: the compiler now emits the FMA instruction inline. The field map drops from 24.5 % to 20.1 % of the instructions. TGeo navigation is now 58 % of all instructions. The bit hash changes, because FMA rounds differently, but the gate shows that the physics is equal.</p>
-  <p><b>T1b</b> removes 3 % of the instructions, but the time does not improve: the difference to T1a is within the noise. LTO works only inside one shared library. Calls between functions of the same library still go through the PLT when the function is exported, because the dynamic linker may replace an exported function at run time (symbol interposition). The PLT calls inside Geant4 drop only from 316 k to 254 k per event, and inside ROOT from 242 k to 206 k. The library boundary, not the compiler, limits LTO here. T2 removes this boundary.</p>
+  <p><b>T1b</b> removes 3 % of the instructions, but it is 5.5 % slower than T1a (about 2 standard errors). LTO works only inside one shared library. Calls between functions of the same library still go through the PLT when the function is exported, because the dynamic linker may replace an exported function at run time (symbol interposition). The PLT calls inside Geant4 drop only from 316 k to 254 k per event, and inside ROOT from 242 k to 206 k. The library boundary, not the compiler, limits LTO here. T2 removes this boundary.</p>
+  <p><b>T2a</b> lets the compiler and the linker bind calls inside one library directly. The PLT calls inside Geant4 drop from 254 k to 93 k per event, and inside ROOT from 206 k to 34 k. T2a is 4.6 % faster than T1b, but only as fast as T1a. So LTO in shared libraries gains nothing here, also when interposition is off. The fixed cost drops from 1.80 s to 1.53 s, because the dynamic linker resolves fewer symbols.</p>
+  <p>T2a has one side effect. At start-up, ROOT reads a <code>TObject</code> after <code>delete</code>, to see if <code>delete</code> changes the memory (<code>CheckingDeleteSideEffects</code> in <code>TObject.cxx</code>). Reading freed memory is undefined behaviour. Without interposition, the compiler optimizes this probe, and ROOT prints an error and turns off its deleted-object detection. The physics is not affected, but ROOT depends on code that a compiler may legally break.</p>
 </section>
 
 <section>
@@ -178,13 +181,14 @@ svg .muted { fill: var(--muted); }
   <h2>Transformations, each measured alone</h2>
   <div class="box"><table>
     <tr><th>Step</th><th>Change</th><th>Expected lever from the baseline</th></tr>
-    <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −10.9 %</td></tr>
-    <tr><td>T1b</td><td>LTO in all packages</td><td>Done: no gain in time over T1a</td></tr>
-    <tr><td>T2</td><td>Static link, no dictionaries</td><td>PLT, start-up</td></tr>
+    <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −12.9 %</td></tr>
+    <tr><td>T1b</td><td>LTO in all packages</td><td>Done: slower than T1a</td></tr>
+    <tr><td>T2a</td><td>No symbol interposition inside a library</td><td>Done: as fast as T1a, lower fixed cost</td></tr>
+    <tr><td>T2b</td><td>Static link of Geant4, VMC, geant4_vmc and O2 (ROOT stays shared)</td><td>PLT between layers, whole-program LTO</td></tr>
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
     <tr><td>T5</td><td>Compile-time geometry, native Geant4 geometry</td><td>Large: TGeo navigation is half of the cost</td></tr>
-    <tr><td>T6</td><td>Flat hit output</td><td>Output and start-up</td></tr>
+    <tr><td>T6</td><td>Flat hit output, no ROOT dictionaries</td><td>Output and start-up</td></tr>
     <tr><td>T7</td><td>No VMC, native Geant4 stepping</td><td>Removes geant4_vmc (2 %)</td></tr>
   </table></div>
   <p>FV0 makes few hits. EMCAL and ITS2 make many, so the per-hit layers (T3, T4, T6) can cost more there. That is why the plan continues with these detectors.</p>
