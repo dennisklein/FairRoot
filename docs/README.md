@@ -2,6 +2,8 @@
 
 This folder is the source of the FairRoot documentation site on GitHub Pages. The
 site uses [Astro](https://astro.build/) with [Starlight](https://starlight.astro.build/).
+The workflow [`docs.yml`](../.github/workflows/docs.yml) builds the site for each
+pull request and deploys it to GitHub Pages for each push to `dev`.
 
 ## Requirements
 

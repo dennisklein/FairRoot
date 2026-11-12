@@ -295,6 +295,7 @@ syntax, the snippets and all links in a few seconds.
 | Builds and tests | Jenkins | Each pull request and each branch build | A build fails or a test fails |
 | Check format | Jenkins | Each pull request | clang-format suggests changes to the changed lines |
 | clang-tidy | Jenkins, one Linux job | Each pull request and each branch build | Four or more new warnings mark the build as unstable |
+| Docs | GitHub Actions, [docs.yml](/repo/.github/workflows/docs.yml) | Each pull request and each push to `dev` | The site does not build, or a link points to a missing page or anchor |
 | Metadata | GitHub Actions, [check_metadata.yaml](/repo/.github/workflows/check_metadata.yaml) | Changes of `AUTHORS`, `CONTRIBUTORS`, `codemeta.json` or `.zenodo.json` | `meta_update.py` fails or changes a file |
 | CodeMeta | GitHub Actions, [codemeta_validate.yaml](/repo/.github/workflows/codemeta_validate.yaml) | Changes of `codemeta.json` | `codemeta.json` is not valid |
 
