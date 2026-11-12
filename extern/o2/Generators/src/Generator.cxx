@@ -26,7 +26,6 @@
 #include "TString.h"
 #include "TSystem.h"
 #include "TGrid.h"
-#include "CCDB/BasicCCDBManager.h"
 #include <filesystem>
 #include <cstdlib>
 #ifdef GENERATORS_WITH_TPCLOOPERS

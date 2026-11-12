@@ -10,7 +10,6 @@
 // or submit itself to any jurisdiction.
 
 #include "DetectorsBase/Aligner.h"
-#include "CCDB/BasicCCDBManager.h"
 #include "DetectorsBase/GeometryManager.h"
 #include "DetectorsCommonDataFormats/AlignParam.h"
 #include "DetectorsCommonDataFormats/DetectorNameConf.h"
@@ -40,39 +39,7 @@ void Aligner::applyAlignment(long timestamp, DetID::mask_t addMask) const
     throw std::runtime_error("Geometry is locked, cannot apply alignment");
   }
 
-  auto& ccdbmgr = o2::ccdb::BasicCCDBManager::instance();
-  if (timestamp == 0) {
-    timestamp = getTimeStamp();
-  }
-  ccdbmgr.setURL(o2::base::NameConf::getCCDBServer());
-  ccdbmgr.setTimestamp(timestamp);
-  DetID::mask_t done, skipped;
-  DetID::mask_t detGeoMask(gGeoManager->GetUniqueID());
-  for (auto id = DetID::First; id <= DetID::Last; id++) {
-    if (!msk[id] || (detGeoMask.any() && !detGeoMask[id])) {
-      continue;
-    }
-    std::string path = o2::base::DetectorNameConf::getAlignmentPath({id});
-    auto algV = ccdbmgr.get<std::vector<o2::detectors::AlignParam>>(path);
-    if (!algV) {
-      throw std::runtime_error(fmt::format("Failed to fetch alignment from {}:{}", o2::base::NameConf::getCCDBServer(), path));
-    }
-    if (!algV->empty()) {
-      done.set(id);
-      o2::base::GeometryManager::applyAlignment(*algV);
-    } else {
-      skipped.set(id);
-    }
-  }
-  std::string log = fmt::format("Alignment from {} for timestamp {}: ", o2::base::NameConf::getCCDBServer(), timestamp);
-  if (done.any()) {
-    log += fmt::format("applied to [{}]", DetID::getNames(done));
-  }
-  if (skipped.any()) {
-    log += fmt::format(", empty object for [{}]", DetID::getNames(skipped));
-  }
-  LOG(info) << log;
-  gGeoManager->RefreshPhysicalNodes(false);
+  throw std::runtime_error("alignment from the CCDB is not part of this build");
 }
 
 long Aligner::getTimeStamp() const
