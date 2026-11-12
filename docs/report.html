@@ -58,11 +58,13 @@ svg .muted { fill: var(--muted); }
   <span class="eyebrow">Result so far</span>
   <h2>The organizational layers are cheap. Two implementation choices are expensive.</h2>
   <div class="kv">
+    <div><b>23.3 ms</b><span>per event (± 0.16), fixed cost 1.9 s</span></div>
     <div><b>203 M</b><span>instructions per event</span></div>
     <div><b>49.6 %</b><span>TGeo navigation (ROOT)</span></div>
     <div><b>24.5 %</b><span>field map (O2)</span></div>
     <div><b>&lt; 0.2 %</b><span>VMC and FairRoot together</span></div>
   </div>
+  <p>The time per event comes from 5 seeds × 1000 events on one core: (wall time − fixed cost) / 999. The fixed cost is the median of three 1-event runs: 0.6 s start-up and 1.3 s for the Geant4 physics tables at the first event.</p>
   <p>Geant4 navigates in the ROOT geometry (TGeo) through g4root, because O2 uses TGeo as the geometry source. The navigation costs half of all instructions per event. The O2 Chebyshev field map costs one quarter. Geant4 physics and stepping cost one eighth. The VMC interface and the FairRoot dispatch layer cost almost nothing for FV0.</p>
 </section>
 
@@ -147,11 +149,12 @@ svg .muted { fill: var(--muted); }
   <p>The gate compares a candidate build with the reference build on independent seeds. Event observables use the two-sample KS test. Hit observables use permutation tests over whole events, because hits in one event are correlated. The gate passes when every p-value is above 0.01 divided by the number of tests (Bonferroni). An equal hit hash is a diagnostic only.</p>
   <p>The first gate tested hits as independent samples. It failed for two seed sets of the same build (cell χ² = 246 for 39 degrees of freedom). With event permutations, the same data give p = 0.40. We also added the hit offset from the straight line of its track. This observable shows the bending in the field.</p>
   <div class="box"><table>
-    <tr><th>Calibration, 5 × 200 events</th><th class="num">Smallest p</th><th>Gate</th></tr>
-    <tr><td>Same build, other seeds</td><td class="num">0.032 (hit r)</td><td class="pass">pass</td></tr>
+    <tr><th>Calibration</th><th class="num">Smallest p</th><th>Gate</th></tr>
+    <tr><td>Same build, other seeds, 5 × 1000 events</td><td class="num">0.099 (hit cell)</td><td class="pass">pass</td></tr>
+    <tr><td>Same build, other seeds, 5 × 200 events</td><td class="num">0.032 (hit r)</td><td class="pass">pass</td></tr>
     <tr><td>Same seed again</td><td class="num">identical hash</td><td class="pass">deterministic</td></tr>
-    <tr><td>Field 5 → 2 kG</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
-    <tr><td>p<sub>max</sub> 10 → 9.5 GeV/c</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
+    <tr><td>Field 5 → 2 kG, 5 × 200 events</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
+    <tr><td>p<sub>max</sub> 10 → 9.5 GeV/c, 5 × 200 events</td><td class="num">0.00025 (hit dφ)</td><td class="fail">fail</td></tr>
   </table></div>
   <p class="cap">0.00025 is the smallest p that 4000 permutations can give. The threshold is 0.00071.</p>
 </section>
