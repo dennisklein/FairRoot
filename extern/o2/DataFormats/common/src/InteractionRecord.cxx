@@ -1,0 +1,50 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+#include "CommonDataFormat/InteractionRecord.h"
+#include <iostream>
+#include <fmt/printf.h>
+
+namespace o2
+{
+
+std::string InteractionRecord::asString() const
+{
+  return isDummy() ? std::string{"NotSet"} : fmt::format("BCid: {:4d} Orbit: {:6d}", bc, orbit);
+}
+
+std::ostream& operator<<(std::ostream& stream, o2::InteractionRecord const& ir)
+{
+  stream << ir.asString();
+  return stream;
+}
+
+std::string InteractionTimeRecord::asString() const
+{
+  return isDummy() ? InteractionRecord::asString() : InteractionRecord::asString() + fmt::format(" |T in BC(ns): {:.3f}", timeInBCNS);
+}
+
+std::ostream& operator<<(std::ostream& stream, o2::InteractionTimeRecord const& ir)
+{
+  stream << ir.asString();
+  return stream;
+}
+
+void InteractionRecord::print() const
+{
+  std::cout << (*this) << std::endl;
+}
+
+void InteractionTimeRecord::print() const
+{
+  std::cout << (*this) << std::endl;
+}
+
+} // namespace o2

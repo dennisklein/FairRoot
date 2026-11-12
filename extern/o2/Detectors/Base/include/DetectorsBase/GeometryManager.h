@@ -1,0 +1,190 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/// \file GeometryManager.h
+/// \brief Definition of the GeometryManager class
+
+#ifndef ALICEO2_BASE_GEOMETRYMANAGER_H_
+#define ALICEO2_BASE_GEOMETRYMANAGER_H_
+
+#include <TGeoManager.h> // for TGeoManager
+#include <TGeoMaterial.h>
+#include <TGeoPhysicalNode.h> // for TGeoPNEntry
+#include <TGeoShape.h>
+#include <TMath.h>
+#include <TObject.h> // for TObject
+#include <string_view>
+#include "DetectorsCommonDataFormats/DetID.h"
+#include "GPUCommonLogger.h" // for LOG
+#include "MathUtils/Cartesian.h"
+#include "DetectorsBase/MatCell.h"
+#include <mutex>
+#include <vector>
+class TGeoHMatrix; // lines 11-11
+class TGeoManager; // lines 9-9
+class TGeoNavigator;
+
+namespace o2
+{
+namespace detectors
+{
+class AlignParam;
+}
+
+namespace base
+{
+/// Backend used to compute material budget for LUT filling: ROOT/TGeo (default, always
+/// available) or VecGeom (requires O2 to be built against the optional TGeo2VecGeom
+/// package; see GeometryManager::isVecGeomAvailable()).
+enum class MatbudGeomBackend : int { ROOT = 0,
+                                     VECGEOM = 1 };
+
+/// Class for interfacing to the geometry; it also builds and manages the look-up tables for fast
+/// access to geometry and alignment information for sensitive alignable volumes:
+/// 1) the look-up table mapping unique volume ids to TGeoPNEntries. This allows to access
+/// directly by means of the unique index the associated symbolic name and original global matrix
+/// in addition to the functionality of the physical node associated to a given alignable volume
+/// 2) the look-up table of the alignment objects associated to the indexed alignable volumes
+class GeometryManager : public TObject
+{
+ public:
+  ///< load geometry from file
+  ///< When applyMisalignedment == false --> read from unaligned file
+  ///< When preferAlignedFile == true and applyMisalignment == true : Prefer reading from existing aligned file
+  static void loadGeometry(std::string_view geomFilePath = "", bool applyMisalignment = false, bool preferAlignedFile = true);
+  static bool isGeometryLoaded() { return gGeoManager != nullptr; }
+  static void applyMisalignent(bool applyMisalignment = true);
+
+  ///< Get the global transformation matrix (ideal geometry) for a given alignable volume
+  ///< The alignable volume is identified by 'symname' which has to be either a valid symbolic
+  ///< name, the query being performed after alignment, or a valid volume path if the query is
+  ///< performed before alignment.
+  static Bool_t getOriginalMatrix(o2::detectors::DetID detid, int sensid, TGeoHMatrix& m);
+  static Bool_t getOriginalMatrix(const char* symname, TGeoHMatrix& m);
+  static TGeoHMatrix* getMatrix(const char* symname);
+  static const char* getSymbolicName(o2::detectors::DetID detid, int sensid);
+  static TGeoPNEntry* getPNEntry(o2::detectors::DetID detid, Int_t sensid);
+  static TGeoHMatrix* getMatrix(o2::detectors::DetID detid, Int_t sensid);
+
+  static int getSensID(o2::detectors::DetID detid, int sensid)
+  {
+    /// compose combined detector+sensor ID for sensitive volumes
+    return detid <= o2::detectors::DetID::FOC ? ((detid << sDetOffset) | (sensid & sSensorMask)) : ((detid << sDetOffsetLarge) | (sensid & sSensorMaskLarge));
+  }
+
+  /// Default destructor
+  ~GeometryManager() override = default;
+
+  /// misalign geometry with alignment objects from the array, optionaly check overlaps
+  static bool applyAlignment(const std::vector<o2::detectors::AlignParam>& algPars);
+  static bool applyAlignment(const std::vector<const std::vector<o2::detectors::AlignParam>*> algPars);
+
+  struct MatBudgetExt {
+    double meanRho = 0.;  // mean density: sum(x_i*rho_i)/sum(x_i) [g/cm3]
+    double meanX2X0 = 0.; // equivalent rad length fraction: sum(x_i/X0_i) [adimensional]
+    double meanA = 0.;    // mean A: sum(x_i*A_i)/sum(x_i) [adimensional]
+    double meanZ = 0.;    // mean Z: sum(x_i*Z_i)/sum(x_i) [adimensional]
+    double meanZ2A = 0.;  // Z/A mean: sum(x_i*Z_i/A_i)/sum(x_i) [adimensional]
+    double length = -1.;  // length: sum(x_i) [cm]
+    int nCross = 0;       // number of boundary crosses
+
+    MatBudgetExt() = default;
+    ~MatBudgetExt() = default;
+    MatBudgetExt(const MatBudgetExt& src) = default;
+    MatBudgetExt& operator=(const MatBudgetExt& src) = default;
+    void normalize(double nrm);
+    ClassDefNV(MatBudgetExt, 1);
+  };
+
+  /// Mean material budget between two points. Pass a navigator owned by the calling thread to
+  /// run lock-free from several threads; with nav = nullptr the shared navigator is used under
+  /// a mutex, as before.
+  static o2::base::MatBudget meanMaterialBudget(float x0, float y0, float z0, float x1, float y1, float z1,
+                                                TGeoNavigator* nav = nullptr);
+  static o2::base::MatBudget meanMaterialBudget(const math_utils::Point3D<float>& start, const math_utils::Point3D<float>& end, TGeoNavigator* nav = nullptr)
+  {
+    return meanMaterialBudget(start.X(), start.Y(), start.Z(), end.X(), end.Y(), end.Z(), nav);
+  }
+  static o2::base::MatBudget meanMaterialBudget(const math_utils::Point3D<double>& start, const math_utils::Point3D<double>& end, TGeoNavigator* nav = nullptr)
+  {
+    return meanMaterialBudget(start.X(), start.Y(), start.Z(), end.X(), end.Y(), end.Z(), nav);
+  }
+
+  static MatBudgetExt meanMaterialBudgetExt(float x0, float y0, float z0, float x1, float y1, float z1);
+  static MatBudgetExt meanMaterialBudgetExt(const math_utils::Point3D<float>& start, const math_utils::Point3D<float>& end)
+  {
+    return meanMaterialBudgetExt(start.X(), start.Y(), start.Z(), end.X(), end.Y(), end.Z());
+  }
+  static MatBudgetExt meanMaterialBudgetExt(const math_utils::Point3D<double>& start, const math_utils::Point3D<double>& end)
+  {
+    return meanMaterialBudgetExt(start.X(), start.Y(), start.Z(), end.X(), end.Y(), end.Z());
+  }
+
+  /// Whether this build of O2 was configured with the optional VecGeom material-budget
+  /// backend (i.e. TGeo2VecGeom was found at CMake configure time).
+#ifdef O2_WITH_VECGEOM
+  static constexpr bool isVecGeomAvailable() { return true; }
+  /// Mean material budget between two points, using the VecGeom backend. On first call,
+  /// lazily converts the currently loaded TGeo geometry to VecGeom (once per process).
+  static o2::base::MatBudget vecGeomMaterialBudget(float x0, float y0, float z0, float x1, float y1, float z1);
+  /// Converts the currently loaded TGeo geometry to VecGeom and assigns a navigator, a level
+  /// locator and a safety estimator to every logical volume. Does the work once per process; later
+  /// calls, whatever they ask for, return the geometry already built, so a caller that needs a
+  /// particular assembly treatment must come first. \param flattenAssemblies dissolves TGeo
+  /// assemblies into their content. \param booleanThreshold lets VecGeom turn Boolean solids with at
+  /// least this many components into MultiUnions; 0 keeps them as converted.
+  static void buildVecGeomGeometry(bool flattenAssemblies, int booleanThreshold = 0);
+#else
+  static constexpr bool isVecGeomAvailable() { return false; }
+#endif
+
+  /// Builds the VecGeom world from the currently loaded TGeo geometry, once per process,
+  /// and reports whether a VecGeom navigator is available at all. Unlike
+  /// isVecGeomAvailable() this is a runtime answer, so a caller outside this library --
+  /// which does not see the private O2_WITH_VECGEOM define -- can still ask.
+  static bool ensureVecGeomWorld();
+
+  /// The VecGeom navigator's answer for a point: fills \p chain with the TGeo nodes of the
+  /// located path, top node first. False when this build has no VecGeom backend or the
+  /// point lies outside the world. Assemblies are flattened in the VecGeom geometry, so
+  /// the chain is shorter than the TGeo path through the same point.
+  static bool vecGeomLocate(double x, double y, double z, std::vector<TGeoNode*>& chain);
+
+ private:
+  /// Default constructor
+  GeometryManager() = default;
+  static TGeoHMatrix* getMatrix(TGeoPNEntry* pne);
+  static void accountMaterial(const TGeoMaterial* material, MatBudgetExt& bd);
+  static void accountMaterial(const TGeoMaterial* material, o2::base::MatBudget& bd)
+  {
+    bd.meanRho = material->GetDensity();
+    bd.meanX2X0 = material->GetRadLen();
+  }
+
+  /// The method returns the global matrix for the volume identified by 'path' in the ideal
+  /// detector geometry. The output global matrix is stored in 'm'.
+  /// Returns kFALSE in case TGeo has not been initialized or the volume path is not valid.
+  static Bool_t getOriginalMatrixFromPath(const char* path, TGeoHMatrix& m);
+
+ private:
+  /// sensitive volume identifier composed from (det_ID<<sDetOffset)|(sensid&sSensorMask)
+  static constexpr UInt_t sDetOffset = 15; /// detector identifier will start from this bit
+  static constexpr UInt_t sSensorMask = (0x1 << sDetOffset) - 1;           /// mask=max sensitive volumes allowed per detector (32767)
+  static constexpr UInt_t sDetOffsetLarge = 17;                            /// detector identifier will start from this bit for detectors after the FOC
+  static constexpr UInt_t sSensorMaskLarge = (0x1 << sDetOffsetLarge) - 1; /// mask=max sensitive volumes allowed per detector (131071)
+  static std::mutex sTGMutex;
+
+  ClassDefOverride(GeometryManager, 0); // Manager of geometry information for alignment
+};
+} // namespace base
+} // namespace o2
+
+#endif

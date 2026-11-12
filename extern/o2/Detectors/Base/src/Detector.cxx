@@ -1,0 +1,267 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/// \file Detector.cxx
+/// \brief Implementation of the Detector class
+
+#include "DetectorsBase/Detector.h"
+#include <TVirtualMC.h> // for TVirtualMC, gMC
+#include "DetectorsBase/MaterialManager.h"
+#include "DetectorsCommonDataFormats/DetID.h"
+#include "Field/MagneticField.h"
+#include "Framework/TMessageSerializer.h"
+#include "TString.h" // for TString
+#include "TGeoManager.h"
+
+using std::cout;
+using std::endl;
+using std::fstream;
+using std::ios;
+using std::ostream;
+
+using namespace o2::base;
+using namespace o2::detectors;
+
+Float_t Detector::mDensityFactor = 1.0;
+std::vector<int> o2::base::Detector::sDetId2HitBitIndex{}; // initialize empty vector
+
+Detector::Detector() : FairDetector(), mMapMaterial(), mMapMedium() {}
+Detector::Detector(const char* name, Bool_t Active)
+  : FairDetector(name, Active, DetID(name)), mMapMaterial(), mMapMedium()
+{
+}
+
+Detector::Detector(const Detector& rhs) = default;
+
+Detector::~Detector() = default;
+
+Detector& Detector::operator=(const Detector& rhs)
+{
+  // check assignment to self
+  if (this == &rhs) {
+    return *this;
+  }
+
+  // base class assignment
+  FairDetector::operator=(rhs);
+
+  return *this;
+}
+
+void Detector::Material(Int_t imat, const char* name, Float_t a, Float_t z, Float_t dens, Float_t radl, Float_t absl,
+                        Float_t* buf, Int_t nwbuf)
+{
+  auto& mgr = o2::base::MaterialManager::Instance();
+  mgr.Material(GetName(), imat, name, a, z, dens, radl, absl, buf, nwbuf);
+}
+
+void Detector::Mixture(Int_t imat, const char* name, Float_t* a, Float_t* z, Float_t dens, Int_t nlmat, Float_t* wmat)
+{
+  auto& mgr = o2::base::MaterialManager::Instance();
+  mgr.Mixture(GetName(), imat, name, a, z, dens, nlmat, wmat);
+}
+
+void Detector::Medium(Int_t numed, const char* name, Int_t nmat, Int_t isvol, Int_t ifield, Float_t fieldm,
+                      Float_t tmaxfd, Float_t stemax, Float_t deemax, Float_t epsil, Float_t stmin, Float_t* ubuf,
+                      Int_t nbuf)
+{
+  auto& mgr = o2::base::MaterialManager::Instance();
+  mgr.Medium(GetName(), numed, name, nmat, isvol, ifield, fieldm, tmaxfd, stemax, deemax, epsil, stmin, ubuf, nbuf);
+}
+
+void Detector::SpecialCuts(Int_t numed, const std::initializer_list<std::pair<ECut, Float_t>>& parIDValMap)
+{
+  auto& mgr = MaterialManager::Instance();
+  mgr.SpecialCuts(GetName(), numed, parIDValMap);
+}
+
+void Detector::SpecialCut(Int_t numed, ECut parID, Float_t val)
+{
+  auto& mgr = MaterialManager::Instance();
+  mgr.SpecialCut(GetName(), numed, parID, val);
+}
+
+void Detector::SpecialProcesses(Int_t numed, const std::initializer_list<std::pair<EProc, int>>& parIDValMap)
+{
+  auto& mgr = MaterialManager::Instance();
+  mgr.SpecialProcesses(GetName(), numed, parIDValMap);
+}
+
+void Detector::SpecialProcess(Int_t numed, EProc parID, int val)
+{
+  auto& mgr = MaterialManager::Instance();
+  mgr.SpecialProcess(GetName(), numed, parID, val);
+}
+
+void Detector::Matrix(Int_t& nmat, Double_t theta1, Double_t phi1, Double_t theta2, Double_t phi2, Double_t theta3,
+                      Double_t phi3) const
+{
+  TVirtualMC::GetMC()->Matrix(nmat, theta1, phi1, theta2, phi2, theta3, phi3);
+}
+
+void Detector::defineWrapperVolume(Int_t id, Double_t rmin, Double_t rmax, Double_t zspan) {}
+void Detector::setNumberOfWrapperVolumes(Int_t n) {}
+void Detector::defineLayer(const Int_t nlay, const double phi0, const Double_t r, const Int_t nladd, const Int_t nmod,
+                           const Double_t lthick, const Double_t dthick, const UInt_t dettypeID, const Int_t buildLevel)
+{
+}
+
+void Detector::defineLayerTurbo(Int_t nlay, Double_t phi0, Double_t r, Int_t nladd, Int_t nmod, Double_t width,
+                                Double_t tilt, Double_t lthick, Double_t dthick, UInt_t dettypeID, Int_t buildLevel)
+{
+}
+
+void Detector::SetSpecialPhysicsCuts()
+{
+  // default implementation for physics cuts setting (might still be overriden by detectors)
+  // we try to read an external text file supposed to be installed
+  // in a standard directory
+  // ${O2_ROOT}/share/Detectors/DETECTORNAME/simulation/data/simcuts.dat
+  LOG(info) << "Setting special cuts for " << GetName();
+  const char* aliceO2env = std::getenv("O2_ROOT");
+  std::string inputFile;
+  if (aliceO2env) {
+    inputFile = std::string(aliceO2env);
+  }
+  inputFile += "/share/Detectors/" + std::string(GetName()) + "/simulation/data/simcuts.dat";
+  auto& matmgr = o2::base::MaterialManager::Instance();
+  matmgr.loadCutsAndProcessesFromFile(GetName(), inputFile.c_str());
+
+  // TODO:
+  // foresee possibility to read from local (non-installed) file or
+  // via command line
+}
+
+void Detector::initFieldTrackingParams(int& integration, float& maxfield)
+{
+  // set reasonable default values
+  integration = 2;
+  maxfield = 10;
+  auto vmc = TVirtualMC::GetMC();
+  if (vmc) {
+    auto field = vmc->GetMagField();
+    // see if we can query the o2 field
+    if (auto o2field = dynamic_cast<o2::field::MagneticField*>(field)) {
+      integration = o2field->Integral(); // default integration method?
+      maxfield = o2field->Max();
+      return;
+    }
+  }
+  LOG(info) << "No magnetic field found; using default tracking values " << integration << " " << maxfield
+            << " to initialize media\n";
+}
+
+TClonesArray* Detector::GetCollection(int) const
+{
+  LOG(warning) << "GetCollection interface no longer supported";
+  LOG(warning) << "Use the GetHits function on invidiual detectors";
+  return nullptr;
+}
+
+void Detector::addAlignableVolumes() const
+{
+  LOG(warning) << "Alignable volumes are not yet defined for " << GetName();
+}
+
+void Detector::fillParallelWorld() const
+{
+}
+
+int Detector::registerSensitiveVolumeAndGetVolID(TGeoVolume const* vol)
+{
+  // register this volume with FairRoot
+  this->FairModule::AddSensitiveVolume(const_cast<TGeoVolume*>(vol));
+  // retrieve the VMC Monte Carlo ID for this volume
+  const int volid = TVirtualMC::GetMC()->VolId(vol->GetName());
+  if (volid <= 0) {
+    LOG(error) << "Could not retrieve VMC volume ID for " << vol->GetName();
+  }
+  return volid;
+}
+
+int Detector::registerSensitiveVolumeAndGetVolID(std::string const& name)
+{
+  // we need to fetch the TGeoVolume which is needed for FairRoot
+  auto vol = gGeoManager->GetVolume(name.c_str());
+  if (!vol) {
+    LOG(error) << "Volume " << name << " not found in geometry; Cannot register sensitive volume";
+    return -1;
+  }
+  return registerSensitiveVolumeAndGetVolID(vol);
+}
+
+#include <fairmq/Message.h>
+#include <fairmq/Parts.h>
+#include <fairmq/Channel.h>
+namespace o2::base
+{
+// this goes into the source
+void attachMessageBufferToParts(fair::mq::Parts& parts, fair::mq::Channel& channel, void* data, TClass* cl)
+{
+  auto msg = channel.Transport()->CreateMessage(4096, fair::mq::Alignment{64});
+  // This will serialize the data directly into the message buffer, without any further
+  // buffer or copying. Notice how the message will have 8 bytes of header and then
+  // the serialized data as TBufferFile. In principle one could construct a serialized TMessage payload
+  // however I did not manage to get it to work for every case.
+  o2::framework::FairOutputTBuffer buffer(*msg);
+  o2::framework::TMessageSerializer::serialize(buffer, data, cl);
+  parts.AddPart(std::move(msg));
+}
+void attachHitsHeaderMessage(HitsHeader const& header, fair::mq::Channel& channel, fair::mq::Parts& parts)
+{
+  std::unique_ptr<fair::mq::Message> message(channel.NewSimpleMessage(header));
+  parts.AddPart(std::move(message));
+}
+void attachShmMessage(void* hits_ptr, fair::mq::Channel& channel, fair::mq::Parts& parts, ShmBusyFlag* busy_ptr)
+{
+  struct shmcontext {
+    int id;
+    void* object_ptr;
+    ShmBusyFlag* busy_ptr;
+  };
+
+  auto& instance = o2::utils::ShmManager::Instance();
+  shmcontext info{instance.getShmID(), hits_ptr, busy_ptr};
+  LOG(debug) << "-- SHM SEND --";
+  LOG(debug) << "-- OBJ PTR -- " << info.object_ptr << " ";
+  assert(instance.isPointerOk(info.object_ptr));
+
+  std::unique_ptr<fair::mq::Message> message(channel.NewSimpleMessage(info));
+  parts.AddPart(std::move(message));
+}
+void* decodeShmCore(fair::mq::Parts& dataparts, int index, ShmBusyFlag*& busy)
+{
+  auto rawmessage = std::move(dataparts.At(index));
+  struct shmcontext {
+    int id;
+    void* object_ptr;
+    ShmBusyFlag* busy_ptr;
+  };
+
+  shmcontext* info = (shmcontext*)rawmessage->GetData();
+
+  busy = info->busy_ptr;
+  return info->object_ptr;
+}
+
+void* decodeTMessageCore(fair::mq::Parts& dataparts, int index)
+{
+  auto rawmessage = std::move(dataparts.At(index));
+  o2::framework::FairInputTBuffer buffer((char*)rawmessage->GetData(), rawmessage->GetSize());
+  buffer.InitMap();
+  auto* cl = buffer.ReadClass();
+  buffer.SetBufferOffset(0);
+  buffer.ResetMap();
+  return buffer.ReadObjectAny(cl);
+}
+
+} // namespace o2::base
+ClassImp(o2::base::Detector);

@@ -1,0 +1,313 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/// \file GPUCommonDefAPI.h
+/// \author David Rohr
+
+#ifndef GPUCOMMONDEFAPI_H
+#define GPUCOMMONDEFAPI_H
+// clang-format off
+
+#ifndef GPUCOMMONDEF_H
+  #error Please include GPUCommonDef.h!
+#endif
+
+#ifndef GPUCA_GPUCODE_DEVICE
+#include <cstdint>
+#endif
+
+//Define macros for GPU keywords. i-version defines inline functions.
+//All host-functions in GPU code are automatically inlined, to avoid duplicate symbols.
+//For non-inline host only functions, use no keyword at all!
+#if !defined(GPUCA_GPUCODE) || defined(__OPENCL_HOST__) || defined(__METAL_HOST__) || defined(__CPUDEVICE__) // For host / ROOT dictionary, and for the CPUDevice backend whose device code runs on the host
+  #define GPUd()                                    // device function
+  #define GPUdDefault()                             // default (constructor / operator) device function
+  #define GPUhdDefault()                            // default (constructor / operator) host device function
+  #define GPUdi() inline                            // to-be-inlined device function
+  #define GPUdii()                                  // Only on GPU to-be-inlined (forced) device function
+  #define GPUdni()                                  // Device function, not-to-be-inlined
+  #define GPUdnii() inline                          // Device function, not-to-be-inlined on device, inlined on host
+  #define GPUh()                                    // Host-only function
+  // NOTE: All GPUd*() functions are also compiled on the host during host compilation.
+  // The GPUh*() macros are for the rare cases of functions that you want to compile for the host during GPU compilation.
+  // Usually, you do not need the GPUh*() versions. If in doubt, use GPUd*()!
+  #define GPUhi() inline                            // to-be-inlined host-only function
+  #define GPUhd()                                   // Host and device function, inlined during GPU compilation to avoid symbol clashes in host code
+  #define GPUhdi() inline                           // Host and device function, to-be-inlined on host and device
+  #define GPUhdni()                                 // Host and device function, not to-be-inlined automatically
+  #define GPUg() INVALID_TRIGGER_ERROR_NO_GPU_CODE  // GPU kernel
+  #define GPUshared()                               // shared memory variable declaration
+  #define GPUglobal()                               // global memory variable declaration (only used for kernel input pointers)
+  #define GPUconstant()                             // constant memory variable declaraion
+  #define GPUconstexpr() static constexpr           // constexpr on GPU that needs to be instantiated for dynamic access (e.g. arrays), becomes __constant on GPU
+  #define GPUglobalconstexpr() constexpr            // constexpr variable at program scope, needs the constant address space in MSL
+  #define GPUnoexcept() noexcept                    // noexcept where the backend supports it
+  #define GPUprivate()                              // private memory variable declaration
+  #define GPUgeneric()                              // reference / ptr to generic address space
+  #define GPUbarrier()                              // synchronize all GPU threads in block
+  #define GPUbarrierWarp()                          // synchronize threads inside warp
+  #define GPUAtomic(type) type                      // atomic variable type
+  #define GPUsharedref()                            // reference / ptr to shared memory
+  #define GPUglobalref()                            // reference / ptr to global memory
+  #define GPUconstantref()                          // reference / ptr to constant memory
+  #define GPUconstexprref()                         // reference / ptr to variable declared as GPUconstexpr()
+
+  #ifndef __VECTOR_TYPES_H__ // FIXME: ROOT will pull in these CUDA definitions if built against CUDA, so we have to add an ugly protection here
+    struct float4 { float x, y, z, w; };
+    struct float3 { float x, y, z; };
+    struct float2 { float x; float y; };
+    struct uchar2 { uint8_t x, y; };
+    struct short2 { int16_t x, y; };
+    struct ushort2 { uint16_t x, y; };
+    struct int2 { int32_t x, y; };
+    struct int3 { int32_t x, y, z; };
+    struct int4 { int32_t x, y, z, w; };
+    struct uint1 { uint32_t x; };
+    struct uint2 { uint32_t x, y; };
+    struct uint3 { uint32_t x, y, z; };
+    struct uint4 { uint32_t x, y, z, w; };
+    struct dim3 { uint32_t x, y, z; };
+  #endif
+#elif defined(__OPENCL__) // Defines for OpenCL
+  #define GPUd()
+  #define GPUdDefault()
+  #define GPUhdDefault()
+  #define GPUdi() inline
+  #define GPUdii() GPUdi() GPUAlwaysInline()
+  #define GPUdni()
+  #define GPUdnii()
+  #define GPUh() INVALID_TRIGGER_ERROR_NO_HOST_CODE
+  #define GPUhi() INVALID_TRIGGER_ERROR_NO_HOST_CODE
+  #define GPUhd() inline
+  #define GPUhdi() inline
+  #define GPUhdni()
+  #define GPUg() __kernel
+  #define GPUshared() __local
+  #define GPUglobal() __global
+  #define GPUconstant() __constant // TODO: possibly add const __restrict where possible later!
+  #define GPUconstexpr() __constant
+  #define GPUprivate() __private
+  #define GPUgeneric() __generic
+  #define GPUconstexprref() GPUconstexpr()
+  #if defined(__OPENCL__) && !defined(__clang__)
+    #define GPUbarrier() work_group_barrier(mem_fence::global | mem_fence::local)
+    #define GPUbarrierWarp() sub_group_barrier(mem_fence::global | mem_fence::local)
+    #define GPUAtomic(type) atomic<type>
+    static_assert(sizeof(atomic<uint32_t>) == sizeof(uint32_t), "Invalid size of atomic type");
+  #else
+    #define GPUbarrier() barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+    #define GPUbarrierWarp() sub_group_barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+    #if defined(__OPENCL__) && defined(GPUCA_OPENCL_CLANG_C11_ATOMICS)
+      namespace o2 { namespace gpu {
+      template <class T> struct oclAtomic;
+      template <> struct oclAtomic<uint32_t> {typedef atomic_uint t;};
+      static_assert(sizeof(oclAtomic<uint32_t>::t) == sizeof(uint32_t), "Invalid size of atomic type");
+      }}
+      #define GPUAtomic(type) o2::gpu::oclAtomic<type>::t
+    #else
+      #define GPUAtomic(type) volatile type
+    #endif
+  #endif
+  #if !defined(__OPENCL__) // Other special defines for OpenCL 1
+    #define GPUCA_USE_TEMPLATE_ADDRESS_SPACES // TODO: check if we can make this (partially, where it is already implemented) compatible with OpenCL CPP
+    #define GPUsharedref() GPUshared()
+    #define GPUglobalref() GPUglobal()
+    #undef GPUgeneric
+    #define GPUgeneric()
+  #endif
+  #if (!defined(__OPENCL__) || !defined(GPUCA_NO_CONSTANT_MEMORY))
+    #define GPUconstantref() GPUconstant()
+  #endif
+#elif defined(__METAL__) //Defines for Metal Shading Language
+  // ADDRESS SPACES. This backend targets MSL 4.1 (macOS 27) and later only --
+  // see -std=metal4.1 in the CMakeLists, which fails the build on anything
+  // older rather than miscompiling quietly.
+  //
+  // That version is what makes the port tractable: up to MSL 4.0 a member
+  // function's implicit `this` is `thread`, which is wrong for us, since most
+  // objects the kernels touch live in `device` memory. Pinning defaulted
+  // constructors and operators to `device` was the 4.0 workaround, and it made
+  // the same type unusable in `thread` or `threadgroup`. In 4.1 an unannotated
+  // `this` is GENERIC and resolves to whichever address space the object is in
+  // -- the C++ semantics this codebase already assumes -- so GPUdDefault()
+  // needs nothing at all. The compiler resolves it statically in almost every
+  // case; it only falls back to a runtime branch where it cannot see through,
+  // such as argument buffers or dynamic libraries.
+  //
+  // The *ref() macros below stay explicit even so. They are already correct
+  // from the OpenCL port, an explicit annotation is never slower than a generic
+  // one, and `constant` is not covered by generic pointers at all.
+  #define GPUdDefault()                             // generic `this` (MSL 4.1+)
+  #define GPUd()
+  #define GPUhdDefault()
+  #define GPUdi() inline
+  #define GPUdii() GPUdi() GPUAlwaysInline()
+  #define GPUdni()
+  #define GPUdnii()
+  #define GPUh() inline
+  #define GPUhi() inline
+  #define GPUhd() inline
+  #define GPUhdi() inline
+  #define GPUhdni()
+  #define GPUg() kernel
+  #define GPUshared() threadgroup
+  #define GPUglobal() device
+  #define GPUconstant() constant // TODO: possibly add const __restrict where possible later!
+  #define GPUconstexpr() constant
+  #define GPUglobalconstexpr() constant constexpr
+  #define GPUnoexcept()
+  #define GPUprivate() thread
+  #define GPUgeneric()
+  #define GPUglobalref()
+  #define GPUsharedref() threadgroup
+  #define GPUprivateref() thread
+  #define GPUconstexprref() GPUconstexpr()
+  #define GPUdouble() float
+  #define GPUbarrier() threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)
+  #define GPUbarrierWarp() simdgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup)
+  #define GPUAtomic(type) type                      // atomic variable type
+#elif defined(__HIPCC__) //Defines for HIP
+  #define GPUd() __device__
+  #define GPUdDefault() __device__
+  #define GPUhdDefault() __host__ __device__
+  #define GPUdi() __device__ inline
+  #define GPUdii() GPUdi() GPUAlwaysInline()
+  #define GPUdni() __device__ __attribute__((noinline))
+  #define GPUdnii() __device__ __attribute__((noinline))
+  #define GPUh() __host__ inline
+  #define GPUhi() __host__ inline
+  #define GPUhd() __host__ __device__ inline
+  #define GPUhdi() __host__ __device__ inline
+  #define GPUhdni() __host__ __device__
+  #define GPUg() __global__
+  #define GPUshared() __shared__
+  #if defined(GPUCA_GPUCODE_DEVICE) && 0 // TODO: Fix for HIP
+    #define GPUCA_USE_TEMPLATE_ADDRESS_SPACES
+    #define GPUglobal() __attribute__((address_space(1)))
+    #define GPUglobalref() GPUglobal()
+    #define GPUconstantref() __attribute__((address_space(4)))
+    #define GPUsharedref() __attribute__((address_space(3)))
+  #else
+    #define GPUglobal()
+  #endif
+  #define GPUconstant() __constant__
+  #define GPUconstexpr() constexpr __constant__
+  #define GPUprivate()
+  #define GPUgeneric()
+  #define GPUbarrier() __syncthreads()
+  #define GPUbarrierWarp()
+  #define GPUAtomic(type) type
+#elif defined(__CUDACC__) //Defines for CUDA
+  #ifndef GPUCA_GPUCODE_DEVICE
+    #define GPUd() __device__ inline // FIXME: DR: Workaround: mark device function as inline such that nvcc does not create bogus host symbols
+  #else
+    #define GPUd() __device__
+  #endif
+  #define GPUdDefault()
+  #define GPUhdDefault()
+  #define GPUdi() __device__ inline
+  #define GPUdii() GPUdi() GPUAlwaysInline()
+  #define GPUdni() __device__ __attribute__((noinline))
+  #define GPUdnii() __device__ __attribute__((noinline))
+  #define GPUh() __host__ inline
+  #define GPUhi() __host__ inline
+  #define GPUhd() __host__ __device__ inline
+  #define GPUhdi() __host__ __device__ inline
+  #define GPUhdni() __host__ __device__
+  #define GPUg() __global__
+  #define GPUshared() __shared__
+  #define GPUglobal()
+  #define GPUconstant() __constant__
+  #define GPUconstexpr() constexpr __constant__
+  #define GPUprivate()
+  #define GPUgeneric()
+  #define GPUbarrier() __syncthreads()
+  #define GPUbarrierWarp() __syncwarp()
+  #define GPUAtomic(type) type
+#endif
+
+#define GPUAlwaysInline() __attribute__((always_inline)) // Forced inlining on host and device
+
+#ifndef GPUdic // Takes different parameter for inlining: 0 = never, 1 = always, 2 = compiler-decision
+#define GPUdic(...) GPUd()
+#endif
+#define GPUCA_GPUdic_select_0() GPUdni()
+#define GPUCA_GPUdic_select_1() GPUdii()
+#define GPUCA_GPUdic_select_2() GPUd()
+
+#if defined(GPUCA_NO_CONSTANT_MEMORY)
+  #undef GPUconstant
+  #define GPUconstant() GPUglobal()
+#endif
+
+#ifndef GPUsharedref
+#define GPUsharedref()
+#endif
+#ifndef GPUglobalref
+#define GPUglobalref()
+#endif
+#ifndef GPUconstantref
+#define GPUconstantref()
+#endif
+#ifndef GPUconstexprref
+#define GPUconstexprref()
+#endif
+#ifndef GPUglobalconstexpr
+#define GPUglobalconstexpr() constexpr
+#endif
+#ifndef GPUnoexcept
+#define GPUnoexcept() noexcept
+#endif
+
+#define GPUrestrict() __restrict__
+
+// Macros for GRID dimension
+#if defined(__CUDACC__) || defined(__HIPCC__)
+  #define get_global_id(dim) (blockIdx.x * blockDim.x + threadIdx.x)
+  #define get_global_size(dim) (blockDim.x * gridDim.x)
+  #define get_num_groups(dim) (gridDim.x)
+  #define get_local_id(dim) (threadIdx.x)
+  #define get_local_size(dim) (blockDim.x)
+  #define get_group_id(dim) (blockIdx.x)
+#elif defined(__OPENCL__)
+  // Using OpenCL defaults
+#elif defined(__METAL__)
+  // MSL has no work-item builtins. They arrive as attributes on the entry point,
+  // named there after the nBlocks / nThreads / iBlock / iThread that Thread()
+  // already takes, so these resolve both there and in every function below it.
+  #define get_global_id(dim) (iBlock * nThreads + iThread)
+  #define get_global_size(dim) (nBlocks * nThreads)
+  #define get_num_groups(dim) (nBlocks)
+  #define get_local_id(dim) (iThread)
+  #define get_local_size(dim) (nThreads)
+  #define get_group_id(dim) (iBlock)
+#else
+  #define get_global_id(dim) iBlock
+  #define get_global_size(dim) nBlocks
+  #define get_num_groups(dim) nBlocks
+  #define get_local_id(dim) 0
+  #define get_local_size(dim) 1
+  #define get_group_id(dim) iBlock
+#endif
+
+// A device function that uses the helpers above but has none of the indices in
+// scope needs them passed in on Metal, where they are ordinary parameters.
+// Both expand to nothing everywhere else, and go last in the parameter list.
+#ifdef __METAL__
+  #define GPUCA_THREAD_INFO_DECL , int32_t nBlocks, int32_t nThreads, int32_t iBlock, int32_t iThread
+  #define GPUCA_THREAD_INFO_PROVIDE , nBlocks, nThreads, iBlock, iThread
+#else
+  #define GPUCA_THREAD_INFO_DECL
+  #define GPUCA_THREAD_INFO_PROVIDE
+#endif
+
+// clang-format on
+#endif

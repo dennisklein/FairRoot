@@ -1,0 +1,805 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/// @copyright
+/// © Copyright 2014 Copyright Holders of the ALICE O2 collaboration.
+/// See https://aliceinfo.cern.ch/AliceO2 for details on the Copyright holders.
+/// This software is distributed under the terms of the
+/// GNU General Public License version 3 (GPL Version 3).
+///
+/// License text in a separate file.
+///
+/// In applying this license, CERN does not waive the privileges and immunities
+/// granted to it by virtue of its status as an Intergovernmental Organization
+/// or submit itself to any jurisdiction.
+
+/// @brief O2 data header classes and API, v0.1
+///
+/// origin: CWG4
+/// @author Mikolaj Krzewicki, mkrzewic@cern.ch
+/// @author Matthias Richter, Matthias.Richter@cern.ch
+/// @author David Rohr, drohr@cern.ch
+
+#ifndef ALICEO2_BASE_DATA_HEADER_
+#define ALICEO2_BASE_DATA_HEADER_
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <cassert>
+#include <cstring> //needed for memcmp
+#include <string>
+#include <stdexcept>
+#include <limits>
+#include <cerrno>
+
+namespace o2::header
+{
+
+//__________________________________________________________________________________________________
+/// @defgroup aliceo2_dataformat_primitives Primitive data format definitions for ALICE O2
+/// @brief This module collects information about all primitive data formats.
+///
+/// More to come
+
+//__________________________________________________________________________________________________
+/// @defgroup aliceo2_dataformats_dataheader The Data Header
+/// @brief A descriptive information for payload blocks
+///
+/// The format consists of header information and payload. The latter is not touched by the
+/// framework. Each payload is described by the information in the header, for transport
+/// a sequence of separate parts (header and payload in separate parts) is sent. The header
+/// is described by structure \ref DataHeader
+///
+/// @ingroup aliceo2_dataformat_primitives
+
+//__________________________________________________________________________________________________
+/// @defgroup dataheader_defines Length defines for DataHeader members
+/// The header uses char fields for several members. This allows to define self
+/// consistent unique identifiers. The identifiers are human readable in memory
+/// and, rather than enumerators, independent of software versions. The string
+/// is **NOT** required to be zero terminated!.
+///
+/// This section defines constant field lengths for char fields
+/// @ingroup aliceo2_dataformats_dataheader
+
+/// size of the magic string field @ingroup dataheader_defines
+constexpr uint32_t gSizeMagicString = 4;
+/// size of the data origin field @ingroup dataheader_defines
+constexpr uint32_t gSizeDataOriginString = 4;
+/// size of the payload serialization field @ingroup dataheader_defines
+constexpr uint32_t gSizeSerializationMethodString = 8;
+/// size of the data description field @ingroup dataheader_defines
+constexpr uint32_t gSizeDataDescriptionString = 16;
+/// size of the header description field @ingroup dataheader_defines
+constexpr uint32_t gSizeHeaderDescriptionString = 8;
+
+/// @}
+
+//__________________________________________________________________________________________________
+struct DataHeader;
+struct DataIdentifier;
+
+//__________________________________________________________________________________________________
+/// helper function to print a hex/ASCII dump of some memory
+void hexDump(const char* desc, const void* voidaddr, size_t len, size_t max = 0);
+
+//__________________________________________________________________________________________________
+// internal implementations
+/// @ingroup aliceo2_dataformat_tools
+namespace internal
+{
+// terminating initializer implementation
+template <typename T>
+constexpr T String2__()
+{
+  return 0;
+}
+// recursive initializer implementation
+template <typename T, typename... Targs>
+constexpr T String2__(char c, Targs... Fargs)
+{
+  return (T)c | String2__<T>(Fargs...) << 8;
+}
+
+/// get the number of active bits (set to 1) in a bitfield
+template <unsigned int N>
+struct NumberOfActiveBits {
+  static int const value = NumberOfActiveBits<(N >> 1)>::value + (N & 0x1);
+};
+template <>
+struct NumberOfActiveBits<0> {
+  static int const value = 0;
+};
+
+/// evaluate the array size necessary to hold a N-byte number with type T
+template <typename T, int N>
+constexpr int ArraySize()
+{
+  return N / sizeof(T) + ((N % sizeof(T)) ? 1 : 0);
+}
+
+/// select uint type depending on size, default is uint64_t
+template <int N>
+struct TraitsIntType {
+  using Type = uint64_t;
+};
+template <>
+struct TraitsIntType<1> {
+  using Type = uint8_t;
+};
+template <>
+struct TraitsIntType<2> {
+  using Type = uint16_t;
+};
+template <>
+struct TraitsIntType<4> {
+  using Type = uint32_t;
+};
+
+/// compile time evaluation of a string length, which is either N - 1 or
+/// shorter if one character in the array has been set to 0.
+template <int N>
+constexpr std::size_t strLength(const char (&str)[N], std::size_t pos = 0)
+{
+  return ((pos >= N || str[pos] == 0) ? 0 : 1 + strLength(str, pos + 1));
+}
+}; // namespace internal
+
+//__________________________________________________________________________________________________
+/// constexpr intializer, evaluated at compile time
+/// generic intializer for variable char argument list
+template <typename T, typename... Targs>
+constexpr T String2(char c, Targs... Fargs)
+{
+  // number of arguments has either to match the size of the type, or the last element is treated
+  // as '0' if missing
+  // TODO: this is a bit of a question, do we allow the number of characters to
+  // be smaller than the size of the type and just pad with 0 like in the case
+  // of a char array argument?
+  static_assert(sizeof...(Targs) == sizeof(T) + 1 ||
+                  sizeof...(Targs) == sizeof(T),
+                "number of arguments does not match the uint type width");
+  return internal::String2__<T>(c, Fargs...);
+}
+
+/// constexpr intializer, evaluated at compile time
+/// generic initializer, convert a string to unsigned integer of different width
+/// Example usage: String2<uint64_t>("IDENTIFY")
+/// @ingroup aliceo2_dataformat_tools
+template <typename T, std::size_t N, std::size_t pos = 0, bool suppressAssert = false>
+constexpr T String2(const char (&str)[N])
+{
+  static_assert(std::is_integral<T>::value, "Non integral types not compatible with String2<type>");
+  static_assert(N >= pos, "Position is larger than the length of string");
+  static_assert(suppressAssert || N - pos <= sizeof(T) + 1,
+                "String parameter is longer than the size of the data type");
+  // clang-format off
+  return ((T)str[0 + pos] |
+         (sizeof(T) >= 2 && str[0 + pos] ? ((T)str[1 + pos] << (sizeof(T) >= 2 ? 8  : 0) |
+         (sizeof(T) >= 4 && str[1 + pos] ? ((T)str[2 + pos] << (sizeof(T) >= 4 ? 16 : 0) |
+         (sizeof(T) >= 4 && str[2 + pos] ? ((T)str[3 + pos] << (sizeof(T) >= 4 ? 24 : 0) |
+         (sizeof(T) >= 8 && str[3 + pos] ? ((T)str[4 + pos] << (sizeof(T) >= 8 ? 32 : 0) |
+         (sizeof(T) >= 8 && str[4 + pos] ? ((T)str[5 + pos] << (sizeof(T) >= 8 ? 40 : 0) |
+         (sizeof(T) >= 8 && str[5 + pos] ? ((T)str[6 + pos] << (sizeof(T) >= 8 ? 48 : 0) |
+         (sizeof(T) >= 8 && str[6 + pos] ? ((T)str[7 + pos] << (sizeof(T) >= 8 ? 56 : 0))
+         : 0)) : 0)) : 0)) : 0)) : 0)) : 0)) : 0));
+  // clang-format on
+}
+
+//__________________________________________________________________________________________________
+/// generic descriptor class faturing the union of a char and a uint element
+/// of the same size
+/// this is currently working only for up to 8 bytes aka uint64_t, the general
+/// solution is working also for multiples of 64 bit, but then the itg member needs
+/// to be an array for all. This has not been enabled yet, first the implications
+/// have to be studied.
+template <std::size_t N>
+struct Descriptor {
+  static_assert(internal::NumberOfActiveBits<N>::value == 1,
+                "Descriptor size is required to be a power of 2");
+  using self_type = Descriptor<N>;
+  static int constexpr size = N;
+  static int constexpr bitcount = size * 8;
+  static constexpr int arraySize = internal::ArraySize<uint64_t, size>();
+  using ItgType = typename internal::TraitsIntType<N>::Type;
+
+  union {
+    char str[N];
+    ItgType itg[arraySize];
+  };
+  constexpr Descriptor() : itg{0} {};
+  constexpr Descriptor(ItgType initializer) : itg{initializer} {};
+  constexpr Descriptor(const Descriptor& other) = default;
+  Descriptor& operator=(const Descriptor& other) = default;
+
+  // Note: don't need to define operator=(ItgType v) because the compiler
+  // can use Descriptor(ItgType initializer) for conversion
+  using ImplicitConversion = std::conditional_t<(size <= 8), ItgType, std::string_view>;
+
+  // type cast operator for simplified usage of the descriptor's integer member
+  // in case it does not fit into the descriptor, the string representation is returned
+  operator ImplicitConversion() const
+  {
+    if constexpr (std::is_same_v<ImplicitConversion, ItgType>) {
+      return itg[0];
+    } else {
+      size_t len = size;
+      while (len > 1 && str[len - 1] == 0) {
+        --len;
+      }
+      return std::string_view(str, len);
+    }
+  }
+
+  /// constructor from a compile-time string
+  template <std::size_t L>
+  constexpr Descriptor(const char (&in)[L]) : str{0}
+  {
+    static_assert(L <= N + 1, "initializer string must not exceed descriptor size");
+    unsigned i = 0;
+    for (; i < (N < L ? N : L) && in[i]; ++i) {
+      str[i] = in[i];
+    }
+  }
+
+  /// Init descriptor from string at runtime
+  /// In contrast to all other functions which are fixed at compile time, this is
+  /// available at runtime and must be used with care
+  ///
+  /// Note: no assignment operator operator=(const char*) as this potentially runs
+  /// into trouble with this general pointer type.
+  void runtimeInit(std::string_view string)
+  {
+    // empty strings and string longet than the descriptor size are not allowed
+    if (!string.empty() && (string.size() > (int)N)) {
+      throw std::invalid_argument("argument must not be longer than the descriptor size");
+    }
+    // copy the content directly
+    std::memcpy(str, string.data(), string.size());
+    // nullify the remainder
+    auto* ptr = str + string.size();
+    for (; ptr < str + N; ++ptr) {
+      *ptr = 0;
+    }
+  }
+
+  /// compatibility version for null-terminated strings
+  void runtimeInit(const char* string)
+  {
+    runtimeInit(std::string_view{string, std::strlen(string)});
+  }
+
+  /// compatibility version for explicit length
+  void runtimeInit(const char* buffer, size_t length)
+  {
+    runtimeInit(std::string_view{buffer, length});
+  }
+
+  bool operator==(const Descriptor& other) const { return std::memcmp(this->str, other.str, N) == 0; }
+  bool operator<(const Descriptor& other) const { return std::memcmp(this->str, other.str, N) < 0; }
+  bool operator!=(const Descriptor& other) const { return not this->operator==(other); }
+
+  // Convesion operators for comparison with their implicitly convertible types
+  friend bool operator==(const Descriptor& lhs, ImplicitConversion rhs) { return static_cast<ImplicitConversion>(lhs) == rhs; }
+  // explicitly forbid comparison with e.g. const char* strings
+  // use: value == Descriptor<N>("DESC") for the appropriate
+  // template instantiation instead
+  template <typename T>
+  bool operator==(const T*) const = delete;
+  template <typename T>
+  bool operator!=(const T*) const = delete;
+
+  /// get the descriptor as std::string
+  template <typename T>
+    requires(std::same_as<T, std::string>)
+  T as() const
+  {
+    // backward search to find first non-zero char
+    // FIXME: can optimize this by using the int value to start at e.g. size/2
+    // if the upper part of the string is just zeros.
+    size_t len = size;
+    while (len > 1 && str[len - 1] == 0) {
+      --len;
+    }
+    std::string ret(str, len);
+    return ret;
+  }
+};
+
+//__________________________________________________________________________________________________
+/// default int representation of 'invalid' token for 4-byte char field
+const uint32_t gInvalidToken32 = 0xFFFFFFFF;
+/// default int representation of 'invalid' token for 8-byte char field
+const uint64_t gInvalidToken64 = 0xFFFFFFFFFFFFFFFF;
+
+using HeaderType = Descriptor<gSizeHeaderDescriptionString>;
+using SerializationMethod = Descriptor<gSizeSerializationMethodString>;
+
+// possible serialization types
+constexpr o2::header::SerializationMethod gSerializationMethodAny{"*******"};
+constexpr o2::header::SerializationMethod gSerializationMethodInvalid{"INVALID"};
+constexpr o2::header::SerializationMethod gSerializationMethodNone{"NONE"};
+constexpr o2::header::SerializationMethod gSerializationMethodROOT{"ROOT"};
+constexpr o2::header::SerializationMethod gSerializationMethodCCDB{"CCDB"};
+constexpr o2::header::SerializationMethod gSerializationMethodFlatBuf{"FLATBUF"};
+constexpr o2::header::SerializationMethod gSerializationMethodArrow{"ARROW"};
+
+//__________________________________________________________________________________________________
+/// @struct BaseHeader
+/// @brief the base header struct
+/// Every header type must begin (i.e. derive) with this.
+/// Don't use this struct directly.
+/// The derived header must initialize BaseHeader fields with appropriate values
+/// - headerSize must be initialized to sizeof(DerivedHeader)
+/// 3 static members MUST be defined in each derived type:
+/// - sHeaderType; description must be initialized with a static const member of type
+///   BaseHeader::HeaderType with a gloablly unique value.
+/// - sSerializationMethod; the contents of a derived header (content defined after the BaseHeader)
+///   can be serialized using any method. The serialization member must be initialized
+///   with a gloablly unique static const BaseHeader::SerializationMethod value defined
+///   in the Derived header.
+/// - sVersion; the version of the header described by this base header.
+/// Call the special BaseHeader constructor in the DerivedHeader ctor to easily achieve
+/// the above.
+/// @ingroup aliceo2_dataformats_dataheader
+struct BaseHeader {
+  // static definitions
+  static constexpr uint32_t sMagicString{String2<uint32_t>("O2O2")};
+
+  static const uint32_t sVersion;
+  static const o2::header::HeaderType sHeaderType;
+  static const o2::header::SerializationMethod sSerializationMethod;
+
+  //__the data layout:
+
+  /// a magic string, used to identify an O2 header in a raw stream of bytes
+  union {
+    char magicString[gSizeMagicString];
+    uint32_t magicStringInt;
+  };
+
+  /// size of the header that starts with this sequence (base + derived header)
+  /// set by the derived header
+  uint32_t headerSize;
+
+  /// flags, first bit indicates that a sub header follows
+  union {
+    uint32_t flags;
+    struct {
+      uint32_t flagsNextHeader : 1, // do we have a next header after this one?
+        flagsReserved : 15,         // reserved for future use
+        flagsDerivedHeader : 16;    // reserved for usage by the derived header
+    };
+  };
+
+  /// version of the entire header, set by the derived header
+  uint32_t headerVersion;
+
+  /// header type description, set by derived header
+  o2::header::HeaderType description;
+
+  /// header serialization method, set by derived header
+  o2::header::SerializationMethod serialization;
+
+  //___the functions:
+
+  /// dont construct directly
+  BaseHeader() = delete;
+  BaseHeader(const BaseHeader&) = default;
+  /// Special ctor for initialization in derived types
+  constexpr BaseHeader(uint32_t mySize, HeaderType desc,
+                       SerializationMethod ser, uint32_t version)
+    : magicStringInt(sMagicString), headerSize(mySize), flags(0), headerVersion(version), description(desc), serialization(ser)
+  {
+  }
+
+  /// @brief access header in buffer
+  ///
+  /// this is to guess if the buffer starting at b looks like a header
+  inline static const BaseHeader* get(const std::byte* b, size_t /*len*/ = 0)
+  {
+    return (b != nullptr && *(reinterpret_cast<const uint32_t*>(b)) == sMagicString)
+             ? reinterpret_cast<const BaseHeader*>(b)
+             : nullptr;
+  }
+
+  /// @brief access header in buffer
+  ///
+  /// this is to guess if the buffer starting at b looks like a header
+  inline static BaseHeader* get(std::byte* b, size_t /*len*/ = 0)
+  {
+    return (b != nullptr && *(reinterpret_cast<uint32_t*>(b)) == sMagicString) ? reinterpret_cast<BaseHeader*>(b)
+                                                                               : nullptr;
+  }
+
+  constexpr uint32_t size() const noexcept { return headerSize; }
+  inline const std::byte* data() const noexcept { return reinterpret_cast<const std::byte*>(this); }
+
+  /// get the next header if any (const version)
+  inline const BaseHeader* next() const noexcept
+  {
+    // BaseHeader::get checks that next header starts with the BaseHeader information at the
+    // offset given by the size of the current header.
+    return (flagsNextHeader) ? BaseHeader::get(reinterpret_cast<const std::byte*>(this) + headerSize) : nullptr;
+  }
+
+  /// get the next header if any (non-const version)
+  inline BaseHeader* next() noexcept
+  {
+    return (flagsNextHeader) ? BaseHeader::get(reinterpret_cast<std::byte*>(this) + headerSize) : nullptr;
+  }
+
+  /// check if the header matches expected version
+  /// throws runtime error if not matching
+  /// we might change this behavior if we want to support multiple version of a particular header
+  /// but until we have this support we need to be strict to catch a problem early and with
+  /// meaningful error message
+  bool sanityCheck(uint32_t expectedVersion) const;
+
+  /// throw runtime error to report inconsistent header stack when the next-header flag is set
+  /// but no next header is found; implemented only once, no template overloads
+  void throwInconsistentStackError() const;
+};
+
+/// find a header of type HeaderType in a buffer
+/// use like this:
+/// HeaderType* h = get<HeaderType*>(buffer)
+template <typename HeaderType, typename std::enable_if_t<std::is_pointer<HeaderType>::value, int> = 0>
+auto get(const std::byte* buffer, size_t /*len*/ = 0)
+{
+  using HeaderConstPtrType = const typename std::remove_pointer<HeaderType>::type*;
+  using HeaderValueType = typename std::remove_pointer<HeaderType>::type;
+
+  const BaseHeader* current = BaseHeader::get(buffer);
+  if (!current) {
+    return HeaderConstPtrType{nullptr};
+  }
+  if (current->description == HeaderValueType::sHeaderType) {
+    // FIXME: We need to think how to handle multiple versions.
+    // For the moment we require the version to exactly match the expected version, which
+    // is part of the header definition. The check function 'sanityCheck' will throw
+    // otherwise, we keep the code related to the exception outside the header file.
+    // Note: Can not check on size because the O2 data model requires variable size headers
+    // to be supported.
+    if (current->sanityCheck(HeaderValueType::sVersion)) {
+      return reinterpret_cast<HeaderConstPtrType>(current);
+    }
+  }
+  auto* prev = current;
+  while ((current = current->next())) {
+    prev = current;
+    if (current->description == HeaderValueType::sHeaderType) {
+      if (current->sanityCheck(HeaderValueType::sVersion)) {
+        return reinterpret_cast<HeaderConstPtrType>(current);
+      }
+    }
+  }
+  // if a next header was expected but not found, the header stack is inconsistent
+  // either the flag is wrongly set, or the size of the current header is wrong so
+  // that the BaseHeader information is not found at the expected offset.
+  if (prev->flagsNextHeader) {
+    prev->throwInconsistentStackError();
+  }
+  return HeaderConstPtrType{nullptr};
+}
+
+template <typename HeaderType, typename std::enable_if_t<std::is_pointer<HeaderType>::value, int> = 0>
+auto get(const void* buffer, size_t len = 0)
+{
+  return get<HeaderType>(reinterpret_cast<const std::byte*>(buffer), len);
+}
+
+//__________________________________________________________________________________________________
+// utilities for converting strings to ints - tries to mimick the stadard API, but the result is
+// strongly typed - can be used for fixed width and short unsigned integer types unlike the standard
+// utilities.
+template <typename T>
+T strtoui(const char* str, char** str_end, int base) noexcept
+{
+  static_assert(std::numeric_limits<T>::is_integer && !std::numeric_limits<T>::is_signed,
+                "Target must be an unsigned integer type");
+  // standard lib gives us 2 specializations of strtouX, so let's use them both where appropriate
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    unsigned long res = strtoul(str, str_end, base);
+    if (res > std::numeric_limits<T>::max()) {
+      errno = ERANGE;
+      return std::numeric_limits<T>::max();
+    } else {
+      return static_cast<T>(res);
+    };
+  } else {
+    unsigned long long res = strtoull(str, str_end, base);
+    if (res > std::numeric_limits<T>::max()) {
+      errno = ERANGE;
+      return std::numeric_limits<T>::max();
+    } else {
+      return static_cast<T>(res);
+    };
+  }
+};
+
+template <typename T>
+T stoui(const std::string& str, size_t* pos = nullptr, int base = 10)
+{
+  static_assert(std::numeric_limits<T>::is_integer && !std::numeric_limits<T>::is_signed,
+                "Target must be an unsigned integer type");
+  // standard lib gives us 2 specializations of stouX, so let's use them both where appropriate
+  if constexpr (sizeof(T) <= sizeof(uint32_t)) {
+    unsigned long res = std::stoul(str, pos, base);
+    if (res > std::numeric_limits<T>::max()) {
+      throw std::out_of_range("result does not fit in target type");
+    } else {
+      return static_cast<T>(res);
+    };
+  } else {
+    unsigned long long res = std::stoull(str, pos, base);
+    if (res > std::numeric_limits<T>::max()) {
+      throw std::out_of_range("result does not fit in target type");
+    } else {
+      return static_cast<T>(res);
+    };
+  }
+};
+
+using DataOrigin = Descriptor<gSizeDataOriginString>;
+using DataDescription = Descriptor<gSizeDataDescriptionString>;
+
+//__________________________________________________________________________________________________
+/// @defgroup data_description_defines Defines for data description
+/// @ingroup aliceo2_dataformats_dataheader
+/// @{
+
+//__________________________________________________________________________________________________
+// possible data origins
+constexpr o2::header::DataOrigin gDataOriginAny{"***"};
+constexpr o2::header::DataOrigin gDataOriginInvalid{"NIL"};
+constexpr o2::header::DataOrigin gDataOriginFLP{"FLP"};
+constexpr o2::header::DataOrigin gDataOriginCPV{"CPV"};
+constexpr o2::header::DataOrigin gDataOriginCTP{"CTP"};
+constexpr o2::header::DataOrigin gDataOriginEMC{"EMC"};
+constexpr o2::header::DataOrigin gDataOriginFT0{"FT0"};
+constexpr o2::header::DataOrigin gDataOriginFV0{"FV0"};
+constexpr o2::header::DataOrigin gDataOriginFDD{"FDD"};
+constexpr o2::header::DataOrigin gDataOriginHMP{"HMP"};
+constexpr o2::header::DataOrigin gDataOriginITS{"ITS"};
+constexpr o2::header::DataOrigin gDataOriginMCH{"MCH"};
+constexpr o2::header::DataOrigin gDataOriginMFT{"MFT"};
+constexpr o2::header::DataOrigin gDataOriginMID{"MID"};
+constexpr o2::header::DataOrigin gDataOriginPHS{"PHS"};
+constexpr o2::header::DataOrigin gDataOriginTOF{"TOF"};
+constexpr o2::header::DataOrigin gDataOriginTPC{"TPC"};
+constexpr o2::header::DataOrigin gDataOriginTRD{"TRD"};
+constexpr o2::header::DataOrigin gDataOriginZDC{"ZDC"};
+constexpr o2::header::DataOrigin gDataOriginTST{"TST"};
+constexpr o2::header::DataOrigin gDataOriginACO{"ACO"}; // for bwd compatibility with DD
+
+constexpr o2::header::DataOrigin gDataOriginIT3{"IT3"};
+constexpr o2::header::DataOrigin gDataOriginFOC{"FOC"};
+constexpr o2::header::DataOrigin gDataOriginTRK{"TRK"};
+constexpr o2::header::DataOrigin gDataOriginFT3{"FT3"};
+constexpr o2::header::DataOrigin gDataOriginFCT{"FCT"};
+constexpr o2::header::DataOrigin gDataOriginTF3{"TF3"};
+constexpr o2::header::DataOrigin gDataOriginRCH{"RCH"};
+constexpr o2::header::DataOrigin gDataOriginMI3{"MI3"};
+constexpr o2::header::DataOrigin gDataOriginECL{"ECL"}; // upgrades
+constexpr o2::header::DataOrigin gDataOriginFD3{"FD3"}; // upgrades
+
+constexpr o2::header::DataOrigin gDataOriginGPU{"GPU"};
+
+// possible data types
+constexpr o2::header::DataDescription gDataDescriptionAny{"***************"};
+constexpr o2::header::DataDescription gDataDescriptionInvalid{"INVALID_DESC"};
+constexpr o2::header::DataDescription gDataDescriptionRawData{"RAWDATA"};
+constexpr o2::header::DataDescription gDataDescriptionClusters{"CLUSTERS"};
+constexpr o2::header::DataDescription gDataDescriptionTracks{"TRACKS"};
+constexpr o2::header::DataDescription gDataDescriptionConfig{"CONFIGURATION"};
+constexpr o2::header::DataDescription gDataDescriptionInfo{"INFORMATION"};
+constexpr o2::header::DataDescription gDataDescriptionEos{"EOS"};
+constexpr o2::header::DataDescription gDataDescriptionROOTStreamers{"ROOT STREAMERS"};
+constexpr o2::header::DataDescription gDataDescriptionDISTSTF{"DISTSUBTIMEFRAME"};
+/// @} // end of doxygen group
+
+//__________________________________________________________________________________________________
+/// @struct DataHeader
+/// @brief the main header struct
+///
+/// The main O2 data header struct. All messages should have it, preferably at the beginning
+/// of the header stack.
+/// It contains the fields that describe the buffer size, data type,
+/// origin and serialization method used to construct the buffer.
+/// The member subSpecification might be defined differently for each type/origin,
+/// interpretation of this field is up to the specific subsystem involved.
+///
+/// @ingroup aliceo2_dataformats_dataheader
+struct DataHeader : public BaseHeader {
+  // allows DataHeader::SubSpecificationType to be used as generic type in the code
+  using SubSpecificationType = uint32_t;
+  using SplitPayloadIndexType = uint32_t;
+  using SplitPayloadPartsType = uint32_t;
+  using PayloadSizeType = uint64_t;
+  using TForbitType = uint32_t;
+  using TFCounterType = uint32_t;
+  using RunNumberType = uint32_t;
+
+  // static data for this header type/version
+  static constexpr uint32_t sVersion{3};
+  static constexpr o2::header::HeaderType sHeaderType{String2<uint64_t>("DataHead")};
+  static constexpr o2::header::SerializationMethod sSerializationMethod{gSerializationMethodNone};
+
+  ///
+  /// data type descriptor
+  ///
+  DataDescription dataDescription;
+
+  ///
+  /// origin of the data (originating detector)
+  ///
+  DataOrigin dataOrigin;
+
+  ///
+  /// How many split payloads in total
+  ///
+  SplitPayloadPartsType splitPayloadParts = 0;
+
+  ///
+  /// serialization method
+  ///
+  SerializationMethod payloadSerializationMethod = SerializationMethod(gInvalidToken64);
+
+  ///
+  /// sub specification (e.g. link number)
+  ///
+  SubSpecificationType subSpecification;
+
+  ///
+  /// index of the split payload
+  ///
+  SplitPayloadIndexType splitPayloadIndex = 0;
+
+  ///
+  /// size of the associated data buffer
+  ///
+  PayloadSizeType payloadSize;
+
+  //___NEVER MODIFY THE ABOVE
+  //___NEW STUFF GOES BELOW
+
+  ///
+  /// first orbit of time frame, since v2
+  ///
+  TForbitType firstTForbit;
+
+  ///
+  /// ever incrementing TF counter, allows to disentangle even TFs with same firstTForbit in case of replay, since v3
+  ///
+  TFCounterType tfCounter;
+
+  ///
+  /// run number TF belongs to, since v3
+  ///
+  RunNumberType runNumber;
+
+  //___the functions:
+  //__________________________________________________________________________________________________
+  constexpr DataHeader()
+    : BaseHeader(sizeof(DataHeader), sHeaderType, sSerializationMethod, sVersion),
+      dataDescription(gDataDescriptionInvalid),
+      dataOrigin(gDataOriginInvalid),
+      splitPayloadParts(1),
+      payloadSerializationMethod(gSerializationMethodInvalid),
+      subSpecification(0),
+      splitPayloadIndex(0),
+      payloadSize(0),
+      firstTForbit{0},
+      tfCounter(0),
+      runNumber(0)
+  {
+  }
+
+  //__________________________________________________________________________________________________
+  constexpr explicit DataHeader(DataDescription desc, DataOrigin origin, SubSpecificationType subspec, PayloadSizeType size = 0)
+    : BaseHeader(sizeof(DataHeader), sHeaderType, sSerializationMethod, sVersion),
+      dataDescription(desc),
+      dataOrigin(origin),
+      splitPayloadParts(1),
+      payloadSerializationMethod(gSerializationMethodInvalid),
+      subSpecification(subspec),
+      splitPayloadIndex(0),
+      payloadSize(size),
+      firstTForbit{0},
+      tfCounter(0),
+      runNumber(0)
+  {
+  }
+
+  //__________________________________________________________________________________________________
+  constexpr explicit DataHeader(DataDescription desc, DataOrigin origin, SubSpecificationType subspec, PayloadSizeType size, SplitPayloadIndexType partIndex, SplitPayloadPartsType parts)
+    : BaseHeader(sizeof(DataHeader), sHeaderType, sSerializationMethod, sVersion),
+      dataDescription(desc),
+      dataOrigin(origin),
+      splitPayloadParts(parts),
+      payloadSerializationMethod(gSerializationMethodInvalid),
+      subSpecification(subspec),
+      splitPayloadIndex(partIndex),
+      payloadSize(size),
+      firstTForbit{0},
+      tfCounter(0),
+      runNumber(0)
+  {
+  }
+
+  DataHeader(const DataHeader&) = default;
+  DataHeader& operator=(const DataHeader&) = default; // assignment
+
+  bool operator==(const DataHeader&) const;          // comparison
+  bool operator==(const DataOrigin&) const;          // comparison
+  bool operator==(const DataDescription&) const;     // comparison
+  bool operator==(const SerializationMethod&) const; // comparison
+
+  static const DataHeader* Get(const BaseHeader* baseHeader)
+  {
+    return (baseHeader->description == DataHeader::sHeaderType) ? static_cast<const DataHeader*>(baseHeader) : nullptr;
+  }
+};
+
+//__________________________________________________________________________________________________
+/// @struct DataIdentifier
+/// @brief Helper struct to encode origin and description of data.
+///
+/// The DataHeader stores origin and description of data in adedicted fields,
+/// DataIdentifier structure is used for assignment and comparison
+///
+/// @ingroup aliceo2_dataformats_dataheader
+struct DataIdentifier {
+  // a full data identifier combining origin and description
+  DataDescription dataDescription;
+  DataOrigin dataOrigin;
+  DataIdentifier();
+  DataIdentifier(const DataIdentifier&) = default;
+  template <std::size_t N, std::size_t M>
+  DataIdentifier(const char (&desc)[N], const char (&origin)[M])
+    : dataDescription(desc), dataOrigin(origin)
+  {
+  }
+
+  bool operator==(const DataIdentifier&) const;
+};
+
+//__________________________________________________________________________________________________
+/// compile time checks for the basic structures
+///  use hardcoded numbers as these are fundamental assumption
+static_assert(sizeof(HeaderType) == 8,
+              "HeaderType struct must be of size 8");
+static_assert(sizeof(SerializationMethod) == 8,
+              "SerializationMethod struct must be of size 8");
+static_assert(sizeof(BaseHeader) == 32,
+              "BaseHeader struct must be of size 32");
+static_assert(sizeof(DataOrigin) == 4,
+              "DataOrigin struct must be of size 4");
+static_assert(sizeof(DataHeader) == 96,
+              "DataHeader struct must be of size 96");
+static_assert(gSizeMagicString == sizeof(BaseHeader::magicStringInt),
+              "Size mismatch in magic string union");
+static_assert(sizeof(BaseHeader::sMagicString) == sizeof(BaseHeader::magicStringInt),
+              "Inconsitent size of global magic identifier");
+
+template <typename T>
+struct is_descriptor : std::false_type {
+};
+
+template <std::size_t S>
+struct is_descriptor<o2::header::Descriptor<S>> : std::true_type {
+};
+
+} // namespace o2::header
+
+#endif

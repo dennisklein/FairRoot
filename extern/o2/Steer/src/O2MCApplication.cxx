@@ -1,0 +1,1886 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+#include <cstdlib>
+
+#include <Steer/O2MCApplication.h>
+#include <fairmq/Channel.h>
+#include <fairmq/Message.h>
+#include <fairmq/Device.h>
+#include <fairmq/Parts.h>
+#include <SimulationDataFormat/PrimaryChunk.h>
+#include <TMessage.h>
+#include <sstream>
+#include <SimConfig/SimConfig.h>
+#include <DetectorsBase/Detector.h>
+#include "DetectorsBase/Aligner.h"
+#include "DetectorsBase/MaterialManager.h"
+#include <CommonUtils/ShmManager.h>
+#include <cassert>
+#include <SimulationDataFormat/MCEventHeader.h>
+#include <TGeoManager.h>
+#include <fstream>
+#include <FairVolume.h>
+#include <CommonUtils/NameConf.h>
+#include <CommonUtils/ConfigurationMacroHelper.h>
+#include "SimConfig/SimUserDecay.h"
+#include <filesystem>
+#include <CommonUtils/FileSystemUtils.h>
+#include "SimConfig/GlobalProcessCutSimParam.h"
+#include <FairRunSim.h>
+#include <FairField.h> // full type: FairField derives from TVirtualMagField
+#include <TVirtualMC.h>
+#include "DetectorsBase/GeometryManagerParam.h"
+#include <TGeoParallelWorld.h>
+#include <TGeoVolume.h>
+#include <TBuffer3D.h>
+#include <TGeoTessellated.h>
+#include <DetectorsBase/O2Tessellated.h>
+#include <unordered_set>
+#include "SimConfig/G4Params.h"
+#include "DetectorsBase/VMCSeederService.h" // per-track seeding of the engine
+#include <TLorentzVector.h>
+#include <TRandom.h>
+#include <cstring>
+#include "DetectorsBase/SimRandom.h"
+
+namespace o2
+{
+namespace steer
+{
+// helper function to send trivial data
+template <typename T>
+void TypedVectorAttach(const char* name, fair::mq::Channel& channel, fair::mq::Parts& parts)
+{
+  auto mgr = FairRootManager::Instance();
+  auto vector = mgr->InitObjectAs<const std::vector<T>*>(name);
+  if (vector) {
+    auto buffer = (char*)&(*vector)[0];
+    auto buffersize = vector->size() * sizeof(T);
+    fair::mq::MessagePtr message(channel.NewMessage(
+      buffer, buffersize,
+      [](void* data, void* hint) {}, buffer));
+    parts.AddPart(std::move(message));
+  }
+}
+
+void O2MCApplicationBase::Stepping()
+{
+  mStepCounter++;
+
+  // check the max time of flight condition
+  const auto tof = fMC->TrackTime();
+  auto& params = o2::GlobalProcessCutSimParam::Instance();
+  if (tof > params.TOFMAX) {
+    fMC->StopTrack();
+    return;
+  }
+
+  mLongestTrackTime = std::max((double)mLongestTrackTime, tof);
+
+  if (mCutParams.stepFiltering) {
+    // we can kill tracks here based on our
+    // custom detector specificities
+
+    // Note that this is done in addition to the generic
+    // R + Z-cut mechanism at VMC level.
+
+    float x, y, z;
+    fMC->TrackPosition(x, y, z);
+
+    // this function is implementing a basic z-dependent R cut
+    // can be generalized later on
+    auto outOfR = [x, y, this](float z) {
+      // for the moment for cases when we have ZDC enabled
+      if (std::abs(z) > mCutParams.tunnelZ) {
+        if ((x * x + y * y) > mCutParams.maxRTrackingZDC * mCutParams.maxRTrackingZDC) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (z > mCutParams.ZmaxA ||
+        -z > mCutParams.ZmaxC ||
+        outOfR(z)) {
+      fMC->StopTrack();
+      return;
+    }
+  }
+
+  // an additional, user-provided criterion; only consulted when one is
+  // configured, so that SimCutParams.stepFilteringMacro being unset leaves the
+  // code above as the whole of the geometry cut
+  if (mHasStepFilterMacro && !mKeepStepFcn(fMC)) {
+    fMC->StopTrack();
+    return;
+  }
+
+  if (mCutParams.stepTrackRefHook) {
+    mTrackRefFcn(fMC);
+  }
+
+  // dispatch now to stepping function in FairRoot
+  FairMCApplication::Stepping();
+}
+
+namespace
+{
+// Hash of a track's initial state (vertex, global time, momentum, PDG). Used as
+// the random seed for that track, so that a track's random stream depends only
+// on the track itself and not on how many randoms earlier tracks happened to
+// consume.
+//
+// The values are read from the transport engine, not from
+// o2::data::Stack::GetCurrentTrack(): under Geant4 the stack's "current track"
+// is only meaningful for primaries -- Stack::SetCurrentTrack() falls back to
+// mCurrentParticle0 (the last particle *pushed*) for anything beyond the
+// primary array, so every secondary would hash the wrong particle. Both engines
+// have the track's initial state loaded by the time PreTrack is called (Geant4
+// sets the step to kVertex first; Geant3 calls GLTRAC before GUTRAK).
+ULong_t hashCurrentTrack(TVirtualMC* vmc)
+{
+  auto asLong = [](double x) {
+    ULong_t l;
+    std::memcpy(&l, &x, sizeof(l));
+    return l;
+  };
+
+  TLorentzVector pos, mom;
+  vmc->TrackPosition(pos);
+  vmc->TrackMomentum(mom);
+
+  ULong_t hash = asLong(pos.X());
+  hash ^= asLong(pos.Y());
+  hash ^= asLong(pos.Z());
+  hash ^= asLong(pos.T());
+  hash ^= asLong(mom.Px());
+  hash ^= asLong(mom.Py());
+  hash ^= asLong(mom.Pz());
+  hash += (ULong_t)vmc->TrackPid();
+  return hash;
+}
+} // namespace
+
+bool O2MCApplicationBase::seedsInPreTrack() const
+{
+  // Geant3 seeds at stack-pop time, in o2::data::Stack::PopNextTrack(). That is
+  // strictly earlier than its PreTrack hook (gutrak).
+  // Do not seed Geant3 here as well -- it is already covered, and reseeding a
+  // second time mid-track would undo the first.
+  static const bool inPreTrack = [this]() {
+    const char* name = (fMC != nullptr) ? fMC->GetName() : "";
+    return strncmp(name, "TGeant3", 7) != 0;
+  }();
+  return inPreTrack;
+}
+
+void O2MCApplicationBase::PreTrack()
+{
+  if (mCutParams.trackSeed && seedsInPreTrack()) {
+    // Per-track seeding for engines that do not go through
+    // o2::data::Stack::PopNextTrack(). Geant4 is one: it takes primaries via
+    // PopPrimaryForTracking and keeps secondaries internally, so the stack hook
+    // never fires and this is the only per-track hook available. It is called
+    // for primaries and secondaries alike
+    // (TG4TrackingAction::PreUserTrackingAction), and only on a track's first
+    // step, so a suspended track is not reseeded mid-flight.
+    auto hash = hashCurrentTrack(fMC);
+    // TRandom::SetSeed(0) means "seed from the clock" -- never let that happen.
+    o2::base::simRandom()->SetSeed(hash == 0 ? 1 : hash);
+    o2::base::VMCSeederService::instance().setSeed();
+  }
+
+  // dispatch now to function in FairRoot
+  FairMCApplication::PreTrack();
+}
+
+void O2MCApplicationBase::ConstructGeometry()
+{
+  // The transport engine constructs the geometry from inside its own
+  // constructor, long before FairMCApplication::InitMC() attaches the magnetic
+  // field to it. The media built below read the field through
+  // Detector::initFieldTrackingParams(), so without this they all silently fall
+  // back to hardcoded defaults. The run has known the field since
+  // build_geometry.C, which runs before Init() -- hand it over now.
+  if (auto* vmc = TVirtualMC::GetMC(); vmc != nullptr && vmc->GetMagField() == nullptr) {
+    auto* run = FairRunSim::Instance();
+    if (run != nullptr && run->GetField() != nullptr) {
+      vmc->SetMagField(run->GetField());
+      LOG(info) << "Magnetic field attached to the engine before media creation";
+    } else {
+      LOG(warn) << "No magnetic field available at geometry construction; media "
+                   "will be initialised with default tracking parameters";
+    }
+  }
+
+  // fill the mapping
+  mModIdToName.clear();
+  o2::detectors::DetID::mask_t dmask{};
+  for (int i = 0; i < fModules->GetEntries(); ++i) {
+    auto mod = static_cast<FairModule*>(fModules->At(i));
+    if (mod) {
+      mModIdToName[mod->GetModId()] = mod->GetName();
+      int did = o2::detectors::DetID::nameToID(mod->GetName());
+      if (did >= 0) {
+        dmask |= o2::detectors::DetID::getMask(did);
+      }
+    }
+  }
+  gGeoManager->SetUniqueID(dmask.to_ulong());
+  FairMCApplication::ConstructGeometry();
+
+  std::ofstream voltomodulefile("MCStepLoggerVolMap.dat");
+  // construct the volume name to module name mapping useful for StepAnalysis
+  auto vollist = gGeoManager->GetListOfVolumes();
+  for (int i = 0; i < vollist->GetEntries(); ++i) {
+    auto vol = static_cast<TGeoVolume*>(vollist->At(i));
+    auto iter = fModVolMap.find(vol->GetNumber());
+    voltomodulefile << vol->GetName() << ":" << mModIdToName[iter->second] << "\n";
+  }
+}
+
+void O2MCApplicationBase::initStepFilterHook()
+{
+  if (mCutParams.stepFilteringMacro.empty()) {
+    return;
+  }
+  const auto macro = o2::utils::expandShellVarsInFileName(mCutParams.stepFilteringMacro);
+  if (!std::filesystem::exists(macro)) {
+    LOG(error) << "Macro for step filtering does not exist at " << macro << "; ignoring it";
+    return;
+  }
+  LOG(info) << "Initializing step filtering from macro " << macro;
+  mKeepStepFcn = o2::conf::GetFromMacro<KeepStepFcn>(macro, "keepStep()",
+                                                     "o2::steer::O2MCApplicationBase::KeepStepFcn",
+                                                     "o2mc_stepping_keep_step");
+  if (!mKeepStepFcn) {
+    LOG(error) << "Could not set up keepStep() from " << macro << "; ignoring it";
+    return;
+  }
+  mHasStepFilterMacro = true;
+  LOG(info) << "Step filtering initialized from macro " << macro;
+}
+
+void O2MCApplicationBase::InitGeometry()
+{
+  // set up the engine seeding here, on the main thread, so that transport threads never JIT-compile it
+  o2::base::VMCSeederService::instance();
+  // load special cuts which might be given from the outside first.
+  auto& matMgr = o2::base::MaterialManager::Instance();
+  matMgr.loadCutsAndProcessesFromJSON(o2::base::MaterialManager::ESpecial::kTRUE);
+  matMgr.SetLowEnergyNeutronTransport(mCutParams.lowneut);
+  // During the following, FairModule::SetSpecialPhysicsCuts will be called for each module
+  FairMCApplication::InitGeometry();
+  matMgr.writeCutsAndProcessesToJSON();
+  // now the sensitive volumes are set up in fVolMap and we can query them
+  for (auto e : fVolMap) {
+    // since fVolMap contains multiple entries (if multiple copies), this may
+    // write to the same entry multiple times
+    mSensitiveVolumes[e.first] = e.second->GetName();
+  }
+  std::ofstream sensvolfile("MCStepLoggerSenVol.dat");
+  for (auto e : mSensitiveVolumes) {
+    sensvolfile << e.first << ":" << e.second << "\n";
+  }
+}
+
+bool O2MCApplicationBase::MisalignGeometry()
+{
+  for (auto det : listDetectors) {
+    if (dynamic_cast<o2::base::Detector*>(det)) {
+      ((o2::base::Detector*)det)->addAlignableVolumes();
+    }
+  }
+
+  // we stream out both unaligned geometry (to allow for
+  // dynamic post-alignment) as well as the aligned version
+  // which can be used by digitization etc. immediately
+  auto& confref = o2::conf::SimConfig::Instance();
+  auto geomfile = o2::base::NameConf::getGeomFileName(confref.getOutPrefix());
+  // since in general the geometry is a CCDB object, it must be exported under the standard name
+  gGeoManager->SetName(std::string(o2::base::NameConf::CCDBOBJECT).c_str());
+  gGeoManager->Export(geomfile.c_str());
+
+  // apply alignment for included detectors AFTER exporting ideal geometry
+  auto& aligner = o2::base::Aligner::Instance();
+  aligner.applyAlignment(confref.getTimestamp());
+
+  // export aligned geometry into different file
+  auto alignedgeomfile = o2::base::NameConf::getAlignedGeomFileName(confref.getOutPrefix());
+  gGeoManager->Export(alignedgeomfile.c_str());
+
+  auto& param = o2::GeometryManagerParam::Instance();
+
+  // fill parallel world geometry if activated
+  if (param.useParallelWorld) {
+    TGeoParallelWorld* pw = gGeoManager->CreateParallelWorld("priority_sensors");
+    if (param.usePwGeoBVH) {
+      pw->SetAccelerationMode(TGeoParallelWorld::AccelerationMode::kBVH);
+    }
+    if (param.usePwCaching) {
+      TGeoNavigator::SetPWSafetyCaching(true);
+    }
+    for (auto det : listDetectors) {
+      if (dynamic_cast<o2::base::Detector*>(det)) {
+        ((o2::base::Detector*)det)->fillParallelWorld();
+      }
+    }
+    gGeoManager->SetUseParallelWorldNav(true);
+  }
+
+  // performs possible optimizations (shape replacements on the runtime geometry)
+  fixTGeoRuntimeShapes();
+
+  // return original return value of misalignment procedure
+  return true;
+}
+
+void O2MCApplicationBase::fixTGeoRuntimeShapes()
+{
+  auto& g4Params = o2::conf::G4Params::Instance();
+  if (g4Params.navmode != o2::conf::EG4Nav::kTGeo) {
+    return;
+  }
+
+  // Replace TGeo shapes by other ones for performance or other reasons.
+  // Should only affect runtime of simulation.
+
+  // TODO: make this configurable via external JSON rules/macro
+
+  // Also delete original shapes for memory reasons
+
+  // We follow a visitor pattern on a geom hierarchy
+  // for now replace a TGeoTessellate by our own implementation
+  std::unordered_set<TGeoVolume*> volumes_visited;
+  std::unordered_set<TGeoShape*> old_shape_pointers;
+
+  std::function<void(TGeoNode*)> visit;
+  visit = [&](TGeoNode* node) -> void {
+    if (!node) {
+      return;
+    }
+    auto vol = node->GetVolume();
+    if (volumes_visited.find(vol) != volumes_visited.end()) {
+      return;
+    }
+    volumes_visited.insert(vol);
+
+    // transform the shape of this volume
+    auto shape = vol->GetShape();
+    if (shape->IsA() == TGeoTessellated::Class()) {
+      auto tsl = static_cast<TGeoTessellated*>(shape);
+
+      // make a new O2Tessellated until ROOT has proper support for navigation in TGeoTessellated
+      std::cout << "Converting to O2Tessellated for vol " << vol->GetName() << "\n";
+      auto replacement_shape = new o2::base::O2Tessellated(*tsl, false);
+      vol->SetShape(replacement_shape);
+      old_shape_pointers.insert(shape);
+    }
+    // other cases could come here
+
+    for (int i = 0; i < vol->GetNdaughters(); ++i) {
+      auto child_node = vol->GetNode(i);
+      visit(child_node);
+    }
+  };
+
+  visit(gGeoManager->GetTopNode());
+
+  for (auto ptr : old_shape_pointers) {
+    delete ptr;
+    ptr = nullptr;
+  }
+}
+
+void O2MCApplicationBase::finishEventCommon()
+{
+  LOG(info) << "This event/chunk did " << mStepCounter << " steps";
+  LOG(info) << "Longest track time is " << mLongestTrackTime;
+
+  auto header = static_cast<o2::dataformats::MCEventHeader*>(fMCEventHeader);
+  header->getMCEventStats().setNSteps(mStepCounter);
+  header->setDetId2HitBitLUT(o2::base::Detector::getDetId2HitBitIndex());
+
+  static_cast<o2::data::Stack*>(GetStack())->updateEventStats();
+
+  // Per-track seeding used to be wired to a stack callback that one of the two
+  // engines never invoked, and it failed silently. Never again: if it was asked
+  // for and nothing was seeded, say so.
+  if (mCutParams.trackSeed && o2::base::VMCSeederService::instance().getSeedCount() == 0 &&
+      !mTrackSeedWarned) {
+    mTrackSeedWarned = true;
+    LOG(warn) << "Per-track seeding (SimCutParams.trackSeed) was requested but not a single track "
+                 "was seeded -- neither the stack nor the PreTrack hook fired for this engine. "
+                 "Seeding is NOT active.";
+  }
+}
+
+void O2MCApplicationBase::FinishEvent()
+{
+  finishEventCommon();
+
+  auto header = static_cast<o2::dataformats::MCEventHeader*>(fMCEventHeader);
+  auto& confref = o2::conf::SimConfig::Instance();
+
+  if (confref.isFilterOutNoHitEvents() && header->getMCEventStats().getNHits() == 0) {
+    LOG(info) << "Discarding current event due to no hits";
+    SetSaveCurrentEvent(false);
+  }
+
+  // dispatch to function in FairRoot
+  FairMCApplication::FinishEvent();
+}
+
+void O2MCApplicationBase::BeginEvent()
+{
+  // dispatch first to function in FairRoot
+  FairMCApplication::BeginEvent();
+
+  // register event header with our stack
+  auto header = static_cast<o2::dataformats::MCEventHeader*>(fMCEventHeader);
+  static_cast<o2::data::Stack*>(GetStack())->setMCEventStats(&header->getMCEventStats());
+
+  mStepCounter = 0;
+  mLongestTrackTime = 0;
+}
+
+void addSpecialParticles()
+{
+  //
+  // Add particles needed for ALICE (not present in Geant3 or Geant4)
+  // Code ported 1-1 from AliRoot
+  //
+
+  LOG(info) << "Adding custom particles to VMC";
+
+  //Hypertriton
+  TVirtualMC::GetMC()->DefineParticle(1010010030, "HyperTriton", kPTHadron, 2.991134, 1.0, 2.632e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+  //Anti-Hypertriton
+  TVirtualMC::GetMC()->DefineParticle(-1010010030, "AntiHyperTriton", kPTHadron, 2.991134, 1.0, 2.632e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+
+  //Hyper hydrogen 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(1010010040, "Hyperhydrog4", kPTHadron, 3.922434, 1.0, 2.08e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  //Anti-Hyper hydrogen 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(-1010010040, "AntiHyperhydrog4", kPTHadron, 3.922434, 1.0, 2.08e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  //Hyper helium 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(1010020040, "Hyperhelium4", kPTHadron, 3.921728, 2.0, 2.50e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  //Anti-Hyper helium 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(-1010020040, "AntiHyperhelium4", kPTHadron, 3.921728, 2.0, 2.50e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  // Lithium 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(1000030040, "Lithium4", kPTHadron, 3.7513, 3.0, 9.1e-23, "Ion", 0.003, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  // Anti-Lithium 4 ground state
+  TVirtualMC::GetMC()->DefineParticle(-1000030040, "AntiLithium4", kPTHadron, 3.7513, 3.0, 9.1e-23, "Ion", 0.003, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  //Hyper helium 5
+  TVirtualMC::GetMC()->DefineParticle(1010020050, "Hyperhelium5", kPTHadron, 4.839961, 2.0, 2.74e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 5, kFALSE);
+  //Anti-Hyper helium 5
+  TVirtualMC::GetMC()->DefineParticle(-1010020050, "AntiHyperhelium5", kPTHadron, 4.839961, 2.0, 2.74e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 5, kFALSE);
+
+  //Double Hyper hydrogen 4
+  TVirtualMC::GetMC()->DefineParticle(1020010040, "DoubleHyperhydrogen4", kPTHadron, 4.106, 1.0, 2.632e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  //Double Anti-Hyper hydrogen 4
+  TVirtualMC::GetMC()->DefineParticle(-1020010040, "DoubleAntiHyperhydrogen4", kPTHadron, 4.106, 1.0, 2.632e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  // 4Xi(-)H
+  TVirtualMC::GetMC()->DefineParticle(1120010040, "4XiH", kPTHadron, 4.128, 1.0, 1.639e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  // Anti-4Xi(-)H
+  TVirtualMC::GetMC()->DefineParticle(-1120010040, "Anti4XiH", kPTHadron, 4.128, 1.0, 1.639e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  // 4Xi(-)He
+  TVirtualMC::GetMC()->DefineParticle(1120020040, "4XiHe", kPTHadron, 4.128, 1.0, 1.639e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  // Anti-4Xi(-)He
+  TVirtualMC::GetMC()->DefineParticle(-1120020040, "Anti4XiHe", kPTHadron, 4.128, 1.0, 1.639e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  // Hyper helium 4 sigma
+  TVirtualMC::GetMC()->DefineParticle(1110020040, "Hyperhelium4sigma", kPTHadron, 3.995, 2.0, 8.018e-11, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+  // Anti-Hyper helium 4 sigma
+  TVirtualMC::GetMC()->DefineParticle(-1110020040, "AntiHyperhelium4sigma", kPTHadron, 3.995, 2.0, 8.018e-11, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 4, kFALSE);
+
+  //Lambda-Neutron
+  TVirtualMC::GetMC()->DefineParticle(1010000020, "LambdaNeutron", kPTNeutron, 2.054, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Lambda-Neutron
+  TVirtualMC::GetMC()->DefineParticle(-1010000020, "AntiLambdaNeutron", kPTNeutron, 2.054, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //H-Dibaryon
+  TVirtualMC::GetMC()->DefineParticle(1020000020, "Hdibaryon", kPTNeutron, 2.23, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-H-Dibaryon
+  TVirtualMC::GetMC()->DefineParticle(-1020000020, "AntiHdibaryon", kPTNeutron, 2.23, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Xi-Proton
+  TVirtualMC::GetMC()->DefineParticle(1020010020, "Xi0Proton", kPTHadron, 2.248, 1.0, 1.333e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Xi-Proton
+  TVirtualMC::GetMC()->DefineParticle(-1020010020, "AntiXi0Proton", kPTHadron, 2.248, 1.0, 1.333e-10, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Lambda-Neutron-Neutron
+  TVirtualMC::GetMC()->DefineParticle(1010000030, "LambdaNeutronNeutron", kPTNeutron, 2.99, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+
+  //Anti-Lambda-Neutron-Neutron
+  TVirtualMC::GetMC()->DefineParticle(-1010000030, "AntiLambdaNeutronNeutron", kPTNeutron, 2.99, 0.0, 2.632e-10, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+
+  //Omega-Proton
+  TVirtualMC::GetMC()->DefineParticle(1030000020, "OmegaProton", kPTNeutron, 2.592, 0.0, 2.632e-10, "Hadron", 0.0, 2, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Omega-Proton
+  TVirtualMC::GetMC()->DefineParticle(-1030000020, "AntiOmegaProton", kPTNeutron, 2.592, 0.0, 2.632e-10, "Hadron", 0.0, 2, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Omega-Neutron
+  TVirtualMC::GetMC()->DefineParticle(1030010020, "OmegaNeutron", kPTHadron, 2.472, 1.0, 2.190e-22, "Hadron", 0.0, 2, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Omega-Neutron
+  TVirtualMC::GetMC()->DefineParticle(-1030010020, "AntiOmegaNeutron", kPTHadron, 2.472, 1.0, 2.190e-22, "Hadron", 0.0, 2, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Omega-Omega
+  TVirtualMC::GetMC()->DefineParticle(1060020020, "OmegaOmega", kPTHadron, 3.343, -2.0, 8.21e-11, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Omega-Omega
+  TVirtualMC::GetMC()->DefineParticle(-1060020020, "AntiOmegaOmega", kPTHadron, 3.343, 2.0, 8.21e-11, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Lambda(1405)-Proton
+  TVirtualMC::GetMC()->DefineParticle(1010010021, "Lambda1405Proton", kPTHadron, 2.295, 1.0, 1.316e-23, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Lambda(1405)-Proton
+  TVirtualMC::GetMC()->DefineParticle(-1010010021, "AntiLambda1405Proton", kPTHadron, 2.295, 1.0, 1.316e-23, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Lambda(1405)-Lambda(1405)
+  TVirtualMC::GetMC()->DefineParticle(1020000021, "Lambda1405Lambda1405", kPTNeutron, 2.693, 0.0, 1.316e-23, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Anti-Lambda(1405)-Lambda(1405)
+  TVirtualMC::GetMC()->DefineParticle(-1020000021, "AntiLambda1405Lambda1405", kPTNeutron, 2.693, 0.0, 1.316e-23, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //c-deuteron
+  TVirtualMC::GetMC()->DefineParticle(2010010020, "CDeuteron", kPTHadron, 3.226, 1.0, 2.0e-13, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+  //Anti-c-deuteron
+  TVirtualMC::GetMC()->DefineParticle(-2010010020, "AntiCDeuteron", kPTHadron, 3.226, 1.0, 2.0e-13, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 3, kFALSE);
+
+  //c-triton
+  TVirtualMC::GetMC()->DefineParticle(2010010030, "CTriton", kPTHadron, 4.162, 1.0, 2.0e-13, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+  //Anti-c-Hypertriton
+  TVirtualMC::GetMC()->DefineParticle(-2010010030, "AntiCTriton", kPTHadron, 4.162, 1.0, 2.0e-13, "Ion", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kFALSE);
+
+  //Resonances not in Generators
+  // f0(980) assume 70 MeV as width (PDG: 40 to 100 MeV)
+  TVirtualMC::GetMC()->DefineParticle(9010221, "f0_980", kPTNeutron, 0.98, 0.0, 9.403e-24, "Hadron", 7e-2, 0, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+
+  // f2(1270) (PDG: width = 186 MeV)
+  TVirtualMC::GetMC()->DefineParticle(225, "f2_1270", kPTNeutron, 1.275, 0.0, 3.538e-24, "Hadron", 0.186, 2, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+
+  // f1(1285) (PDG: width = 24.20 MeV) Spin/Parity might not be correct
+  TVirtualMC::GetMC()->DefineParticle(20223, "f1_1285", kPTNeutron, 1.28210, 0.0, 1e-24, "Hadron", 0.02420, 3, 1, 0, 0, 0, 0, 0, 1, kTRUE);
+  // f1(1420) (PDG: width = 54 MeV) Spin/Parity might not be correct
+  TVirtualMC::GetMC()->DefineParticle(20333, "f1_1420", kPTNeutron, 1.42640, 0.0, 1e-24, "Hadron", 0.05490, 3, 1, 0, 0, 0, 0, 0, 1, kTRUE);
+
+  // lambda1405 (PDG: width = 50 MeV)
+  TVirtualMC::GetMC()->DefineParticle(102132, "Lambda1405", kPTNeutron, 1.405, 0.0, 1.316e-23, "Hadron", 0.050, 0, 1, 0, 0, 0, 0, 0, 2, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-102132, "AntiLambda1405", kPTNeutron, 1.405, 0.0, 1.316e-23, "Hadron", 0.050, 0, 1, 0, 0, 0, 0, 0, 2, kTRUE);
+
+  // Glueball hunting family
+  // Their life times are not known, so we set them to 1e-24
+  // f0(1370) (PDG: width = 200-500 MeV) Spin/Parity might not be correct
+  TVirtualMC::GetMC()->DefineParticle(10221, "f0_1370", kPTNeutron, 1.37, 0.0, 1e-24, "Hadron", 0.2, 1, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+  // a2(1320) (PDG: width = 107.8 MeV)
+  TVirtualMC::GetMC()->DefineParticle(115, "a2_1320", kPTNeutron, 1.3182, 0.0, 6.1e-24, "Hadron", 0.1078, 2, 1, 1, 1, 0, -1, 0, 0, kTRUE);
+  // f0(1500) (PDG: width = 112 MeV)
+  TVirtualMC::GetMC()->DefineParticle(9030221, "f0_1500", kPTNeutron, 1.506, 0.0, 1e-24, "Hadron", 0.112, 0, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+  // f0(1710) (PDG: width = 150 MeV)
+  TVirtualMC::GetMC()->DefineParticle(10331, "f0_1710", kPTNeutron, 1.71, 0.0, 4.4e-24, "Hadron", 0.150, 0, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+  // f2(1525) (PDG: width = 84 MeV)
+  TVirtualMC::GetMC()->DefineParticle(335, "f2_1525", kPTNeutron, 1.525, 0.0, 7.798e-24, "Hadron", 0.084, 2, 1, 1, 0, 0, 1, 0, 0, kTRUE);
+
+  // Xi_0(1820)
+  TVirtualMC::GetMC()->DefineParticle(123324, "Xi_0_1820", kPTNeutron, 1.8234, 0.0, 2.742550e-23, "Hadron", 0.024, 3, -1, 0, 1, 1, 0, 0, 1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-123324, "Xi_0_Bar_1820", kPTNeutron, 1.8234, 0.0, 2.742550e-23, "Hadron", 0.024, 3, -1, 0, 1, -1, 0, 0, -1, kTRUE);
+
+  int xi_0_1820_mode[6][3] = {{0}};
+  float xi_0_1820_ratio[6] = {100.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  xi_0_1820_mode[0][0] = 3122; // Lambda
+  xi_0_1820_mode[0][1] = 310;  // K0s
+  TVirtualMC::GetMC()->SetDecayMode(123324, xi_0_1820_ratio, xi_0_1820_mode);
+  xi_0_1820_mode[0][0] = -3122; // Lambda-bar
+  TVirtualMC::GetMC()->SetDecayMode(-123324, xi_0_1820_ratio, xi_0_1820_mode);
+
+  // Xi-+(1820)
+  TVirtualMC::GetMC()->DefineParticle(123314, "Xi_Minus_1820", kPTHadron, 1.8234, -1.0, 2.742550e-23, "Hadron", 0.024, 3, -1, 0, 1, -1, 0, 0, 1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-123314, "Xi_Plus_1820", kPTHadron, 1.8234, 1.0, 2.742550e-23, "Hadron", 0.024, 3, -1, 0, 1, 1, 0, 0, -1, kTRUE);
+
+  int xi_charged_1820_mode[6][3] = {{0}};
+  float xi_charged_1820_ratio[6] = {100.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+  xi_charged_1820_mode[0][0] = 3122; // Lambda
+  xi_charged_1820_mode[0][1] = -321; // K-
+  TVirtualMC::GetMC()->SetDecayMode(123314, xi_charged_1820_ratio, xi_charged_1820_mode);
+  xi_charged_1820_mode[0][0] = -3122; // Lambda-bar
+  xi_charged_1820_mode[0][1] = 321;   // K+
+  TVirtualMC::GetMC()->SetDecayMode(-123314, xi_charged_1820_ratio, xi_charged_1820_mode);
+
+  // Ps - hidden strange (s-sbar) pentaquarks
+  TVirtualMC::GetMC()->DefineParticle(9322134, "Ps_2100", kPTHadron, 2.1, 1.0, 1.6455e-23, "Hadron", 4.e-2, 3, -1, 0, 0, 0, 0, 0, 1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-9322134, "AntiPs_2100", kPTHadron, 2.1, -1.0, 1.6455e-23, "Hadron", 4.e-2, 3, -1, 0, 0, 0, 0, 0, -1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(9322136, "Ps_2500", kPTHadron, 2.5, 1.0, 1.6455e-23, "Hadron", 4.e-2, 5, 1, 0, 0, 0, 0, 0, 1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-9322136, "AntiPs_2500", kPTHadron, 2.5, -1.0, 1.6455e-23, "Hadron", 4.e-2, 5, 1, 0, 0, 0, 0, 0, -1, kTRUE);
+
+  Int_t psmode[6][3] = {0};
+  Float_t psratio[6] = {0.f};
+  psratio[0] = 100.;
+
+  psmode[0][0] = 333;  // phi
+  psmode[0][1] = 2212; // proton
+  TVirtualMC::GetMC()->SetDecayMode(9322134, psratio, psmode);
+  TVirtualMC::GetMC()->SetDecayMode(9322136, psratio, psmode);
+
+  psmode[0][1] = -2212; // anti-proton
+  TVirtualMC::GetMC()->SetDecayMode(-9322134, psratio, psmode);
+  TVirtualMC::GetMC()->SetDecayMode(-9322136, psratio, psmode);
+
+  //Omega(2012)
+  for (int j = 1; j < 6; j++) {
+    psmode[j][0] = psmode[j][1] = 0;
+    psratio[j] = 0.;
+  }
+
+  TVirtualMC::GetMC()->DefineParticle(123334, "Omega_Minus_2012", kPTHadron, 2.0125, -1.0, 1.0285e-22, "Hadron", 0.0064, 3, -1, 0, 0, 0, 0, 0, 1, kTRUE);
+  psmode[0][0] = 3312; // Xi-
+  psmode[0][1] = 310;  // K0S
+  psratio[0] = 100.;
+  TVirtualMC::GetMC()->SetDecayMode(123334, psratio, psmode);
+
+  TVirtualMC::GetMC()->DefineParticle(-123334, "Omega_Plus_2012", kPTHadron, 2.0125, 1.0, 1.0285e-22, "Hadron", 0.0064, 3, 1, 0, 0, 0, 0, 0, -1, kTRUE);
+  psmode[0][0] = -3312; // anti-Xi+
+  psmode[0][1] = 310;   // K0S
+  psratio[0] = 100.;
+  TVirtualMC::GetMC()->SetDecayMode(-123334, psratio, psmode);
+
+  // d*(2380) - dibaryon resonance
+  TVirtualMC::GetMC()->DefineParticle(900010020, "d*_2380", kPTHadron, 2.38, 1.0, 0.94e-23, "Ion", 0.07, 6, 1, 0, 0, 0, 0, 0, 2, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-900010020, "d*_2380_bar", kPTHadron, 2.38, -1.0, 0.94e-23, "Ion", 0.07, 6, 1, 0, 0, 0, 0, 0, -2, kTRUE);
+
+  Int_t dstmode[6][3] = {0};
+  Float_t dstratio[6] = {0.f};
+  dstratio[0] = 100; // For now we implement only the mode of interest
+  // d* -> d pi+ pi-
+  dstmode[0][0] = 1000010020; // deuteron
+  dstmode[0][1] = -211;       // negative pion
+  dstmode[0][2] = 211;        // positive pion
+  TVirtualMC::GetMC()->SetDecayMode(900010020, dstratio, dstmode);
+
+  dstmode[0][0] = -1000010020; // anti-deuteron
+  TVirtualMC::GetMC()->SetDecayMode(-900010020, dstratio, dstmode);
+
+  // Heavy vector mesons
+  // D*+
+  TVirtualMC::GetMC()->DefineParticle(413, "D*+", kPTHadron, 2.0103, 1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // D*-
+  TVirtualMC::GetMC()->DefineParticle(-413, "D*-", kPTHadron, 2.0103, -1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // D*0
+  TVirtualMC::GetMC()->DefineParticle(423, "D*0", kPTHadron, 2.0007, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // D*0bar
+  TVirtualMC::GetMC()->DefineParticle(-423, "D*0bar", kPTHadron, 2.0007, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // D*_s+
+  TVirtualMC::GetMC()->DefineParticle(433, "D*_s+", kPTHadron, 2.1123, 1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // D*_s-
+  TVirtualMC::GetMC()->DefineParticle(-433, "D*_s-", kPTHadron, 2.1123, -1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*0
+  TVirtualMC::GetMC()->DefineParticle(513, "B*0", kPTHadron, 5.3251, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*0bar
+  TVirtualMC::GetMC()->DefineParticle(-513, "B*0bar", kPTHadron, 5.3251, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*+
+  TVirtualMC::GetMC()->DefineParticle(523, "B*+", kPTHadron, 5.3251, 1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*-
+  TVirtualMC::GetMC()->DefineParticle(-523, "B*-", kPTHadron, 5.3251, -1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*_s0
+  TVirtualMC::GetMC()->DefineParticle(533, "B*_s0", kPTHadron, 5.4128, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*_s0bar
+  TVirtualMC::GetMC()->DefineParticle(-533, "B*_s0bar", kPTHadron, 5.4128, 0.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*_c+
+  TVirtualMC::GetMC()->DefineParticle(543, "B*_c+", kPTHadron, 6.6020, 1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+  // B*_c-
+  TVirtualMC::GetMC()->DefineParticle(-543, "B*_c-", kPTHadron, 6.6020, -1.0, 0.0, "Hadron", 0.0, 1, -1, 0, 0, 0, 0, 0, 0, kTRUE);
+
+  // Charm pentaquarks
+  // Theta_c: isospin singlet with J=1/2+ (see https://arxiv.org/abs/hep-ph/0409121)
+  TVirtualMC::GetMC()->DefineParticle(9422111, "Anti-Theta_c_3100", kPTHadron, 3.099, 0., 6.9e-21, "Hadron", 83.e-6, 1, 1, 0, 0, 0, 0, 0, -1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-9422111, "Theta_c_3100", kPTHadron, 3.099, 0., 6.9e-21, "Hadron", 83.e-6, 1, 1, 0, 0, 0, 0, 0, 1, kTRUE);
+
+  for (int j = 1; j < 6; j++) {
+    psmode[j][0] = psmode[j][1] = 0;
+    psratio[j] = 0.;
+  }
+  psmode[0][0] = 413;   // D*+
+  psmode[0][1] = -2212; // anti-p
+  psratio[0] = 100.;
+  TVirtualMC::GetMC()->SetDecayMode(9422111, psratio, psmode);
+  psmode[0][0] = -413; // D*-
+  psmode[0][1] = 2212; // p
+  TVirtualMC::GetMC()->SetDecayMode(-9422111, psratio, psmode);
+
+  // Define the 2- and 3-body phase space decay for the Hyper-Triton
+  Int_t mode[6][3];
+  Float_t bratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio[kz] = 0.;
+    mode[kz][0] = 0;
+    mode[kz][1] = 0;
+    mode[kz][2] = 0;
+  }
+  bratio[0] = 50.;
+  mode[0][0] = 1000020030; // Helium3
+  mode[0][1] = -211;       // negative pion
+
+  bratio[1] = 50.;
+  mode[1][0] = 1000010020; // deuteron
+  mode[1][1] = 2212;       // proton
+  mode[1][2] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1010010030, bratio, mode);
+
+  // Define the 2- and 3-body phase space decay for the Anti-Hyper-Triton
+  Int_t amode[6][3];
+  Float_t abratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio[kz] = 0.;
+    amode[kz][0] = 0;
+    amode[kz][1] = 0;
+    amode[kz][2] = 0;
+  }
+  abratio[0] = 50.;
+  amode[0][0] = -1000020030; // anti- Helium3
+  amode[0][1] = 211;         // positive pion
+  abratio[1] = 50.;
+  amode[1][0] = -1000010020; // anti-deuteron
+  amode[1][1] = -2212;       // anti-proton
+  amode[1][2] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010010030, abratio, amode);
+
+  ////// ----------Hypernuclei with Mass=4 ----------- //////////
+
+  // Define the 2- and 3-body phase space decay for the Hyper Hydrogen 4
+
+  Int_t mode3[6][3];
+  Float_t bratio3[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio3[kz] = 0.;
+    mode3[kz][0] = 0;
+    mode3[kz][1] = 0;
+    mode3[kz][2] = 0;
+  }
+  bratio3[0] = 50.;
+  mode3[0][0] = 1000020040; // Helium4
+  mode3[0][1] = -211;       // negative pion
+
+  bratio3[1] = 50.;
+  mode3[1][0] = 1000010030; // tritium
+  mode3[1][1] = 2212;       // proton
+  mode3[1][2] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1010010040, bratio3, mode3);
+
+  // Define the 2- and 3-body phase space decay for the Hyper Hydrogen 4
+  Int_t amode3[6][3];
+  Float_t abratio3[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio3[kz] = 0.;
+    amode3[kz][0] = 0;
+    amode3[kz][1] = 0;
+    amode3[kz][2] = 0;
+  }
+  abratio3[0] = 50.;
+  amode3[0][0] = -1000020040; // anti- Helium4
+  amode3[0][1] = 211;         // positive pion
+  abratio3[1] = 50.;
+  amode3[1][0] = -1000010030; // anti-tritium
+  amode3[1][1] = -2212;       // anti-proton
+  amode3[1][2] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010010040, abratio3, amode3);
+
+  // Define the 3-body phase space decay for the Hyper Helium 4
+  Int_t mode4[6][3];
+  Float_t bratio4[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio4[kz] = 0.;
+    mode4[kz][0] = 0;
+    mode4[kz][1] = 0;
+    mode4[kz][2] = 0;
+  }
+  bratio4[0] = 50.;
+  mode4[0][0] = 1000020030; // Helium3
+  mode4[0][1] = -211;       // negative pion
+  mode4[0][2] = 2212;       // proton
+
+  bratio4[1] = 50.;
+  mode4[1][0] = 1000030040; // lithium-4
+  mode4[1][1] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1010020040, bratio4, mode4);
+
+  // Define the 2-body phase space decay for the Anti-Hyper Helium 4
+  Int_t amode4[6][3];
+  Float_t abratio4[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio4[kz] = 0.;
+    amode4[kz][0] = 0;
+    amode4[kz][1] = 0;
+    amode4[kz][2] = 0;
+  }
+  abratio4[0] = 50.;
+  amode4[0][0] = -1000020030; // anti-Helium 3
+  amode4[0][1] = 211;         // positive pion
+  amode4[0][2] = -2212;       // anti proton
+
+  abratio4[1] = 50.;
+  amode4[1][0] = -1000030040; // antilithium-4
+  amode4[1][1] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010020040, abratio4, amode4);
+
+  // Define the 2-body phase space decay for the Lithium 4
+  Int_t model4[6][3];
+  Float_t bratiol4[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratiol4[kz] = 0.;
+    model4[kz][0] = 0;
+    model4[kz][1] = 0;
+    model4[kz][2] = 0;
+  }
+  bratiol4[0] = 100.;
+  model4[0][0] = 1000020030; // Helium3
+  model4[0][1] = 2212;       // proton
+
+  TVirtualMC::GetMC()->SetDecayMode(1000030040, bratiol4, model4);
+
+  // Define the 2-body phase space decay for the Anti-Lithium 4
+  Int_t amodel4[6][3];
+  Float_t abratiol4[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratiol4[kz] = 0.;
+    amodel4[kz][0] = 0;
+    amodel4[kz][1] = 0;
+    amodel4[kz][2] = 0;
+  }
+  abratiol4[0] = 100.;
+  amodel4[0][0] = -1000020030; // Anti-Helium3
+  amodel4[0][1] = -2212;       // Anti-proton
+
+  TVirtualMC::GetMC()->SetDecayMode(-1000030040, abratiol4, amodel4);
+
+  // Define the 3-body phase space decay for the Hyper Helium 5
+  Int_t mode41[6][3];
+  Float_t bratio41[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio41[kz] = 0.;
+    mode41[kz][0] = 0;
+    mode41[kz][1] = 0;
+    mode41[kz][2] = 0;
+  }
+  bratio41[0] = 50.;
+  mode41[0][0] = 1000020040; // Helium4
+  mode41[0][1] = -211;       // negative pion
+  mode41[0][2] = 2212;       // proton
+  bratio41[1] = 50.;
+  mode41[1][0] = 1000020030; // Helium3
+  mode41[1][1] = -211;       // negative pion
+  mode41[1][2] = 1000010020; // Deuteron
+
+  TVirtualMC::GetMC()->SetDecayMode(1010020050, bratio41, mode41);
+
+  // Define the 2-body phase space decay for the Anti-Hyper Helium 5
+  Int_t amode41[6][3];
+  Float_t abratio41[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio41[kz] = 0.;
+    amode41[kz][0] = 0;
+    amode41[kz][1] = 0;
+    amode41[kz][2] = 0;
+  }
+  abratio41[0] = 50.;
+  amode41[0][0] = -1000020040; // anti-Helium 4
+  amode41[0][1] = 211;         // positive pion
+  amode41[0][2] = -2212;       // anti proton
+  abratio41[1] = 50.;
+  amode41[1][0] = -1000020030; // anti-Helium 3
+  amode41[1][1] = 211;         // positive pion
+  amode41[1][2] = -1000010020; // anti deuteron
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010020050, abratio41, amode41);
+
+  // Define the 3-body phase space decay for the Double Hyper Hydrogen 4
+  Int_t mode42[6][3];
+  Float_t bratio42[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio42[kz] = 0.;
+    mode42[kz][0] = 0;
+    mode42[kz][1] = 0;
+    mode42[kz][2] = 0;
+  }
+  bratio42[0] = 50.;
+  mode42[0][0] = 1010020040; // Hyper-Helium4
+  mode42[0][1] = -211;       // negative pion
+
+  bratio42[1] = 50.;
+  mode42[1][0] = 1010010030; // Hypertriton
+  mode42[1][1] = 2212;       // proton
+  mode42[1][2] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1020010040, bratio42, mode42);
+
+  // Define the 2-body phase space decay for the Anti Double Hyper Hydrogen 4
+  Int_t amode42[6][3];
+  Float_t abratio42[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio42[kz] = 0.;
+    amode42[kz][0] = 0;
+    amode42[kz][1] = 0;
+    amode42[kz][2] = 0;
+  }
+  abratio42[0] = 50.;
+  amode42[0][0] = -1010020040; // anti-Hyper-Helium 4
+  amode42[0][1] = 211;         // positive pion
+
+  abratio42[1] = 50.;
+  amode42[1][0] = -1010010030; // anti-Hypertriton
+  amode42[1][1] = -2212;       // antiproton
+  amode42[1][2] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1020010040, abratio42, amode42);
+
+  // Define the decay for the 4Xi(-)He
+  Int_t mode4XiHe[6][3];
+  Float_t bratio4XiHe[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio4XiHe[kz] = 0.;
+    mode4XiHe[kz][0] = 0;
+    mode4XiHe[kz][1] = 0;
+    mode4XiHe[kz][2] = 0;
+  }
+  bratio4XiHe[0] = 33.;
+  mode4XiHe[0][0] = 1010020040; // HyperHelium4
+  mode4XiHe[0][1] = -211;       // negative pion
+
+  bratio4XiHe[1] = 33.;
+  mode4XiHe[1][0] = 3122;       // lambda
+  mode4XiHe[1][1] = 1000020030; // helium-3
+  mode4XiHe[1][2] = -211;       // negative pion
+
+  bratio4XiHe[2] = 33.;
+  mode4XiHe[2][0] = 1000030040; // lithium-4
+  mode4XiHe[2][1] = -211;       // negative pion
+  mode4XiHe[2][2] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1120020040, bratio4XiHe, mode4XiHe);
+
+  // Define the decay for the Anti-4Xi(-)He
+  Int_t amode4XiHe[6][3];
+  Float_t abratio4XiHe[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio4XiHe[kz] = 0.;
+    amode4XiHe[kz][0] = 0;
+    amode4XiHe[kz][1] = 0;
+    amode4XiHe[kz][2] = 0;
+  }
+  abratio4XiHe[0] = 33.;
+  amode4XiHe[0][0] = -1010020040; // antiHyperHelium-4
+  amode4XiHe[0][1] = 211;         // positive pion
+
+  abratio4XiHe[1] = 33.;
+  amode4XiHe[1][0] = -3122;       // antilambda
+  amode4XiHe[1][1] = -1000020030; // antihelium-3
+  amode4XiHe[1][2] = 211;         // positive pion
+
+  abratio4XiHe[2] = 33.;
+  amode4XiHe[2][0] = -1000030040; // antilithium-4
+  amode4XiHe[2][1] = 211;         // positive pion
+  amode4XiHe[2][2] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1120020040, abratio4XiHe, amode4XiHe);
+
+  // Define the decay for the 4Xi(-)H
+  Int_t mode4XiH[6][3];
+  Float_t bratio4XiH[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio4XiH[kz] = 0.;
+    mode4XiH[kz][0] = 0;
+    mode4XiH[kz][1] = 0;
+    mode4XiH[kz][2] = 0;
+  }
+  bratio4XiH[0] = 33.;
+  mode4XiH[0][0] = 1010010040; // HyperHydrogen4
+  mode4XiH[0][1] = -211;       // negative pion
+
+  bratio4XiH[1] = 33.;
+  mode4XiH[1][0] = 3122;       // lambda
+  mode4XiH[1][1] = 1000010030; // triton
+  mode4XiH[1][2] = -211;       // negative pion
+
+  bratio4XiH[2] = 33.;
+  mode4XiH[2][0] = 1000020040; // alpha
+  mode4XiH[2][1] = -211;       // negative pion
+  mode4XiH[2][2] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1120010040, bratio4XiH, mode4XiH);
+
+  // Define the decay for the Anti-4Xi(-)H
+  Int_t amode4XiH[6][3];
+  Float_t abratio4XiH[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio4XiH[kz] = 0.;
+    amode4XiH[kz][0] = 0;
+    amode4XiH[kz][1] = 0;
+    amode4XiH[kz][2] = 0;
+  }
+  abratio4XiH[0] = 33.;
+  amode4XiH[0][0] = -1010010040; // antiHyperHydrogen-4
+  amode4XiH[0][1] = 211;         // positive pion
+
+  abratio4XiH[1] = 33.;
+  amode4XiH[1][0] = -3122;       // antilambda
+  amode4XiH[1][1] = -1000010030; // antitriton
+  amode4XiH[1][2] = 211;         // positive pion
+
+  abratio4XiH[2] = 33.;
+  amode4XiH[2][0] = -1000020040; // antialpha
+  amode4XiH[2][1] = 211;         // positive pion
+  amode4XiH[2][2] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1120010040, abratio4XiH, amode4XiH);
+
+  // Define the 2- and 3-body phase space decay for the Hyper Helium 4 sigma
+  Int_t mode4s[6][3];
+  Float_t bratio4s[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio4s[kz] = 0.;
+    mode4s[kz][0] = 0;
+    mode4s[kz][1] = 0;
+    mode4s[kz][2] = 0;
+  }
+  bratio4s[0] = 20.;
+  mode4s[0][0] = 1000020040; // Helium4
+  mode4s[0][1] = 111;        // pion0
+  bratio4s[1] = 40.;
+  mode4s[1][0] = 1000010030; // tritium
+  mode4s[1][2] = 2212;       // proton
+  mode4s[1][1] = 111;        // pion0
+  bratio4s[2] = 40.;
+  mode4s[2][0] = 1000010030; // tritium
+  mode4s[2][2] = 211;        // pion+
+  mode4s[2][1] = 2112;       // neutron
+
+  TVirtualMC::GetMC()->SetDecayMode(1110020040, bratio4s, mode4s);
+
+  // Define the 2- and 3-body phase space decay for the Anti Hyper Helium 4 sigma
+  Int_t amode4s[6][3];
+  Float_t abratio4s[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio4s[kz] = 0.;
+    amode4s[kz][0] = 0;
+    amode4s[kz][1] = 0;
+    amode4s[kz][2] = 0;
+  }
+  abratio4s[0] = 20.;
+  amode4s[0][0] = -1000020040; // anti-Helium4
+  amode4s[0][1] = 111;         // pion0
+  abratio4s[1] = 40.;
+  amode4s[1][0] = -1000010030; // anti-tritium
+  amode4s[1][2] = -2212;       // anti-proton
+  amode4s[1][1] = 111;         // pion0
+  abratio4s[2] = 40.;
+  amode4s[2][0] = -1000010030; // anti-tritium
+  amode4s[2][2] = -211;        // pion-
+  amode4s[2][1] = -2112;       // anti-neutron
+
+  TVirtualMC::GetMC()->SetDecayMode(-1110020040, abratio4s, amode4s);
+
+  // Define the 2-body phase space decay for the Lambda-neutron boundstate
+  Int_t mode1[6][3];
+  Float_t bratio1[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio1[kz] = 0.;
+    mode1[kz][0] = 0;
+    mode1[kz][1] = 0;
+    mode1[kz][2] = 0;
+  }
+  bratio1[0] = 100.;
+  mode1[0][0] = 1000010020; // deuteron
+  mode1[0][1] = -211;       // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1010000020, bratio1, mode1);
+
+  // Define the 2-body phase space decay for the Anti-Lambda-neutron boundstate
+  Int_t amode1[6][3];
+  Float_t abratio1[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio1[kz] = 0.;
+    amode1[kz][0] = 0;
+    amode1[kz][1] = 0;
+    amode1[kz][2] = 0;
+  }
+  abratio1[0] = 100.;
+  amode1[0][0] = -1000010020; // anti-deuteron
+  amode1[0][1] = 211;         // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010000020, abratio1, amode1);
+
+  // Define the 2-body phase space decay for the H-Dibaryon
+  Int_t mode2[6][3];
+  Float_t bratio2[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio2[kz] = 0.;
+    mode2[kz][0] = 0;
+    mode2[kz][1] = 0;
+    mode2[kz][2] = 0;
+  }
+  bratio2[0] = 100.;
+  mode2[0][0] = 3122; // Lambda
+  mode2[0][1] = 2212; // proton
+  mode2[0][2] = -211; // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1020000020, bratio2, mode2);
+
+  // Define the 2-body phase space decay for the Anti-H-Dibaryon
+  Int_t amode2[6][3];
+  Float_t abratio2[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio2[kz] = 0.;
+    amode2[kz][0] = 0;
+    amode2[kz][1] = 0;
+    amode2[kz][2] = 0;
+  }
+  abratio2[0] = 100.;
+  amode2[0][0] = -3122; // anti-deuteron
+  amode2[0][1] = -2212; // anti-proton
+  amode2[0][2] = 211;   // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1020000020, abratio2, amode2);
+
+  // Define the 2-body phase space decay for the Xi0P
+  Int_t mode5[6][3];
+  Float_t bratio5[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio5[kz] = 0.;
+    mode5[kz][0] = 0;
+    mode5[kz][1] = 0;
+    mode5[kz][2] = 0;
+  }
+  bratio5[0] = 100.;
+  mode5[0][0] = 3122; // Lambda
+  mode5[0][1] = 2212; // proton
+
+  TVirtualMC::GetMC()->SetDecayMode(1020010020, bratio5, mode5);
+
+  // Define the 2-body phase space decay for the Anti-Xi0P
+  Int_t amode5[6][3];
+  Float_t abratio5[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio5[kz] = 0.;
+    amode5[kz][0] = 0;
+    amode5[kz][1] = 0;
+    amode5[kz][2] = 0;
+  }
+  abratio5[0] = 100.;
+  amode5[0][0] = -3122; // anti-Lambda
+  amode5[0][1] = -2212; // anti-proton
+
+  TVirtualMC::GetMC()->SetDecayMode(-1020010020, abratio5, amode5);
+
+  // Define the 2-body phase space decay for the Lambda-Neutron-Neutron
+  Int_t mode6[6][3];
+  Float_t bratio6[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio6[kz] = 0.;
+    mode6[kz][0] = 0;
+    mode6[kz][1] = 0;
+    mode6[kz][2] = 0;
+  }
+  bratio6[0] = 100.;
+  mode6[0][0] = 1000010030; // triton
+  mode6[0][1] = -211;       // pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1010000030, bratio6, mode6);
+
+  // Define the 2-body phase space decay for the Anti-Lambda-Neutron-Neutron
+  Int_t amode6[6][3];
+  Float_t abratio6[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio6[kz] = 0.;
+    amode6[kz][0] = 0;
+    amode6[kz][1] = 0;
+    amode6[kz][2] = 0;
+  }
+  abratio6[0] = 100.;
+  amode6[0][0] = -1000010030; // anti-triton
+  amode6[0][1] = 211;         // pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010000030, abratio6, amode6);
+
+  // Define the 3-body phase space decay for the Omega-Proton
+  Int_t mode7[6][3];
+  Float_t bratio7[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio7[kz] = 0.;
+    mode7[kz][0] = 0;
+    mode7[kz][1] = 0;
+    mode7[kz][2] = 0;
+  }
+  bratio7[0] = 100.;
+  mode7[0][0] = 3122; // Lambda
+  mode7[0][1] = -321; // negative Kaon
+  mode7[0][2] = 2212; // proton
+
+  TVirtualMC::GetMC()->SetDecayMode(1030000020, bratio7, mode7);
+
+  // Define the 3-body phase space decay for the Anti-Omega-Proton
+  Int_t amode7[6][3];
+  Float_t abratio7[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio7[kz] = 0.;
+    amode7[kz][0] = 0;
+    amode7[kz][1] = 0;
+    amode7[kz][2] = 0;
+  }
+  abratio7[0] = 100.;
+  amode7[0][0] = -3122; // anti-Lambda
+  amode7[0][1] = 321;   // positive kaon
+  amode7[0][2] = -2212; // anti-proton
+
+  TVirtualMC::GetMC()->SetDecayMode(-1030000020, abratio7, amode7);
+
+  // Define the 2-body phase space decay for the Omega-Neutron
+  Int_t mode8[6][3];
+  Float_t bratio8[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio8[kz] = 0.;
+    mode8[kz][0] = 0;
+    mode8[kz][1] = 0;
+    mode8[kz][2] = 0;
+  }
+  bratio8[0] = 100.;
+  mode8[0][0] = 3122; // Lambda
+  mode8[0][1] = 3312; // negative Xi
+
+  TVirtualMC::GetMC()->SetDecayMode(1030010020, bratio8, mode8);
+
+  // Define the 2-body phase space decay for the Anti-Omega-Neutron
+  Int_t amode8[6][3];
+  Float_t abratio8[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio8[kz] = 0.;
+    amode8[kz][0] = 0;
+    amode8[kz][1] = 0;
+    amode8[kz][2] = 0;
+  }
+  abratio8[0] = 100.;
+  amode8[0][0] = -3122; // anti-Lambda
+  amode8[0][1] = -3312; // positive Xi
+
+  TVirtualMC::GetMC()->SetDecayMode(-1030010020, abratio8, amode8);
+
+  // Define the 3-body phase space decay for the Omega-Omega
+  // Assuming that one of the Omegas decays freely inside the nucleus
+  Int_t mode9[6][3];
+  Float_t bratio9[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio9[kz] = 0.;
+    mode9[kz][0] = 0;
+    mode9[kz][1] = 0;
+    mode9[kz][2] = 0;
+  }
+  bratio9[0] = 68.;
+  mode9[0][0] = 3334; // negative Omega
+  mode9[0][1] = 3122; // Lambda
+  mode9[0][2] = -321; // negative Kaon
+  bratio9[1] = 24;
+  mode9[1][0] = 3334; // negative Omega
+  mode9[1][1] = 3322; // neutral Xi
+  mode9[1][2] = -211; // negative pion
+  bratio9[2] = 8.;
+  mode9[2][0] = 3334; // negative Omega
+  mode9[2][1] = 3312; // negative Xi
+  mode9[2][2] = 111;  // neutral pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1060020020, bratio9, mode9);
+
+  // Define the 3-body phase space decay for the Anti-Omega-Omega
+  Int_t amode9[6][3];
+  Float_t abratio9[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio9[kz] = 0.;
+    amode9[kz][0] = 0;
+    amode9[kz][1] = 0;
+    amode9[kz][2] = 0;
+  }
+  abratio9[0] = 68.;
+  amode9[0][0] = -3334; // positive Omega
+  amode9[0][1] = -3122; // anti-Lambda
+  amode9[0][2] = 321;   // positive Kaon
+  abratio9[1] = 24.;
+  amode9[1][0] = -3334; // positive Omega
+  amode9[1][1] = -3322; // anti-neutral Xi
+  amode9[1][2] = 211;   // positive pion
+  abratio9[2] = 8.;
+  amode9[2][0] = -3334; // positive Omega
+  amode9[2][1] = -3312; // positive Xi
+  amode9[2][2] = 111;   // neutral pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1060020020, abratio9, amode9);
+
+  // Define the 2- and 3-body phase space decay for the Lambda(1405)-Proton
+  Int_t mode10[6][3];
+  Float_t bratio10[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio10[kz] = 0.;
+    mode10[kz][0] = 0;
+    mode10[kz][1] = 0;
+    mode10[kz][2] = 0;
+  }
+  bratio10[0] = 50.;
+  mode10[0][0] = 3122; // Lambda
+  mode10[0][1] = 2212; // proton
+  bratio10[1] = 50.;
+  mode10[1][0] = 2212; // proton
+  mode10[1][1] = -321; // negative kaon
+  mode10[1][2] = 2212; // proton
+
+  TVirtualMC::GetMC()->SetDecayMode(1010010021, bratio10, mode10);
+
+  // Define the 2- and 3-body phase space decay for the Anti-Lambda(1405)-Proton
+  Int_t amode10[6][3];
+  Float_t abratio10[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio10[kz] = 0.;
+    amode10[kz][0] = 0;
+    amode10[kz][1] = 0;
+    amode10[kz][2] = 0;
+  }
+  abratio10[0] = 50.;
+  amode10[0][0] = -3122; // anti-Lambda
+  amode10[0][1] = -2212; // anti-proton
+  abratio10[1] = 50.;
+  amode10[1][0] = -2212; // anti-proton
+  amode10[1][1] = 321;   // positive kaon
+  amode10[1][2] = -2212; // anti-proton
+
+  TVirtualMC::GetMC()->SetDecayMode(-1010010021, abratio10, amode10);
+
+  // Define the 3-body phase space decay for the Lambda(1405)-Lambda(1405)
+  Int_t mode11[6][3];
+  Float_t bratio11[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio11[kz] = 0.;
+    mode11[kz][0] = 0;
+    mode11[kz][1] = 0;
+    mode11[kz][2] = 0;
+  }
+  bratio11[0] = 50.;
+  mode11[0][0] = 3122; // Lambda
+  mode11[0][1] = 3122; // Lambda
+  bratio11[1] = 50.;
+  mode11[1][0] = 3122; // Lambda
+  mode11[1][1] = 2212; // proton
+  mode11[1][2] = -211; // negative pion
+
+  TVirtualMC::GetMC()->SetDecayMode(1020000021, bratio11, mode11);
+
+  // Define the 3-body phase space decay for the Anti-Lambda(1405)-Lambda(1405)
+  Int_t amode11[6][3];
+  Float_t abratio11[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio11[kz] = 0.;
+    amode11[kz][0] = 0;
+    amode11[kz][1] = 0;
+    amode11[kz][2] = 0;
+  }
+  abratio11[0] = 50.;
+  amode11[0][0] = -3122; // anti-Lambda
+  amode11[0][1] = -3122; // anti-Lambda
+  abratio11[1] = 50.;
+  amode11[1][0] = -3122; // anti-Lambda
+  amode11[1][1] = -2212; // anti-proton
+  amode11[1][2] = 211;   // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-1020000021, abratio11, amode11);
+
+  // Define the decays for the c-triton
+  Int_t ctmode[6][3];
+  Float_t ctbratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    ctbratio[kz] = 0.;
+    ctmode[kz][0] = 0;
+    ctmode[kz][1] = 0;
+    ctmode[kz][2] = 0;
+  }
+  ctbratio[0] = 50.;
+  ctmode[0][0] = 1000020030; // Helium3
+  ctmode[0][1] = 310;        // K0s
+
+  ctbratio[1] = 50.;
+  ctmode[1][0] = 1000020030; // Helium3
+  ctmode[1][1] = -321;       // negative kaon
+  ctmode[1][2] = 211;        // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(2010010030, ctbratio, ctmode);
+
+  // Define the decays for the anti-c-triton
+  Int_t actmode[6][3];
+  Float_t actbratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    actbratio[kz] = 0.;
+    actmode[kz][0] = 0;
+    actmode[kz][1] = 0;
+    actmode[kz][2] = 0;
+  }
+  actbratio[0] = 50.;
+  actmode[0][0] = -1000020030; // Helium3
+  actmode[0][1] = 310;         // K0s
+
+  actbratio[1] = 50.;
+  actmode[1][0] = -1000020030; // Helium3
+  actmode[1][1] = 321;         // negative kaon
+  actmode[1][2] = -211;        // positive pion
+
+  TVirtualMC::GetMC()->SetDecayMode(-2010010030, actbratio, actmode);
+
+  // Define the decays for the c-deuteron
+  Int_t cdmode[6][3];
+  Float_t cdbratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    cdbratio[kz] = 0.;
+    cdmode[kz][0] = 0;
+    cdmode[kz][1] = 0;
+    cdmode[kz][2] = 0;
+  }
+  cdbratio[0] = 50.;
+  cdmode[0][0] = 1000010020; // deuteron
+  cdmode[0][1] = -321;       // negative kaon
+  cdmode[0][2] = 211;        // positive pion
+
+  cdbratio[1] = 50.;
+  cdmode[1][0] = 1000010020; // deuteron
+  cdmode[1][1] = 310;        // K0s
+
+  TVirtualMC::GetMC()->SetDecayMode(2010010020, cdbratio, cdmode);
+
+  // Define the decays for the anti-c-deuteron
+  Int_t acdmode[6][3];
+  Float_t acdbratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    acdbratio[kz] = 0.;
+    acdmode[kz][0] = 0;
+    acdmode[kz][1] = 0;
+    acdmode[kz][2] = 0;
+  }
+  acdbratio[0] = 50.;
+  acdmode[0][0] = -1000010020; // deuteron
+  acdmode[0][1] = 321;         // negative kaon
+  acdmode[0][2] = -211;        // positive pion
+
+  acdbratio[1] = 50.;
+  acdmode[1][0] = -1000010020; // deuteron
+  acdmode[1][1] = 310;         // K0s
+
+  TVirtualMC::GetMC()->SetDecayMode(-2010010020, acdbratio, acdmode);
+
+  ///////////////////////////////////////////////////////////////////
+
+  // Define the 2-body phase space decay for the f0(980)
+  //  Int_t mode[6][3];
+  //  Float_t bratio[6];
+
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio[kz] = 0.;
+    mode[kz][0] = 0;
+    mode[kz][1] = 0;
+    mode[kz][2] = 0;
+  }
+  bratio[0] = 100.;
+  mode[0][0] = 211;  // pion
+  mode[0][1] = -211; // pion
+
+  TVirtualMC::GetMC()->SetDecayMode(9010221, bratio, mode);
+
+  // Define the 2-body phase space decay for the f2(1270)
+
+  // for (Int_t kz = 0; kz < 6; kz++) {
+  //   bratio[kz] = 0.;
+  //   mode[kz][0] = 0;
+  //   mode[kz][1] = 0;
+  //   mode[kz][2] = 0;
+  // }
+  // bratio[0] = 100.;
+  // mode[0][0] = 211;  // pion
+  // mode[0][1] = -211; // pion
+
+  // TVirtualMC::GetMC()->SetDecayMode(225, bratio, mode);
+
+  // Define the 2-body phase space decay for the resonances: f0(1500), f2(1525), f0(1710), f0(1370), a2(1320), f2(1270)
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio[kz] = 0.;
+    mode[kz][0] = 0;
+    mode[kz][1] = 0;
+    mode[kz][2] = 0;
+  }
+  bratio[0] = 100.;
+  mode[0][0] = 310; // K0s
+  mode[0][1] = 310; // K0s
+
+  TVirtualMC::GetMC()->SetDecayMode(9030221, bratio, mode); // f0(1500)
+  TVirtualMC::GetMC()->SetDecayMode(335, bratio, mode);     // f2(1525)
+  TVirtualMC::GetMC()->SetDecayMode(10331, bratio, mode);   // f0(1710)
+  TVirtualMC::GetMC()->SetDecayMode(10221, bratio, mode);   // f0(1370)
+  TVirtualMC::GetMC()->SetDecayMode(115, bratio, mode);     // a2(1320)
+  TVirtualMC::GetMC()->SetDecayMode(225, bratio, mode);     // f2(1270)
+
+  // Define the 3-body phase space decay for the resonances: f1(1285), f1(1420)
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio[kz] = 0.;
+    mode[kz][0] = 0;
+    mode[kz][1] = 0;
+    mode[kz][2] = 0;
+  }
+
+  bratio2[0] = 50.;
+  mode[0][0] = 310;  // K0s
+  mode[0][1] = -321; // anti-K
+  mode[0][2] = 211;  // pion+
+
+  bratio2[1] = 50.;
+  mode[1][0] = 310;  // K0s
+  mode[1][1] = 321;  // K
+  mode[1][2] = -211; // pion-
+
+  TVirtualMC::GetMC()->SetDecayMode(20223, bratio2, mode); // f1(1285)
+  TVirtualMC::GetMC()->SetDecayMode(20333, bratio2, mode); // f1(1420)
+
+  // Define the decay modes for the Lambda(1405)
+  for (Int_t kz = 0; kz < 6; kz++) {
+    bratio[kz] = 0.;
+    mode[kz][0] = 0;
+    mode[kz][1] = 0;
+    mode[kz][2] = 0;
+  }
+  // 33.3 % sigma-pi+, sigma+pi-, sigma0pi0
+  bratio[0] = 33.3;
+  mode[0][0] = 3112; // Sigma-
+  mode[0][1] = 211;  // negative pion
+  bratio[1] = 33.3;
+  mode[1][0] = 3222; // Sigma+
+  mode[1][1] = -211; // positive pion
+  bratio[2] = 33.3;
+  mode[2][0] = 3212;                                       // Sigma0
+  mode[2][1] = 111;                                        // neutral pion
+  TVirtualMC::GetMC()->SetDecayMode(102132, bratio, mode); // Lambda(1405)
+  // Define the decay modes for the Anti-Lambda(1405)
+  for (Int_t kz = 0; kz < 6; kz++) {
+    abratio[kz] = 0.;
+    amode[kz][0] = 0;
+    amode[kz][1] = 0;
+    amode[kz][2] = 0;
+  }
+  // 33.3 % sigma-pi-, sigma-pi+, sigma0pi0
+  abratio[0] = 33.3;
+  amode[0][0] = -3112; // AntiSigma-
+  amode[0][1] = -211;  // positive pion
+  abratio[1] = 33.3;
+  amode[1][0] = -3222; // AntiSigma+
+  amode[1][1] = 211;   // negative pion
+  abratio[2] = 33.3;
+  amode[2][0] = -3212;                                        // Sigma0
+  amode[2][1] = 111;                                          // negative pion
+  TVirtualMC::GetMC()->SetDecayMode(-102132, abratio, amode); // Anti-Lambda(1405)
+
+  // Lambda1520/Lambda1520bar
+
+  TVirtualMC::GetMC()->DefineParticle(102134, "Lambda1520", kPTNeutron, 1.5195, 0.0, 4.22e-23, "Hadron", 0.0156, 3, -1, 0, 0, 0, 0, 0, 1, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-102134, "Lambda1520bar", kPTNeutron, 1.5195, 0.0, 4.22e-23, "Hadron", 0.0156, 3, -1, 0, 0, 0, 0, 0, -1, kTRUE);
+
+  // Lambda1520 decay modes
+  Int_t lmode[9][3];
+  Float_t lbratio[9];
+  for (Int_t kz = 0; kz < 9; kz++) {
+    lbratio[kz] = 0.;
+    lmode[kz][0] = 0;
+    lmode[kz][1] = 0;
+    lmode[kz][2] = 0;
+  }
+
+  // L(1520) -> p K-
+  lbratio[0] = 0.229944;
+  lmode[0][0] = 2212;
+  lmode[0][1] = -321;
+
+  // L(1520) -> n K0
+  lbratio[1] = 0.229944;
+  lmode[1][0] = 2112;
+  lmode[1][1] = -311;
+
+  // L(1520) -> Sigma+ pi-
+  lbratio[2] = 0.143076;
+  lmode[2][0] = 3222;
+  lmode[2][1] = -211;
+
+  // L(1520) -> Sigma0 pi0
+  lbratio[3] = 0.143076;
+  lmode[3][0] = 3212;
+  lmode[3][1] = 111;
+
+  // L(1520) -> Sigma- pi+
+  lbratio[4] = 0.143076;
+  lmode[4][0] = 3112;
+  lmode[4][1] = 211;
+
+  // L(1520) -> Sigma*- pi+
+  lbratio[5] = 0.034066;
+  lmode[5][0] = 3114;
+  lmode[5][1] = 211;
+
+  // L(1520) -> Sigma*0 pi0
+  lbratio[6] = 0.034066;
+  lmode[6][0] = 3214;
+  lmode[6][1] = 111;
+
+  // L(1520) -> Sigma*+ pi-
+  lbratio[7] = 0.034066;
+  lmode[7][0] = 3224;
+  lmode[7][1] = -211;
+
+  // L(1520) -> Lambda gamma
+  lbratio[8] = 0.008687;
+  lmode[8][0] = 3122;
+  lmode[8][1] = 22;
+
+  TVirtualMC::GetMC()->SetDecayMode(102134, lbratio, lmode);
+
+  // Lambda1520bar decay modes
+
+  // L(1520)bar -> p- K+
+  lbratio[0] = 0.229944;
+  lmode[0][0] = -2212;
+  lmode[0][1] = 321;
+
+  // L(1520)bar -> nbar K0bar
+  lbratio[1] = 0.229944;
+  lmode[1][0] = -2112;
+  lmode[1][1] = 311;
+
+  // L(1520)bar -> Sigmabar- pi+
+  lbratio[2] = 0.143076;
+  lmode[2][0] = -3222;
+  lmode[2][1] = 211;
+
+  // L(1520)bar -> Sigma0bar pi0
+  lbratio[3] = 0.143076;
+  lmode[3][0] = -3212;
+  lmode[3][1] = 111;
+
+  // L(1520)bar -> Sigmabar+ pi-
+  lbratio[4] = 0.143076;
+  lmode[4][0] = -3112;
+  lmode[4][1] = -211;
+
+  // L(1520)bar -> anti-Sigma*- pi-
+  lbratio[5] = 0.034066;
+  lmode[5][0] = -3114;
+  lmode[5][1] = -211;
+
+  // L(1520)bar -> anti-Sigma*0 pi0
+  lbratio[6] = 0.034066;
+  lmode[6][0] = -3214;
+  lmode[6][1] = 111;
+
+  // L(1520)bar -> anti-Sigma*+ pi+
+  lbratio[7] = 0.034066;
+  lmode[7][0] = -3224;
+  lmode[7][1] = 211;
+
+  // L(1520)bar -> Anti-Lambda gamma
+  lbratio[8] = 0.008687;
+  lmode[8][0] = -3122;
+  lmode[8][1] = 22;
+
+  TVirtualMC::GetMC()->SetDecayMode(-102134, lbratio, lmode);
+
+  // --------------------------------------------------------------------
+
+  //Sexaquark (uuddss): compact, neutral and stable hypothetical bound state (arxiv.org/abs/1708.08951)
+  TVirtualMC::GetMC()->DefineParticle(900000020, "Sexaquark", kPTUndefined, 2.0, 0.0, 4.35e+17, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, 2, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-900000020, "AntiSexaquark", kPTUndefined, 2.0, 0.0, 4.35e+17, "Hadron", 0.0, 0, 1, 0, 0, 0, 0, 0, -2, kTRUE);
+
+  // BSM Monopoles, defined only when their physics is enabled (G4.monopole=1), so that a
+  // monopole primary without it is reported by the engine instead of crossing the detector unseen.
+  // The transported mass has to match the one the generator used; see
+  // G4Params.monopoleMass and o2::sim::MonopoleMassDefaultGeV.
+  // To-do: find a way to define multiple masses for monopoles species
+  if (!o2::conf::G4Params::Instance().monopole) {
+    return;
+  }
+  const double monopoleMass = o2::conf::G4Params::Instance().monopoleMass;
+  if (!(monopoleMass > 0.)) {
+    LOG(fatal) << "G4.monopoleMass must be positive, got " << monopoleMass;
+  }
+  // kPTUndefined: Geant4-VMC attaches no process to them (a kPTHadron would get hIoni and hmsc);
+  // their ionisation and transport are attached by O2MonopolePhysics
+  // Symmetric monopoles: same electric and magnetic charge
+  TVirtualMC::GetMC()->DefineParticle(4110000, "Monopole_symm", kPTUndefined, monopoleMass, 0.0, 1e10, "BSM", 0.0, 0, 0, 0, 0, 0, 0, 0, 0, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-4110000, "AntiMonopole_symm", kPTUndefined, monopoleMass, 0.0, 1e10, "BSM", 0.0, 0, 0, 0, 0, 0, 0, 0, 0, kTRUE);
+  // Asymmetric monopoles: opposite electric and magnetic charge
+  TVirtualMC::GetMC()->DefineParticle(4120000, "Monopole_asymm", kPTUndefined, monopoleMass, 0.0, 1e10, "BSM", 0.0, 0, 0, 0, 0, 0, 0, 0, 0, kTRUE);
+  TVirtualMC::GetMC()->DefineParticle(-4120000, "AntiMonopole_asymm", kPTUndefined, monopoleMass, 0.0, 1e10, "BSM", 0.0, 0, 0, 0, 0, 0, 0, 0, 0, kTRUE);
+}
+
+void O2MCApplicationBase::AddParticles()
+{
+  // dispatch first to function in FairRoot
+  FairMCApplication::AddParticles();
+
+  // register special particles for ALICE
+  // TODO: try to make use of FairRoot if easier or more customizable
+  addSpecialParticles();
+
+  auto& param = o2::conf::SimUserDecay::Instance();
+  LOG(info) << "Printing \'SimUserDecay\' parameters";
+  LOG(info) << param;
+
+  // check if there are PDG codes requested for user decay
+  if (param.pdglist.empty()) {
+    return;
+  }
+
+  // loop over PDG codes in the string
+  std::stringstream ss(param.pdglist);
+  int pdg;
+  while (ss >> pdg) {
+    LOG(info) << "Setting user decay for PDG " << pdg;
+    TVirtualMC::GetMC()->SetUserDecay(pdg);
+  }
+}
+
+void O2MCApplicationBase::initTrackRefHook()
+{
+  if (mCutParams.stepTrackRefHook) {
+    LOG(info) << "Initializing the hook for TrackReferences during stepping";
+    auto expandedTrackRefHookFileName = o2::utils::expandShellVarsInFileName(mCutParams.stepTrackRefHookFile);
+    if (std::filesystem::exists(expandedTrackRefHookFileName)) {
+      // if this file exists we will compile the hook on the fly
+      mTrackRefFcn = o2::conf::GetFromMacro<TrackRefFcn>(mCutParams.stepTrackRefHookFile, "trackRefHook()", "o2::steer::O2MCApplicationBase::TrackRefFcn", "o2mc_stepping_trackref_hook");
+      LOG(info) << "Hook initialized from file " << expandedTrackRefHookFileName;
+    } else {
+      LOG(error) << "Did not file TrackRefHook file " << expandedTrackRefHookFileName << " ; Will not execute hook";
+      mTrackRefFcn = [](TVirtualMC const*) {}; // do nothing
+    }
+  }
+}
+
+void O2MCApplication::initLate()
+{
+  o2::utils::ShmManager::Instance().occupySegment();
+  for (auto det : listActiveDetectors) {
+    if (dynamic_cast<o2::base::Detector*>(det)) {
+      ((o2::base::Detector*)det)->initializeLate();
+    }
+  }
+}
+
+void O2MCApplication::attachSubEventInfo(fair::mq::Parts& parts, o2::data::SubEventInfo const& info) const
+{
+  // parts.AddPart(std::move(mSimDataChannel->NewSimpleMessage(info)));
+  o2::base::attachTMessage(info, *mSimDataChannel, parts);
+}
+
+// helper function to fetch data from FairRootManager branch and serialize it
+// returns handle to container
+template <typename T>
+const T* attachBranch(std::string const& name, fair::mq::Channel& channel, fair::mq::Parts& parts)
+{
+  auto mgr = FairRootManager::Instance();
+  // check if branch is present
+  if (mgr->GetBranchId(name) == -1) {
+    LOG(error) << "Branch " << name << " not found";
+    return nullptr;
+  }
+  auto data = mgr->InitObjectAs<const T*>(name.c_str());
+  if (data) {
+    o2::base::attachTMessage(*data, channel, parts);
+  }
+  return data;
+}
+
+void O2MCApplication::setSubEventInfo(o2::data::SubEventInfo* i)
+{
+  mSubEventInfo = i;
+  // being communicated a SubEventInfo also means we get a FairMCEventHeader
+  fMCEventHeader = &mSubEventInfo->mMCEventHeader;
+}
+
+void O2MCApplication::SendData()
+{
+  fair::mq::Parts simdataparts;
+
+  // fill these parts ... the receiver has to unpack similary
+  // TODO: actually we could just loop over branches in FairRootManager at this moment?
+  mSubEventInfo->npersistenttracks = static_cast<o2::data::Stack*>(GetStack())->getMCTracks()->size();
+  mSubEventInfo->nprimarytracks = static_cast<o2::data::Stack*>(GetStack())->GetNprimary();
+  attachSubEventInfo(simdataparts, *mSubEventInfo);
+  auto tracks = attachBranch<std::vector<o2::MCTrack>>("MCTrack", *mSimDataChannel, simdataparts);
+  attachBranch<std::vector<o2::TrackReference>>("TrackRefs", *mSimDataChannel, simdataparts);
+  assert(tracks->size() == mSubEventInfo->npersistenttracks);
+
+  for (auto det : listActiveDetectors) {
+    if (dynamic_cast<o2::base::Detector*>(det)) {
+      ((o2::base::Detector*)det)->attachHits(*mSimDataChannel, simdataparts);
+    }
+  }
+  LOG(info) << "sending message with " << simdataparts.Size() << " parts";
+  mSimDataChannel->Send(simdataparts);
+}
+} // namespace steer
+} // namespace o2

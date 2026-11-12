@@ -1,0 +1,98 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/*
+ * O2MCApplicationBase.h
+ *
+ *  Created on: Feb 13, 2019
+ *      Author: swenzel
+ */
+
+#ifndef STEER_INCLUDE_STEER_O2MCAPPLICATIONBASE_H_
+#define STEER_INCLUDE_STEER_O2MCAPPLICATIONBASE_H_
+
+#include <FairMCApplication.h>
+#include "Rtypes.h" // for Int_t, Bool_t, Double_t, etc
+#include <TVirtualMC.h>
+#include "SimConfig/SimParams.h"
+
+namespace o2
+{
+namespace steer
+{
+
+// O2 specific changes/overrides to FairMCApplication
+// Here in particular for custom adjustments to stepping logic
+// and tracking limits
+class O2MCApplicationBase : public FairMCApplication
+{
+ public:
+  O2MCApplicationBase() : FairMCApplication(), mCutParams(o2::conf::SimCutParams::Instance())
+  {
+    initStepFilterHook();
+    initTrackRefHook();
+  }
+  O2MCApplicationBase(const char* name, const char* title, TObjArray* ModList, const char* MatName) : FairMCApplication(name, title, ModList, MatName), mCutParams(o2::conf::SimCutParams::Instance())
+  {
+    initStepFilterHook();
+    initTrackRefHook();
+  }
+
+  ~O2MCApplicationBase() override = default;
+
+  void Stepping() override;
+  void PreTrack() override;
+  void BeginEvent() override;
+  void FinishEvent() override;
+  void ConstructGeometry() override;
+  void InitGeometry() override;
+  bool MisalignGeometry() override;
+  void AddParticles() override;
+
+  // specific implementation of our hard geometry limits
+  double TrackingRmax() const override { return mCutParams.maxRTracking; }
+  double TrackingZmax() const override { return mCutParams.maxAbsZTracking; }
+
+  typedef std::function<void(TVirtualMC const*)> TrackRefFcn;
+  typedef std::function<bool(TVirtualMC const*)> KeepStepFcn;
+
+  void fixTGeoRuntimeShapes();
+
+ protected:
+  o2::conf::SimCutParams const& mCutParams; // reference to parameter system
+  unsigned long long mStepCounter{0};
+  std::map<int, std::string> mModIdToName{};      // mapping of module id to name
+  std::map<int, std::string> mSensitiveVolumes{}; // collection of all sensitive volumes with
+                                                  // keeping track of volumeIds and volume names
+
+  double mLongestTrackTime = 0;
+  bool mTrackSeedWarned{false}; // whether we already complained that seeding never fired
+
+  /// whether this engine needs per-track seeding in PreTrack (Geant3 seeds at
+  /// stack-pop time instead, see O2MCApplicationBase::seedsInPreTrack)
+  bool seedsInPreTrack() const;
+  /// some common parts of finishEvent
+  void finishEventCommon();
+  TrackRefFcn mTrackRefFcn; // a function hook that gets (optionally) called during Stepping
+  void initTrackRefHook();
+  /// an optional extra per-step criterion, loaded from
+  /// SimCutParams.stepFilteringMacro; only consulted if mHasStepFilterMacro
+  KeepStepFcn mKeepStepFcn;
+  bool mHasStepFilterMacro = false;
+  void initStepFilterHook();
+
+  ClassDefOverride(O2MCApplicationBase, 1);
+};
+
+} // end namespace steer
+} // end namespace o2
+
+#endif /* STEER_INCLUDE_STEER_O2MCAPPLICATIONBASE_H_ */
