@@ -1,5 +1,4 @@
 // @ts-check
-import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
@@ -8,8 +7,6 @@ import baseLinks from './scripts/base-links.mjs';
 import nowrapCode from './scripts/nowrap-code.mjs';
 import fairrootData from './scripts/integration.mjs';
 import { site, base, repoUrl, branch } from './scripts/site.mjs';
-
-const codeTheme = JSON.parse(readFileSync(new URL('./src/styles/code-theme.json', import.meta.url), 'utf8'));
 
 export default defineConfig({
   site,
@@ -43,35 +40,6 @@ export default defineConfig({
         PageSidebar: './src/components/overrides/PageSidebar.astro',
         Hero: './src/components/overrides/Hero.astro',
         MobileMenuFooter: './src/components/overrides/MobileMenuFooter.astro',
-      },
-      expressiveCode: {
-        themes: [codeTheme],
-        useStarlightDarkModeSwitch: false,
-        useStarlightUiThemeColors: false,
-        styleOverrides: {
-          borderRadius: '6px',
-          borderColor: 'var(--fr-code-rule)',
-          codeBackground: 'var(--fr-code-bg)',
-          codeFontFamily: 'var(--fr-font-mono)',
-          codeFontSize: '0.84rem',
-          codeLineHeight: '1.65',
-          uiFontFamily: 'var(--fr-font-body)',
-          frames: {
-            editorBackground: 'var(--fr-code-bg)',
-            editorTabBarBackground: 'var(--fr-code-bg)',
-            editorActiveTabBackground: 'var(--fr-code-bg)',
-            editorActiveTabIndicatorTopColor: 'transparent',
-            editorActiveTabIndicatorBottomColor: 'var(--fr-saffron)',
-            editorTabBarBorderBottomColor: 'var(--fr-code-rule)',
-            terminalBackground: 'var(--fr-code-bg)',
-            terminalTitlebarBackground: 'var(--fr-code-bg)',
-            terminalTitlebarBorderBottomColor: 'var(--fr-code-rule)',
-            terminalTitlebarDotsForeground: 'var(--fr-stage-line)',
-            terminalTitlebarDotsOpacity: '1',
-            frameBoxShadowCssValue: 'none',
-            inlineButtonBorder: 'var(--fr-code-rule)',
-          },
-        },
       },
       sidebar: [
         { label: 'Start', items: [{ autogenerate: { directory: 'start' } }] },

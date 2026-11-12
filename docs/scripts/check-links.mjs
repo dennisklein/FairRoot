@@ -41,7 +41,9 @@ for (const { file, url } of links) {
   const from = '/' + path.relative(dist, file);
   let [target, hash] = url.split('#');
   if (!target) {
-    if (hash && !ids.get(file).has(hash)) bad.push(`${from}: missing anchor #${hash}`);
+    // A line range (#L10-L20) on the same page needs its first line.
+    const own = /^L\d+-L\d+$/.test(hash ?? '') ? hash.split('-')[0] : hash;
+    if (hash && !ids.get(file).has(own)) bad.push(`${from}: missing anchor #${hash}`);
     continue;
   }
   if (!target.startsWith('/')) {

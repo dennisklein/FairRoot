@@ -5,7 +5,7 @@ import { Code } from '@astrojs/starlight/components';
 import { getCollection } from 'astro:content';
 import { build } from 'virtual:fairroot/data';
 import { model, guidesForFile } from '../../lib/model.mjs';
-import { issues, SEVERITIES, CATEGORIES, issueUrl, codeLink, foundLink, where, areaOf } from '../../lib/issues.mjs';
+import { issues, CATEGORIES, issueUrl, codeLink, foundLink, where, areaOf } from '../../lib/issues.mjs';
 import { base } from '../../lib/model.mjs';
 import '../../styles/issues.css';
 
@@ -17,7 +17,6 @@ const { n } = Astro.props as { n: number };
 const i = issues[n];
 const prev = issues[n - 1];
 const next = issues[n + 1];
-const sev = SEVERITIES.find((s) => s.id === i.severity)!;
 const sameFile = issues.filter((x: any) => x.file === i.file && x.id !== i.id);
 const docs = await getCollection('docs');
 const guides = guidesForFile(docs, i.file);
@@ -25,7 +24,6 @@ const types = (model().files.get(i.file)?.defines ?? []).filter((c: any) => c.pu
 const lang = /\.(h|cxx|C|c|cpp|cc)$/.test(i.file) ? 'cpp' : /CMakeLists\.txt$|\.cmake$/.test(i.file) ? 'cmake' : /\.sh(\.in)?$/.test(i.file) ? 'sh' : 'text';
 const ex = i.excerpt;
 const mark = ex && i.line ? `${i.line - ex.start + 1}-${(i.lineEnd ?? i.line) - ex.start + 1}` : undefined;
-const exEnd = ex ? ex.start + ex.code.split('\n').length - 1 : 0;
 ---
 
 <StarlightPage
@@ -37,8 +35,8 @@ const exEnd = ex ? ex.start + ex.code.split('\n').length - 1 : 0;
     tableOfContents: false,
     editUrl: false,
     guides: [...guides, ...types.map((t: any) => ({ label: t.name, link: t.url.replace(base, '') }))],
-    prev: prev ? { link: `/issues/${prev.id.toLowerCase()}/`, label: prev.id } : false,
-    next: next ? { link: `/issues/${next.id.toLowerCase()}/`, label: next.id } : false,
+    prev: prev ? { link: issueUrl(prev.id), label: prev.id } : false,
+    next: next ? { link: issueUrl(next.id), label: next.id } : false,
   }}
   headings={[]}
 >
@@ -56,7 +54,13 @@ const exEnd = ex ? ex.start + ex.code.split('\n').length - 1 : 0;
   {
     ex && (
       <div class="iss-code">
-        <Code code={ex.code} lang={lang} title={`${i.file}, lines ${ex.start}–${exEnd} at ${i.foundIn}`} mark={mark ? { range: mark } : undefined} />
+        <Code
+          code={ex.code}
+          lang={lang}
+          title={`${i.file} at ${i.foundIn}`}
+          meta={`showLineNumbers startLineNumber=${ex.start}`}
+          mark={mark ? { range: mark } : undefined}
+        />
         <p class="iss-code-links">
           <a href={foundLink(i, build.repo)}>On GitHub at {i.foundIn}</a> · <a href={codeLink(i, build.repo)}>Current code</a>
         </p>

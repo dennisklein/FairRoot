@@ -5,7 +5,9 @@ import { getCollection } from 'astro:content';
 import { paths } from 'virtual:fairroot/data';
 import { model, base, codeTheme, sourceSidebar, githubUrl, guidesForFile } from '../../lib/model.mjs';
 import { renderSourceFile } from '../../../scripts/source.mjs';
+import { issues, issueUrl } from '../../lib/issues.mjs';
 import '../../styles/source.css';
+import '../../styles/issues.css';
 
 export function getStaticPaths() {
   return model().sourceFiles.map((f: string) => ({ params: { path: f } }));
@@ -26,6 +28,33 @@ const kindOf = () => {
   if (file.endsWith('.C')) return 'ROOT macro';
   return 'source';
 };
+// Open issues of the code issue register: a list above the code, a mark on their lines,
+// and a link at the end of the first line of each issue.
+const RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+const fileIssues = issues.filter((i: any) => i.file === file && i.status === 'open');
+let codeHtml = out.html;
+if (fileIssues.length) {
+  const rows = out.html.split(/(?=<span class="row" id="L\d+">)/);
+  const sev = new Map<number, string>();
+  const flags = new Map<number, any[]>();
+  for (const i of fileIssues) {
+    if (!i.line) continue;
+    for (let n = i.line; n <= (i.lineEnd ?? i.line); n++) if (!sev.has(n) || RANK[i.severity] > RANK[sev.get(n)!]) sev.set(n, i.severity);
+    flags.set(i.line, [...(flags.get(i.line) ?? []), i]);
+  }
+  codeHtml = rows
+    .map((r: string, k: number) => {
+      const n = k + 1;
+      if (!sev.has(n)) return r;
+      r = r.replace('<span class="row"', `<span class="row iss ${sev.get(n)}"`);
+      const f = flags.get(n);
+      if (!f) return r;
+      const links = f.map((i) => `<a class="src-iss-flag ${i.severity}" href="${issueUrl(i.id)}" title="${i.title.replace(/"/g, '&quot;')}">${i.id}</a>`).join('');
+      return r.slice(0, -'</span>'.length) + links + '</span>';
+    })
+    .join('');
+}
+const issueCount = (s: string) => fileIssues.filter((i: any) => i.severity === s).length;
 const area: Record<string, string> = { fairroot: 'FairRoot', examples: 'the FairRoot examples', templates: 'the FairRoot templates' };
 ---
 
@@ -63,6 +92,28 @@ const area: Record<string, string> = { fairroot: 'FairRoot', examples: 'the Fair
       </p>
     )
   }
+  {
+    fileIssues.length > 0 && (
+      <details class="src-issues not-content" open={fileIssues.length <= 3}>
+        <summary>
+          {fileIssues.length} known {fileIssues.length === 1 ? 'issue' : 'issues'} in this file
+          <span class="src-issues-sev">
+            {['high', 'medium', 'low'].filter((s) => issueCount(s)).map((s) => <span class={`iss-sev ${s}`}>{issueCount(s)} {s}</span>)}
+          </span>
+        </summary>
+        <ul>
+          {fileIssues.map((i: any) => (
+            <li>
+              <a class="src-iss-id" href={issueUrl(i.id)}>{i.id}</a>
+              <span class={`iss-sev ${i.severity}`}>{i.severity}</span>
+              <span class="src-iss-title">{i.title}</span>
+              {i.line && <a class="src-iss-line" href={`#L${i.line}${i.lineEnd ? `-L${i.lineEnd}` : ''}`}>line {i.line}</a>}
+            </li>
+          ))}
+        </ul>
+      </details>
+    )
+  }
   <div class="src-head not-content">
     <span class="src-path">{file}</span>
     <span class="src-info">{out.lines} lines · C++{lib && <> · <code>FairRoot::{lib.library}</code></>}</span>
@@ -78,7 +129,7 @@ const area: Record<string, string> = { fairroot: 'FairRoot', examples: 'the Fair
     </span>
   </div>
   <div class="src-code not-content" data-pagefind-ignore>
-    <pre><code set:html={out.html} /></pre>
+    <pre><code set:html={codeHtml} /></pre>
     <div class="src-card" role="tooltip" hidden></div>
   </div>
   <script type="application/json" id="src-symbols" set:html={JSON.stringify(out.symbols).replace(/</g, '\\u003c')} />
