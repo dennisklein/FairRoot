@@ -1,0 +1,316 @@
+<chapter name="Top Processes"> 
+ 
+<h2>Top Processes</h2> 
+ 
+Different ways to produce top quarks, singly or in pairs. 
+ 
+<flag name="Top:all" default="off"> 
+Common switch for the group of top production. 
+</flag> 
+ 
+<flag name="Top:gg2ttbar" default="off"> 
+Scatterings <ei>g g &rarr; t tbar</ei>. 
+Code 601. 
+</flag> 
+ 
+<flag name="Top:qqbar2ttbar" default="off"> 
+Scatterings <ei>q qbar &rarr; t tbar</ei> by gluon exchange. 
+Code 602. 
+</flag> 
+ 
+<flag name="Top:qq2tq(t:W)" default="off"> 
+Scatterings <ei>q q' &rarr; t q''</ei> by <ei>t</ei>-channel exchange 
+of a <ei>W^+-</ei> boson. 
+Code 603. 
+</flag> 
+ 
+<flag name="Top:ffbar2ttbar(s:gmZ)" default="off"> 
+Scatterings <ei>f fbar &rarr; t tbar</ei> by <ei>s</ei>-channel exchange 
+of a <ei>gamma^*/Z^0</ei> boson. The <code>WeakZ0:gmZmode</code> switch 
+can be used as in other <ei>gamma^*/Z^0</ei> exchange processes, so that 
+default <code>= 0</code> gives the full contribution, <code>= 1</code> 
+only the <ei>gamma^*</ei> part and <code>= 2</code> only the <ei>Z^0</ei> 
+one. Code 604. 
+</flag> 
+ 
+<flag name="Top:ffbar2tqbar(s:W)" default="off"> 
+Scatterings <ei>f fbar' &rarr; t q''</ei> by <ei>s</ei>-channel exchange 
+of a <ei>W^+-</ei> boson. 
+Code 605. 
+</flag> 
+ 
+<flag name="Top:gmgm2ttbar" default="off"> 
+Scatterings <ei>gamma gamma &rarr; t tbar</ei>. 
+Code 606. 
+</flag> 
+ 
+<flag name="Top:ggm2ttbar" default="off"> 
+Scatterings <ei>g gamma &rarr; t tbar</ei>. 
+Code 607 when <ei>g gamma &rarr; t tbar</ei> and 617 
+when <ei>gamma g &rarr; t tbar</ei>. 
+</flag> 
+ 
+<p/> 
+By default top always decays to a <ei>W</ei> and a down-type quark. 
+It is possible to switch on the <ei>t &rarr; H+ b</ei> decay mode. 
+Note that its partial width is calculated using the <ei>tan(beta)</ei> 
+value stored in <code>HiggsHchg:tanBeta</code>, so that it can be used 
+without having to read in a SUSY parameter file. For the <ei>H+</ei> to 
+decay also <code>Higgs:useBSM = on</code> is necessary. 
+ 
+<h3>Threshold enhancements</h3> 
+ 
+In the article "On the threshold behaviour of heavy top production", 
+<ref>Fad90</ref>, cross section enhancements in the threshold region 
+were discussed. Recently both CMS and ATLAS have found signals for such 
+enhancements. The old equations, partly but not fully available in PYTHIA 6, 
+have therefore now been reimplemented in full. The above-threshold 
+enhancements are straightforward to implement, but the below-threshold 
+"toponium" are less transparent, and different scenarios are explored. 
+A first study was presented in <ref>Sjo25</ref>, and a more detailed 
+one is in preparation. 
+ 
+<p/> 
+During the course of these studies the understanding of the 1990 
+ansatz has been improved, and the model extended in different 
+directions. The first code version, in PYTHIA 8.316, is obsolete. 
+Notably its two intermediate scenarios, then options 2 and 3, 
+have been removed. Version 8.317 brought a clarification of how 
+the <ei>E</ei> variable should be interpreted further above 
+threshold, which brought agreement between the Green's and 
+the Coulomb expressions there. It also implements the angular 
+correlations for a pseudoscalar <ei>t-tbar</ei> decay chain via 
+<ei>W</ei> bosons to a six-fermion final state. Version 8.318 
+introduces a new option for streamlined setup of width, adds 
+handling of top thresholds in <ei>e^+e^-</ei> annihilation, 
+with a new <code>main373.cc</code> example, includes various minor 
+improvements and bug fixes, and adds more information for the user. 
+ 
+<p/> 
+The key issue addressed in 8.317 is how the top mass 
+is handled in the derivation of the threshold cross section expressions. 
+This issue is not addressed in <ref>Fad90</ref>, which only does 
+numerical integration of the below-threshold contribution, not Monte 
+Carlo implementation. Going back to more detailed presentations, notably 
+<ref>Fad91</ref>, it becomes apparent that the relevant Green's 
+function expressions include smearing from the top width. So it appears 
+that there is doublecounting, that should be fixed. One could 
+imagine two approaches to this. 
+<br/>(a) Reduce the top quark width to a small number. This is then 
+closer to the general thinking of the theory community, where the 
+top mass is kept fixed in matrix-element calculations. 
+The main issue is that the broadening of top quarks above threshold 
+is also inhibited, which is unphysical. Technically, the top width cannot 
+be made arbitrarily small, since a finite width is needed for the 
+handling of the "toponium" below-threshold decay to off-shell top quarks. 
+The top width changed here is the regular one stored in the particle 
+data tables, and can be set as property <code>mWidth</code> of particle 6. 
+Note, however, that PYTHIA will use the chosen top mass to recalculate 
+the top width at initialization, so to inhibit this you must also set 
+<code>6:doForceWidth = true</code>. 
+<br/>(b) Reduce the top width used in the threshold-behaviour matrix 
+element expressions. This then provides a natural continuation of the 
+above-threshold behaviour traditionally used in PYTHIA, including 
+model options 0 and 1 below, to the below-threshold one. The problem here 
+is a practical one: a shrinking matrix element width gives a spectrum of 
+discrete bound-state peaks in the <ei>t+tbar</ei> mass spectrum, which 
+becomes messy to handle properly. Notably the initialization step may not 
+fully catch the peaks, which later leads to some events receiving weights 
+above unity to compensate. This kind of top width is regulated by the 
+<code>tWidthGreen</code> parameter below. 
+ 
+<p/>In 8.317 the above-threshold top quark width and the Green's 
+function width can be mixed freely. In 8.318 a new 
+(recommended) option is introduced, wherein the two can be mixed, 
+but such that the sum of the two adds up to give the physical top width. 
+(Recall that the convolution of two nonrelativistic Breit-Wigners 
+give a new Breit-Wigner with a width that is the sum of the 
+constituent two, <ei>Gamma = Gamma_1 + Gamma_2</ei>.) 
+ 
+<p/> 
+Relevant code is implemented as a new class <code>TopThreshold</code> 
+in <code>SigmaProcess.h/.cc</code>, which  is accessed by the internal 
+<ei>gg &rarr; ttbar</ei>,  <ei>qqbar &rarr; ttbar</ei> and 
+<ei>ffbar &rarr; gamma^*/Z^0 &rarr; ttbar</ei> classes in the 
+<code>SigmaQCD</code> and <code>SigmaEW</code> files, respectively. 
+The implemented scenarios and free parameters within them are as follows. 
+ 
+<modepick name="TopThreshold:model" default="0" min="0" max="3"> 
+The choice of threshold behaviour for the three <ei>t tbar</ei> 
+production processes. If you want to switch on this functionality, 
+the recommended choice is option 3; see above. 
+<option value="0">no modifications to threshold, i.e. pure Born 
+(leading order) matrix elements. 
+</option> 
+<option value="1">the simple Coulomb enhancement, which only works 
+above the threshold, <ei>E = mHat(t + tbar) - m(t) - m(tbar) &gt; 0</ei>. 
+</option> 
+<option value="2">the Green's function in the whole threshold region, 
+both <ei>E &gt; 0</ei> and <ei>E &lt; 0</ei>, but damped-out below 
+(see <code>thrRegion</code> below). The top quark width 
+<code>mWidth</code> and the Green's function width 
+<code>tWidthGreen</code> (see below) can be mixed freely, which may 
+lead to doublecounting of mass smearing. 
+</option> 
+<option value="3">as option 2, but top quark masses are rescaled to a 
+width <code>mWidth - tWidthGreen</code> such that total mass smearing 
+is at the physically expected level. 
+</option> 
+</modepick> 
+ 
+<parm name="TopThreshold:tWidthGreen" default="0.1" min="0.0001" max="2."> 
+top quark width as used in the Green's function. See description above 
+for the issue this parameter is intended to address. Also note that 
+the smaller <code>tWidthGreen</code> is, the more event weights above 
+unity you will get from the narrow resonance peaks below threshold, 
+leading to degrading numerical precision. The default value therefore 
+is a reasonable lower limit for most applications. 
+</parm> 
+ 
+<parm name="TopThreshold:thrRegion" default="10." min="5." max="20."> 
+the Green's function, when used, is only assumed valid down to 
+<ei>E = -thrRegion</ei>. In the region <ei>[-2 thrRegion, -thrRegion]</ei> 
+it is linearly damped to zero, and below that identically zero. 
+<note>Note:</note> renamed from <code>width</code> in PYTHIA 8.316, to avoid 
+confusion with the width concept used e.g. in <code>tWidthGreen</code> 
+above. Also, owing to a changed handling of the high-energy behaviour 
+in model 2, damping at high masses is no longer required. 
+</parm> 
+ 
+<modepick name="TopThreshold:alphasOrder" default="2" min="0" max="2"> 
+the order of the running of the <ei>alpha_strong</ei>, used for the 
+top threshold factors (and nowhere else). 
+<option value="0">no running. 
+</option> 
+<option value="1">first-order running. 
+</option> 
+<option value="2">second-order running. 
+</option> 
+</modepick> 
+ 
+<parm name="TopThreshold:alphasValue" default="0.118" min="0.10" max="0.25"> 
+the <ei>alpha_strong</ei> value at scale <ei>M_Z^2</ei>, that then runs 
+according to the order defined above. 
+</parm> 
+ 
+<parm name="TopThreshold:ggSingletFrac" default="0." min="0." max="1."> 
+in the <ei>g g &rarr; t tbar</ei> process, colour factors gives 2/7 singlet 
+and the rest octet, but dynamics might modify this. Historically, a 
+vanishing singlet fraction has been assumed for top production, 
+however, so for backwards compatibility this remains the default. 
+Therefore this parameter must be changed for relevant top-threshold studies. 
+</parm> 
+ 
+<parm name="TopThreshold:qqSingletFrac" default="0." min="0." max="1."> 
+in the <ei>q qbar &rarr; t tbar</ei> process colour arguments gives 
+all octet and no singlet, but again modifications are possible. 
+</parm> 
+ 
+<modepick name="TopThreshold:massSel" default="0" min="0" max="1"> 
+for below-threshold production, new <ei>t</ei> and <ei>tbar</ei> masses 
+must be selected, such that these new masses correspond to above-threshold 
+production. Repeated attempts are made in either of two ways. 
+<option value="0">pick each new mass to be smaller than the respective 
+original one (and above the generic constraint 
+<code>particleDataPtr->mMin(6)</code> = 86 GeV). 
+</option> 
+<option value="1">pick each new mass freely. Thus one of the two masses 
+can increase, at the expense of the other, which has to be even further 
+pushed off mass shell. The loop to find a matching pair fails more often, 
+so this option is slower. It is not intended for standard use, but could 
+be seen as a variation to estimate uncertainties in the normal option 0. 
+</option> 
+</modepick> 
+ 
+<modeopen name="TopThreshold:nTerms" default="0" min="0"> 
+the number of terms evaluated in the sum expression of the Green's 
+functions. Normally this is selected automatically, based on the 
+top width and the current energy. If you pick a <code>nTerms</code> 
+value above 20, however, that is the number of terms summed. The main 
+application is for convergence checks, where a very large number 
+(10000 say) could be used, at the expense of slower execution. 
+</modeopen> 
+ 
+<flag name="TopThreshold:pseudoscalar" default="off"> 
+distribute angles of the consecutive <ei>t</ei>, <ei>tbar</ei>, <ei>W+</ei> 
+and <ei>W-</ei> decays as if the <ei>t+tbar</ei> pair is in a pseudoscalar 
+state, giving specific angular correlations otherwise absent. This only 
+applies for the <ei>gg &rarr; ttbar</ei> process, while the 
+<ei>qqbar &rarr; g^* &rarr; ttbar</ei> and 
+<ei>ffbar &rarr; gamma^*/Z^0 &rarr; ttbar</ei> vector-state (dominated) 
+correlations currently are not modelled. Furthermore it only applies 
+in the threshold region, while at higher energies a transition to 
+independent <ei>t</ei> and <ei>tbar</ei> decays is assumed, see next two 
+parameters. When on it affects all top threshold models, also the default 
+pure Born level. 
+</flag> 
+ 
+<parm name="TopThreshold:psEBeginDamp" default="10."> 
+when <code>TopThreshold:pseudoscalar = on</code> then the correlated 
+decays are used up until this many GeV above the threshold energy. 
+After that a linear damping is introduced, with the slack being taken 
+over by independent <ei>t</ei> and <ei>tbar</ei> decays, until the 
+latter completely takes over at the next scale. 
+</parm> 
+ 
+<parm name="TopThreshold:psEEndDamp" default="20."> 
+the linear damping introduced in the previous parameter ends at the 
+current one, so above this scale (relative to the threshold energy) 
+only independent <ei>t</ei> and <ei>tbar</ei> decays remain. Must be 
+chosen larger than the previous parameter. 
+</parm> 
+ 
+<br/> 
+<note>Note 1:</note> Models 2 and 3, for <ei>E &lt; 0</ei>  redefine 
+the <ei>t</ei> and <ei>tbar</ei> mass values to achieve a new 
+<ei>E' &gt; 0</ei>. In order still to have access to the original 
+quantities, before the new masses were selected, the following 
+quantities are saved and retrievable: 
+<br/><code>pythia.info.toponiumE</code> the original threshold energy 
+<ei>E</ei>, which may have either sign; 
+<br/><code>pythia.info.toponiumm3, pythia.info.toponiumm4</code> the two 
+original <ei>t</ei> and <ei>tbar</ei> masses, which are larger than the 
+<ei>m'</ei> ones found in the event record. 
+ 
+<br/> 
+<note>Note 2:</note> Also some other event information is stored. 
+<br/><code>pythia.info.toponiumEnhance</code> gives the mixed 
+enhance/suppression weight that multiplies the rest of the cross 
+section. For <ei>E &gt; 0</ei> a division by it can be used to 
+recover the Born-level rate, while for <ei>E &lt; 0</ei> there is 
+no proper Born-level rate to recover, only the extended 
+below-threshold rate in the region defined by <code>thrRegion</code> 
+above. 
+<br/>Related to this, in processes with mixed singlet and octet 
+content, the enhancement of the singlet and the suppression of the 
+octet changes the original colour-factor mix (notably relative to 
+<code>ggSingletFrac</code>). The mix for the current event - 
+used to decide at random whether it should be a singlet or not - 
+can be retrieved with 
+<br/><code>pythia.info.toponiumSingletFrac</code>. 
+ 
+<br/> 
+<note>Note 3:</note> For technical reasons a <code>MASSMARGIN = 0.01</code> 
+GeV is used to avoid kinematical situations where numerics may become 
+unstable. This means that the range <ei>0 &lt; E &lt; 0.01</ei> GeV 
+is not populated in some scenarios. Overall effects are negligible, 
+but it can give rise to visible dips in some high-resolution plots. 
+ 
+<br/> 
+<note>Note 4:</note> Six main programs explore the usage of this code: 
+<br/><code>main368.cc</code> plots the shape of the pure singlet and octet 
+enhancements; 
+<br/><code>main369.cc</code> and <code>main370.cc</code> histogram 
+a few quantities for many different scenarios, to allow direct comparisons, 
+with code for parallelization using either OpenMP or 
+<code>PythiaParallel</code>, respectively; 
+<br/><code>main371.cc</code> histograms a wider set of quantities, but only 
+for one model at a time; 
+<br/><code>main372.cc</code> studies angular correlations between outgoing 
+fermions. 
+<br/><code>main373.cc</code> shows the threshold cross section in 
+<ei>e^+e^-</ei> colliders. 
+ 
+</chapter> 
+ 
+<!-- Copyright (C) 2026 Torbjorn Sjostrand --> 

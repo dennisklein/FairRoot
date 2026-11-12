@@ -1,0 +1,214 @@
+<chapter name="Logging and diagnostics"> 
+ 
+<h2>Logging</h2> 
+ 
+<h3>Controlling printing</h3> 
+The following settings are used to control what is printed during 
+initialization and event generations. 
+ 
+<flag name="Print:init" default="on"> 
+If disabled, messages (except for errors) are suppressed during 
+initialization. In order to show only certain types of information, use the 
+<code>Init:showProcesses</code>, 
+<code>Init:showMultipartonInteractions</code>, 
+<code>Init:showChangedSettings</code>, 
+<code>Init:showAllSettings</code>, 
+<code>Init:showChangedParticleData</code>, 
+<code>Init:showChangedResonanceData</code>, 
+<code>Init:showAllParticleData</code>, and 
+<code>Init:showOneParticleData</code> settings. 
+</flag> 
+ 
+<flag name="Print:next" default="on"> 
+If disabled, messages (except for errors) are suppressed during event 
+generation. In order show only certain types of information, use the 
+<code>Next:numberCount</code>, 
+<code>Next:numberShowLHA</code>, 
+<code>Next:numberShowInfo</code>, 
+<code>Next:numberShowProcess</code>, and 
+<code>Next:numberShowEvent</code> settings. 
+</flag> 
+ 
+<flag name="Print:quiet" default="off"> 
+Can be set on to avoid the printing during program execution, to the 
+largest extent possible. This is equivalent to turning off the three flags 
+above. 
+</flag> 
+ 
+<h3>Error messages</h3> 
+Error messages are printed through the Logger class. There are five types 
+of error messages: 
+<ul> 
+<li>Abort: An abort message indicates a critical error that might 
+prevent further event generation from taking place. Examples: unable to 
+find particle database; invalid user settings; 
+calling <code>Pythia::next</code> after initialization failed.</li> 
+<li>Error: An error indicates that something has gone wrong during event 
+generation. When an error occurs in a function, it usually means that 
+function failed to execute. It is possible that the calling function is 
+able to recover, otherwise the event will fail to generate.</li> 
+<li>Warning: Warning messages indicate an exceptional case that the function 
+is able to recover from. They are usually not a cause for concern, but a 
+large number of warnings could indicate that there is something wrong with 
+your configuration.</li> 
+<li>Info: Info messages provide information that is not an error. Example: 
+when the parallel framework automatically detects the number of hardware 
+threads, this number is output as an Info message.</li> 
+<li>Report: Report messages are used to provide additional details that may 
+be relevant for debugging purposes. These messages are off by default.</li> 
+</ul> 
+In the <code>Logger</code> class, the <code>abortMsg</code>, 
+<code>errorMsg</code>, <code>warningMsg</code>, and <code>infoMsg</code> 
+methods are used to generate messages of the corresponding types. However, 
+the standard way to output error messages is through the 
+<code>ABORT_MSG</code>, <code>ERROR_MSG</code>, <code>WARNING_MSG</code>, 
+and <code>INFO_MSG</code> macros. These macros expand to the corresponding 
+methods, but automatically replaces the first argument by 
+<code>__METHOD_NAME__</code>. For example, the two lines are equivalent: 
+<ul> 
+<li><code>infoPtr->ERROR_MSG("an error occurred");</code></li> 
+<li><code>infoPtr->errorMsg(__METHOD_NAME__, "an error occurred");</code></li> 
+</ul> 
+The reason macros are used this way is that there is no other easy way to 
+automatically propagate the name of the method where the error occurred. 
+ 
+<p/> 
+The following settings are used to control error logging features. 
+<flag name="Print:errors" default="on"> 
+If on, error messages are printed to the console the first time each 
+of them occurs. Even if off, errors are still logged and displayed when 
+calling <code>Pythia::stat</code>. 
+</flag> 
+ 
+<modepick name="Print:verbosity" default="2" min="0" max="3"> 
+This setting determines which types of diagnostic messages are logged. 
+Messages that don't satisfy the verbosity level will not be printed 
+when calling <code>Pythia::stat</code>. 
+<option value="0">No error messages are logged.</option> 
+<option value="1">Only critical abort messages are logged.</option> 
+<option value="2">All normal messages are logged (default).</option> 
+<option value="3">Also report messages are logged, and errors and 
+warnings are printed every time they occur instead of just the first 
+time. Useful for user-level debugging, where combining with 
+<code>Next:numberCount = 1</code> will allow easier identification of 
+problematic events. </option> 
+</modepick> 
+ 
+<flag name="Print:useErrorStream" default="off"> 
+By default, all logger messages are written to <code>cout</code>. If this 
+flag is turned on, error messages will instead be written 
+to <code>cerr</code>. 
+</flag> 
+ 
+<h3>Timing</h3> 
+ 
+The <code>Timer</code> class provides a simple stopwatch that can be 
+used to time code. The timer can be started, stopped, paused, and 
+resumed. At construction, an optional counter can be passed which the 
+timer class will add its elapsed time to, in milliseconds, when stopped. 
+ 
+The following gives a small example. Not illustrated here is that 
+whenever a timer goes out of scope, it is stopped, and if a valid 
+counter is available, that counter is incremented. In this way, a 
+timer does not need to be explicitly stopped in complicated return 
+structures. 
+ 
+<pre> 
+  // Accumulate the event generation time with tEvt, in milliseconds. 
+  double tEvt = 0.; 
+  // Timer per event and for everything, including initialization. 
+  Timer evtTimer(Timer::WALL, &amp;tEvt), totTimer; 
+  // Start the total timer. 
+  totTimer.start(); 
+  Pythia pythia; 
+  pythia.readString("SoftQCD:all = on"); 
+  pythia.init(); 
+  // Generate events. 
+  for (int iEvent = 0; iEvent &lt; nEvent; ++iEvent) { 
+    // Start the event timer. 
+    evtTimer.start(); 
+    // Generate the event. 
+    bool good = pythia.next(); 
+    // Stop the event timer. 
+    evtTimer.stop(); 
+    if (!good) continue; 
+    // Analysis code here is not included in evtTimer but is in totTimer. 
+  } 
+  totTimer.stop(); 
+</pre> 
+ 
+<method name="Timer::Timer(Timer::TimeType typeIn = Timer::CPU, 
+double* counterPtrIn = nullptr, mutex* mutexPtrIn = nullptr)"> 
+Constructor; timing does not begin until <code>start()</code> is called. 
+<argument name="typeIn" default="Timer::CPU"> 
+type of time to measure. <code>WALL</code> is the real elapsed time, 
+<code>CPU</code> is the processor time for all threads, and 
+<code>THREAD</code> is the processor time for a single thread. When 
+using <code>THREAD</code> the timer should only be called by that 
+thread. 
+</argument> 
+<argument name="counterPtrIn" default="nullptr"> 
+optional pointer to a counter. If provided, the elapsed time in 
+milliseconds is added to <code>*counterPtrIn</code> every time 
+<code>stop()</code> is called. 
+</argument> 
+<argument name="mutexPtrIn" default="nullptr"> 
+if using a shared counter across threads, a single <code>mutex</code> 
+pointer should be passed to all timers using the same counter to 
+prevent race conditions. 
+</argument> 
+</method> 
+ 
+<method name="Timer::~Timer()"> 
+Destructor which calls <code>stop()</code> so the optional counter is 
+incremented if the timer is still running. 
+</method> 
+ 
+<method name="void Timer::start(bool pausedIn = false)"> 
+Resets and starts the timer. 
+<argument name="pausedIn" default="off"> 
+optionally start the timer as paused if set as true. 
+</argument> 
+</method> 
+ 
+<method name="void Timer::pause()"> 
+Pauses the timer without clearing the accumulated time. 
+</method> 
+ 
+<method name="void Timer::resume()"> 
+Resumes the timer after <code>pause()</code> is called. 
+</method> 
+ 
+<method name="void Timer::stop()"> 
+Stops the timer. The elapsed time is added to the optional counter if valid. 
+</method> 
+ 
+<method name="double Timer::elapsed() const"> 
+Returns the total accumulated time in milliseconds. If the timer is 
+running, the accumulated time up to the call is included. 
+</method> 
+ 
+<method name="template &lt;typename T&gt; double Timer::elapsed() const"> 
+Same as above but with the result in units of <code>T</code>. 
+<argument name="T"> 
+the time units of type <code>std::chrono::duration</code>. 
+</argument> 
+</method> 
+ 
+<method name="bool Timer::isActive() const"> 
+Returns true if the timer is currently running. A paused timer is not 
+active. 
+</method> 
+ 
+<method name="bool Timer::isPaused() const"> 
+Returns true if the timer is paused. 
+</method> 
+ 
+<method name="Timer::TimeType Timer::timeType() const"> 
+Returns the type of time measured, <code>Timer::WALL</code>, 
+<code>Timer::CPU</code>, or <code>Timer::THREAD</code>. 
+</method> 
+ 
+</chapter> 
+ 
+<!-- Copyright (C) 2026 Torbjorn Sjostrand --> 
