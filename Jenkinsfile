@@ -32,9 +32,7 @@ def linux_builds = [
     extra: "-DUSE_CLANG_TIDY=ON -DBUILD_MBS=OFF -DBUILD_PROOF_SUPPORT=OFF"],
 ]
 
-def linux_checks = [
-  [os: 'ubuntu', ver: 'rolling', compiler: 'current', fairsoft: 'dev', check: 'doxygen'],
-]
+def linux_checks = []
 
 def isBranchBuild() {
   return !env.CHANGE_ID
@@ -84,12 +82,8 @@ def jobMatrix(String type, String src, List specs) {
           echo "Build dir: ${builddir_abs}"
           def logpattern = "${builddir}/Testing/Temporary/*.log"
 
-          if (check == "warnings" || check == "doxygen") {
+          if (check == "warnings") {
             discoverGitReferenceBuild()
-          }
-          if (check == "doxygen") {
-            gitDiffStat()
-            // mineRepository()
           }
 
           def jobscript = "${pwd()}/job.sh"
@@ -136,15 +130,6 @@ def jobMatrix(String type, String src, List specs) {
                          ignoreFailedBuilds: false,
                          skipBlames: true)
             archiveArtifacts(artifacts: logpattern, allowEmptyArchive: true, fingerprint: true)
-          }
-          if (check == "doxygen") {
-            recordIssues(tools: [doxygen()],
-                         ignoreFailedBuilds: false,
-                         skipBlames: true)
-            def result_url = readFile(file: "${builddir_abs}/generated-doxygen.url")
-            publishChecks(name: "Doxygen-Preview",
-                          title: "Doxygen Preview",
-                          summary: result_url)
           }
 
           deleteDir()

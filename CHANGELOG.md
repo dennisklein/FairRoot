@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Breaking Changes
 
 * No streamer is generated for `FairRootManager` any more
+* Dropped the build switch `BUILD_DOXYGEN` and the Doxygen documentation
+  * The documentation site in `docs/` replaces it, see
+    https://dennisklein.github.io/FairRoot/
 
 ### Other Notable Changes
 
