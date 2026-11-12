@@ -1,8 +1,5 @@
-# Tutorial2 {#ex_sim_tutorial2}
+# Tutorial 2: digitization and parameters
 
-This example show you how to:
+A digitizer task reads a parameter container from an ASCII file, and the runtime database stores it in the ROOT parameter file. Also custom data and event mixing.
 
-* Simulate a simple detector (run_tutorial2.C)
-* Read the simulated data, and the digitization parameters from "parameters/tutdet.digi.par" 
-* create digitized data (create_digis.C)
-* Read the digitized data for further reconstruction (read_digis.C)
+Read the documentation: <https://dennisklein.github.io/FairRoot/examples/tutorial2/>

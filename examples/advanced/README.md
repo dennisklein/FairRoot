@@ -1,12 +1,5 @@
-# Advanced Examples {#ex_advanced}
+# Advanced examples
 
-- \subpage ex_tutorial3
+Tutorial 3, the propagator and the MBS tutorial. The documentation tells what each example shows and how to run it.
 
-  Detector simulation and digitization event wise and timebased simulation.
-  Use of FairMQ
-
-
-- \subpage ex_mbstut
-
-  Shows how to use MBS data unpacking with FairRunOnline steering class. FairTut8Unpack implement parsing of MBS subevents and
-  creates output in form of array of FairTut8RawItem data objects.
+Read the documentation: <https://dennisklein.github.io/FairRoot/examples/overview/#advanced>

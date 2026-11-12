@@ -1,9 +1,5 @@
-# MQ tutorial : Lmd Sampler {#ex_mq_lmd}
+# MQ: LMD sampler and unpacker
 
-## Introduction
-In this tutorial a sampler read an lmd file (the one in /examples/advanced/MbsTutorial) and send the binary data to an unpacker device. The unpacker device unpack the binary data and serialize the data (using TMessage data format) and send the data to a FileSink device.
+Three FairMQ devices unpack the LMD file of the MBS tutorial: a sampler sends MBS subevents, an unpacker makes FairMBSRawItem objects, and a sink writes them to a ROOT file.
 
-To start the demo, go to the FairRoot/build/bin directory and do:
-```bash
-./startMQExLmd.sh
-```
+Read the documentation: <https://dennisklein.github.io/FairRoot/examples/mq-lmd/>

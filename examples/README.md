@@ -1,17 +1,5 @@
-# Examples / Tutorials {#examples}
+# Examples
 
-- \subpage ex_mq
+The examples of FairRoot: simulation tutorials, advanced examples and FairMQ examples. What each one shows, when CMake builds it, where the build puts it, and how to run it.
 
-  Set of simple FairMQ examples.
-
-- \subpage ex_simulation
-
-  Set of simulation examples
-
-- \subpage ex_advanced
-
-  Reconstruction examples, use of parameters, detector simulation and digitization event wise and timebased simulation, etc.
-
-- \subpage ex_common
-
-  Common tools for all examples / tutorials
+Read the documentation: <https://dennisklein.github.io/FairRoot/examples/overview/>

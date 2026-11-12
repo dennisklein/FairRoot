@@ -1,23 +1,5 @@
-# common {#ex_common}
+# Common parts of the examples
 
-This directory contains common stuff needed by different examples for simulation and reconstruction.
+The code and data that the examples share: passive modules, constant field, stack and MC track, engine configuration, geometry files, MC tracks in the event display and UrQMD input.
 
-## gconfig
-
-Set of macros needed to steer the simulation e.g: cuts, physics lists, external decays, etc.
-
-## mcstack
-
-Example implementation of a particle stack for simulation
-
-## passive
-
-Set of passive components (cave, pipe, magnet) that are used by more than tutorial for simulation
-
-## geometry
-
-Set geometry description files in ASCII and ROOT formats used by different tutorials
-
-## input
-
-Example of event generator input files that are used in simulation
+Read the documentation: <https://dennisklein.github.io/FairRoot/examples/common/>
