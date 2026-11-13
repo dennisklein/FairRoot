@@ -9,6 +9,7 @@ the 1-event runs for the fixed cost. Every build sees the same drift.
 Usage:
   series.py --out results/series-<name> --seeds 101-105 --events 1000 \\
             baseline=/home/user/build/stage t1a=/home/user/build-isa/stage ...
+            g4nav=/home/user/build-static/stage@G4.navmode=1
 
 Writes <out>/<label>/runs.csv and physics/, and <out>/summary.csv with the
 CPU time per event (CPU time minus the fixed cost, divided by events - 1).
@@ -25,14 +26,21 @@ import run as harness
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("builds", nargs="+", help="label=prefix")
+    ap.add_argument("builds", nargs="+",
+                    help="label=prefix or label=prefix@key=value;key=value (extra --configKeyValues, "
+                         "for example a run time switch such as G4.navmode=1)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--seeds", default="101-105")
     ap.add_argument("--events", type=int, default=1000)
     ap.add_argument("--fixed-runs", type=int, default=3)
     args = ap.parse_args()
 
-    builds = [b.split("=", 1) for b in args.builds]
+    builds, extra = [], {}
+    for b in args.builds:
+        label, rest = b.split("=", 1)
+        prefix, _, kv = rest.partition("@")
+        builds.append((label, prefix))
+        extra[label] = kv
     envs = {label: harness.env_for(os.path.abspath(prefix)) for label, prefix in builds}
     rows = {label: [] for label, _ in builds}
     fixed = {label: [] for label, _ in builds}
@@ -45,7 +53,7 @@ def main():
     def one(label, prefix, seed, events):
         work = os.path.join(args.out, label, "work")
         return harness.run_one(os.path.abspath(prefix), envs[label], work, seed, events,
-                               False, harness.FIELD_KG, "")
+                               False, harness.FIELD_KG, extra[label])
 
     for i in range(max(len(seed_list), args.fixed_runs)):
         for label, prefix in builds:

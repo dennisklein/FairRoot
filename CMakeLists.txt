@@ -26,9 +26,11 @@ option(FLATSIM_STATIC
 if(FLATSIM_STATIC)
   set(lib_kind -DBUILD_SHARED_LIBS=OFF)
   set(g4_lib_kind -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON)
+  set(g4_static_hook "-DCMAKE_PROJECT_VGM_INCLUDE=${CMAKE_SOURCE_DIR}/cmake/hooks/geant4-static-aliases.cmake")
 else()
   set(lib_kind -DBUILD_SHARED_LIBS=ON)
   set(g4_lib_kind -DBUILD_SHARED_LIBS=ON)
+  set(g4_static_hook "")
 endif()
 set(FLATSIM_SHARED_LDFLAGS "" CACHE STRING
   "Extra linker flags for the shared libraries of all packages, for example -Wl,-Bsymbolic-functions (T2a)")
@@ -113,9 +115,15 @@ flatsim_package(geant4 ARGS
   -DGEANT4_INSTALL_DATADIR=${FLATSIM_G4DATA_DIR}
   -DGEANT4_INSTALL_DATA_TIMEOUT=2000)
 
-flatsim_package(geant4_vmc DEPENDS geant4 vmc root ARGS
+# VGM converts the TGeo geometry to Geant4, for Geant4 native navigation
+# (G4.navmode=kG4, T5a). The default navigation stays TGeo through g4root.
+flatsim_package(vgm DEPENDS geant4 root ARGS
+  ${lib_kind} ${g4_static_hook}
+  -DWITH_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF -DWITH_TEST=OFF)
+
+flatsim_package(geant4_vmc DEPENDS geant4 vmc root vgm ARGS
   ${lib_kind}
-  -DGeant4VMC_USE_VGM=OFF
+  -DGeant4VMC_USE_VGM=ON
   -DGeant4VMC_BUILD_EXAMPLES=OFF
   -DGeant4VMC_INSTALL_EXAMPLES=OFF)
 

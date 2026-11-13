@@ -94,6 +94,15 @@ svg .muted { fill: var(--muted); }
   </table></div>
   <p>T2b is 1.6 % faster than T2a, which is within the noise. The calls between the layers now go direct: no PLT call remains between Geant4, geant4_vmc and O2. But these calls were few, about 0.2 M per event. The cost per event stays in TGeo navigation (56 %) and in the field map (24 %), and both are inside one layer.</p>
   <p>Two practical findings. ROOT looks for the dictionary file (<code>_rdict.pcm</code>) of a dictionary next to the program, not in <code>lib/</code>, when the dictionary is linked statically. And the linker drops dictionaries that nothing references, so the archives must be linked whole.</p>
+  <h3>T5a: Geant4 native navigation instead of TGeo through g4root</h3>
+  <p>O2 describes the geometry in TGeo. By default, Geant4 navigates in that TGeo geometry through the g4root adapter. O2 also has a run-time switch, <code>G4.navmode=1</code>: geant4_vmc then converts the TGeo geometry to a native Geant4 geometry with VGM at start-up, and Geant4 navigates in its own geometry. We imported VGM v5-5 (the alidist pin) and built it into the T2b binary. So the same binary runs both modes, which is the cleanest comparison.</p>
+  <div class="box"><table>
+    <tr><th>Series 3, one binary (T2b + VGM)</th><th class="num">CPU ms / event</th><th class="num">Change</th><th class="num">Instr. / event</th><th class="num">Fixed cost</th><th>Gate</th></tr>
+    <tr><td>TGeo navigation through g4root (<code>G4.navmode=0</code>)</td><td class="num">21.11 ± 0.26</td><td class="num">–</td><td class="num">193 M</td><td class="num">1.82 s</td><td>reference</td></tr>
+    <tr><td>Geant4 native navigation (<code>G4.navmode=1</code>)</td><td class="num">17.34 ± 0.87</td><td class="num">−17.8 %</td><td class="num">125 M (−35 %)</td><td class="num">1.81 s</td><td class="pass">pass (min p 0.27)</td></tr>
+  </table></div>
+  <p>With TGeo, navigation cost about 109 M instructions per event in ROOT. With native Geant4 navigation, the solids (<code>G4UnionSolid::Inside</code>, <code>G4Tubs::Inside</code>, <code>G4DisplacedSolid::Inside</code>) cost about 45 M. ROOT drops to 0.6 % of the instructions per event: it is now only the geometry source at start-up and the output. The conversion at start-up costs nothing measurable.</p>
+  <p>This boundary is the expensive one. ROOT owns the geometry, Geant4 owns the transport, and the g4root adapter makes Geant4 ask TGeo at every step. Each step thus pays for TGeo's general shape and voxel code and for the matrix and thread-data lookups. The O2 field map is now the largest single cost: <code>Chebyshev3DCalc::Eval</code> alone is 25 % of the instructions.</p>
 </section>
 
 <section>
@@ -198,7 +207,8 @@ svg .muted { fill: var(--muted); }
     <tr><td>T2b</td><td>Static link of Geant4, VMC, geant4_vmc and O2 (ROOT stays shared)</td><td>Done: −1.6 % vs T2a, within the noise</td></tr>
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
-    <tr><td>T5</td><td>Compile-time geometry, native Geant4 geometry</td><td>Large: TGeo navigation is half of the cost</td></tr>
+    <tr><td>T5a</td><td>Geant4 native navigation (TGeo converted with VGM)</td><td>Done: −17.8 %, −35 % instructions</td></tr>
+    <tr><td>T5b</td><td>Compile-time geometry; VecGeom navigation</td><td>Open</td></tr>
     <tr><td>T6</td><td>Flat hit output, no ROOT dictionaries</td><td>Output and start-up</td></tr>
     <tr><td>T7</td><td>No VMC, native Geant4 stepping</td><td>Removes geant4_vmc (2 %)</td></tr>
   </table></div>
