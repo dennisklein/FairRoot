@@ -103,6 +103,16 @@ svg .muted { fill: var(--muted); }
   </table></div>
   <p>With TGeo, navigation cost about 109 M instructions per event in ROOT. With native Geant4 navigation, the solids (<code>G4UnionSolid::Inside</code>, <code>G4Tubs::Inside</code>, <code>G4DisplacedSolid::Inside</code>) cost about 45 M. ROOT drops to 0.6 % of the instructions per event: it is now only the geometry source at start-up and the output. The conversion at start-up costs nothing measurable.</p>
   <p>This boundary is the expensive one. ROOT owns the geometry, Geant4 owns the transport, and the g4root adapter makes Geant4 ask TGeo at every step. Each step thus pays for TGeo's general shape and voxel code and for the matrix and thread-data lookups. The O2 field map is now the largest single cost: <code>Chebyshev3DCalc::Eval</code> alone is 25 % of the instructions.</p>
+  <h3>T5b: VecGeom navigation</h3>
+  <p>O2 has a third navigation mode, <code>G4.navmode=2</code>. TGeo2VecGeom converts the TGeo geometry to VecGeom at start-up, and Geant4 navigates with the VecGeom BVH navigator. We imported VecCore v0.8.2, VecGeom at the alidist pin and TGeo2VecGeom v0.1.2. One difference to alidist: the VecGeom backend is scalar, not Vc, because Vc would be one more package and Geant4 asks VecGeom for one track at a time. The same binary runs all three modes.</p>
+  <div class="box"><table>
+    <tr><th>Series 4, one binary</th><th class="num">CPU ms / event</th><th class="num">vs TGeo</th><th class="num">Instr. / event</th><th class="num">Navigation instr.</th><th>Gate</th></tr>
+    <tr><td>TGeo through g4root (<code>G4.navmode=0</code>)</td><td class="num">21.10 ± 0.27</td><td class="num">–</td><td class="num">193 M</td><td class="num">≈ 109 M</td><td>reference</td></tr>
+    <tr><td>Geant4 native (<code>G4.navmode=1</code>)</td><td class="num">15.43 ± 0.27</td><td class="num">−26.9 %</td><td class="num">125 M</td><td class="num">≈ 45 M</td><td class="pass">pass</td></tr>
+    <tr><td>VecGeom (<code>G4.navmode=2</code>)</td><td class="num">11.69 ± 0.25</td><td class="num">−44.6 %</td><td class="num">91 M</td><td class="num">≈ 12 M</td><td class="pass">pass (min p 0.047)</td></tr>
+  </table></div>
+  <p>Series 3 measured the Geant4 native mode at −17.8 %, series 4 at −26.9 %. The machine noise between sessions is larger than the quoted errors, so the order of the three modes is certain, but the exact size of the gain is not.</p>
+  <p>The same geometry, described once in TGeo, costs about 109 M instructions per event to navigate through the g4root adapter, 45 M as a native Geant4 geometry, and 12 M as a VecGeom geometry with a bounding-volume hierarchy. The navigation is no longer the main cost. The O2 field map is: about 48 M instructions per event, more than half of the total. Each field query costs about 2000 instructions in the Chebyshev evaluation.</p>
 </section>
 
 <section>
@@ -208,7 +218,8 @@ svg .muted { fill: var(--muted); }
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
     <tr><td>T5a</td><td>Geant4 native navigation (TGeo converted with VGM)</td><td>Done: −17.8 %, −35 % instructions</td></tr>
-    <tr><td>T5b</td><td>Compile-time geometry; VecGeom navigation</td><td>Open</td></tr>
+    <tr><td>T5b</td><td>VecGeom navigation</td><td>Done: −44.6 % vs TGeo</td></tr>
+    <tr><td>T5c</td><td>Compile-time geometry</td><td>Open</td></tr>
     <tr><td>T6</td><td>Flat hit output, no ROOT dictionaries</td><td>Output and start-up</td></tr>
     <tr><td>T7</td><td>No VMC, native Geant4 stepping</td><td>Removes geant4_vmc (2 %)</td></tr>
   </table></div>

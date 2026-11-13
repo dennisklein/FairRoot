@@ -1,19 +1,19 @@
 [INFO] Running with official detector version 'ALICE2'
 Error in <CheckingDeleteSideEffects>: fBits is not as expected, we got 0x02000000 instead of 0x03000000
-[01:47:22][INFO] RNG INITIAL SEED 101
-[01:47:22][INFO] Media file used: /home/user/build-static/stage/share/Detectors/Geometry/media.geo
-[01:47:22][INFO] Field origin is set to: XYZ: 0.0000,0.0000,0.0000
-[01:47:22][INFO] MagneticField::CreateField: Maximim possible beam energy for requested beam is assumed
-[01:47:22][INFO] MagneticField::Print: Maps:
-[01:47:22][INFO] MagneticField::Print: Solenoid (1*)5 kG, Dipole ON (1) 
-[01:47:22][INFO] MagneticField::Print: Machine B fields for p-p  beam (7000 GeV): QGrad: 22.0002 Dipole: 37.8781
-[01:47:22][INFO] MagneticField::Print: Uses Sol30_Dip6_Hole  of $(O2_ROOT)/share/Common/maps/mfchebKGI_sym.root
-[01:47:22][INFO] O2RUNSIM SPECIFIC INIT CALLED
-[01:47:22][INFO] FairRootFileSink initialized.
-[01:47:22][INFO]  - cbmroot_0
-[01:47:22][INFO]     - seed101.root
+[01:49:21][INFO] RNG INITIAL SEED 101
+[01:49:21][INFO] Media file used: /home/user/build-static/stage/share/Detectors/Geometry/media.geo
+[01:49:21][INFO] Field origin is set to: XYZ: 0.0000,0.0000,0.0000
+[01:49:21][INFO] MagneticField::CreateField: Maximim possible beam energy for requested beam is assumed
+[01:49:21][INFO] MagneticField::Print: Maps:
+[01:49:21][INFO] MagneticField::Print: Solenoid (1*)5 kG, Dipole ON (1) 
+[01:49:21][INFO] MagneticField::Print: Machine B fields for p-p  beam (7000 GeV): QGrad: 22.0002 Dipole: 37.8781
+[01:49:21][INFO] MagneticField::Print: Uses Sol30_Dip6_Hole  of $(O2_ROOT)/share/Common/maps/mfchebKGI_sym.root
+[01:49:21][INFO] O2RUNSIM SPECIFIC INIT CALLED
+[01:49:21][INFO] FairRootFileSink initialized.
+[01:49:21][INFO]  - cbmroot_0
+[01:49:21][INFO]     - seed101.root
 Info in <TGeoManager::TGeoManager>: Geometry FAIRGeom, FAIR geometry created
-[01:47:22][INFO] Setting up G4 sim from library code
+[01:49:21][INFO] Setting up G4 sim from library code
 PhysicsSetup wanted FTFP_BERT_EMV+optical
 
 =============================================================
@@ -28,9 +28,9 @@ PhysicsSetup wanted FTFP_BERT_EMV+optical
 =============================================================
 
 Running TVirtualMCApplication::ConstructGeometry
-[01:47:22][INFO] Magnetic field attached to the engine before media creation
-[01:47:22][INFO] Field in CAVE: 2
-[01:47:22][INFO] Setting up CAVE without ZDC
+[01:49:21][INFO] Magnetic field attached to the engine before media creation
+[01:49:21][INFO] Field in CAVE: 2
+[01:49:21][INFO] Setting up CAVE without ZDC
 Info in <TGeoManager::SetTopVolume>: Top volume is cave. Master volume is cave
 Info in <TGeoNavigator::BuildCache>: --- Maximum geometry depth set to 100
 Error in <TGeoPcon::ComputeBBox>: Duplicated section 11/12 for shape TGeoPcon
@@ -58,11 +58,11 @@ Error in <TGeoPcon::ComputeBBox>: Duplicated section 11/12 for shape TGeoPcon
     dY =     7.60000
     dZ =   190.90001
     origin: x=    0.00000 y=    0.00000 z=  235.30001
-[01:47:22][INFO] FV0: Constructing geometry
-[01:47:22][INFO] FV0: Creating materials
-[01:47:22][INFO] FV0: createMaterials(): fieldType 2, maxField 15
-[01:47:22][INFO] FV0 geometry instance created
-[01:47:22][INFO] FV0: Building geometry. FV0 volume name is 'FV0'
+[01:49:21][INFO] FV0: Constructing geometry
+[01:49:21][INFO] FV0: Creating materials
+[01:49:21][INFO] FV0: createMaterials(): fieldType 2, maxField 15
+[01:49:21][INFO] FV0 geometry instance created
+[01:49:21][INFO] FV0: Building geometry. FV0 volume name is 'FV0'
 Info in <TGeoManager::CheckGeometry>: Fixing runtime shapes...
 Info in <TGeoManager::CheckGeometry>: ...Nothing to fix
 Info in <TGeoManager::CloseGeometry>: Counting nodes...
@@ -71,11 +71,11 @@ Info in <TGeoManager::CloseGeometry>: Building cache...
 Info in <TGeoManager::CountLevels>: max level = 8, max placements = 30
 Info in <TGeoManager::CloseGeometry>: 1779 nodes/ 265 volume UID's in FAIR geometry
 Info in <TGeoManager::CloseGeometry>: ----------------modeler ready----------------
-[01:47:22][INFO] TGeometry will not be imported to VMC
+[01:49:21][INFO] TGeometry will not be imported to VMC
 
-[01:47:22][INFO] FV0: Add alignable volumes
-[01:47:22][INFO] FV0: Add alignable volume: FV0RIGHT_0 <-> /cave_1/barrel_1/FV0_1/FV0RIGHT_0
-[01:47:22][INFO] FV0: Add alignable volume: FV0LEFT_1 <-> /cave_1/barrel_1/FV0_1/FV0LEFT_1
+[01:49:21][INFO] FV0: Add alignable volumes
+[01:49:21][INFO] FV0: Add alignable volume: FV0RIGHT_0 <-> /cave_1/barrel_1/FV0_1/FV0RIGHT_0
+[01:49:21][INFO] FV0: Add alignable volume: FV0LEFT_1 <-> /cave_1/barrel_1/FV0_1/FV0LEFT_1
 Info in <TGeoManager::Export>: Exporting ccdb_object FAIR geometry as root file. Optimizations streamed.
 Info in <TGeoManager::Export>: Exporting ccdb_object FAIR geometry as root file. Optimizations streamed.
 Info in <TObject::SetNavigator>: TG4RootNavigator created and registered to G4TransportationManager
@@ -108,7 +108,7 @@ G4VModularPhysicsList::ReplacePhysics: G4EmStandard with type : 2 is replaced wi
 
 Adding ExtraPhysicsList optical 
 Adding SpecialPhysicsList stepLimiter+specialCuts
-[01:47:22][INFO] Adding custom particles to VMC
+[01:49:21][INFO] Adding custom particles to VMC
 ++++  TG4Warning:  ++++
     TG4PhysicsManager::DefineParticle:
     Particle with PDG=1010010030, name=HyperTriton
@@ -235,8 +235,8 @@ Adding SpecialPhysicsList stepLimiter+specialCuts
     User definition will be ignored.
 +++++++++++++++++++++++
 
-[01:47:22][INFO] Printing 'SimUserDecay' parameters
-[01:47:22][INFO] SimUserDecay.pdglist : 		[ CODE ]
+[01:49:21][INFO] Printing 'SimUserDecay' parameters
+[01:49:21][INFO] SimUserDecay.pdglist : 		[ CODE ]
 
 ### TG4SpecialStackingAction activated
 Visualization Manager instantiating with verbosity "warnings (3)"...
@@ -251,7 +251,7 @@ Geant4 has been created.
  |  |   P  P   Y Y     T    H   H   I    A A     This is PYTHIA version 8.318      |  | 
  |  |   PPP     Y      T    HHHHH   I   AAAAA    Last date of change: 16 Sep 2026  |  | 
  |  |   P       Y      T    H   H   I   A   A                                      |  | 
- |  |   P       Y      T    H   H  III  A   A    Now is 13 Nov 2026 at 01:47:22    |  | 
+ |  |   P       Y      T    H   H  III  A   A    Now is 13 Nov 2026 at 01:49:21    |  | 
  |  |                                                                              |  | 
  |  |   Program documentation and an archive of historic versions is found on:     |  | 
  |  |                                                                              |  | 
@@ -285,8 +285,8 @@ Geant4 has been created.
  |                                                                                    | 
  *------------------------------------------------------------------------------------* 
 
-[01:47:22][INFO] Init 'DecayerPythia8' with following parameters
-[01:47:22][INFO] DecayerPythia8.config[0] : ${O2_ROOT}/share/Generators/pythia8/decays/base.cfg		[ CODE ]
+[01:49:21][INFO] Init 'DecayerPythia8' with following parameters
+[01:49:21][INFO] DecayerPythia8.config[0] : ${O2_ROOT}/share/Generators/pythia8/decays/base.cfg		[ CODE ]
 DecayerPythia8.config[1] : 		[ CODE ]
 DecayerPythia8.config[2] : 		[ CODE ]
 DecayerPythia8.config[3] : 		[ CODE ]
@@ -297,7 +297,7 @@ DecayerPythia8.config[7] : 		[ CODE ]
 DecayerPythia8.verbose : false		[ CODE ]
 DecayerPythia8.showChanged : false		[ CODE ]
 
-[01:47:22][INFO] Reading configuration from file: /home/user/build-static/stage/share/Generators/pythia8/decays/base.cfg
+[01:49:21][INFO] Reading configuration from file: /home/user/build-static/stage/share/Generators/pythia8/decays/base.cfg
 
  *-------  PYTHIA Flag + Mode + Parm + Word + FVec + MVec + PVec + WVec Settings (changes only)  ------------------* 
  |                                                                                                                 | 
@@ -410,15 +410,15 @@ Magnetic field parameters:
 /mcPhysics/biasing/setRegions ITS_AIR$ ITS_WATER$ ITS_COPPER$ ITS_KAPTON(POLYCH2)$ ITS_GLUE_IBFPC$ ITS_CERAMIC$ ITS_K13D2U2k$ ITS_K13D2U120$ ITS_F6151B05M$ ITS_M60J3K$ ITS_M55J6K$ ITS_FGS003$ ITS_CarbonFleece$ ITS_PEEKCF30$ ITS_GLUE$ ITS_ALUMINUM$ ITS_INOX304$ ALPIDE_METALSTACK$ ALPIDE_SI$
 /mcPhysics/biasing/setParticles proton neutron pi+ pi-
 g4Config.C finished
-[01:47:22][INFO] Setup global cuts and processes
-[01:47:22][INFO] Set default settings for processes and cuts.
-[01:47:22][INFO] Special process settings are enabled.
-[01:47:22][INFO] Special cut settings are enabled.
+[01:49:21][INFO] Setup global cuts and processes
+[01:49:21][INFO] Set default settings for processes and cuts.
+[01:49:21][INFO] Special process settings are enabled.
+[01:49:21][INFO] Special cut settings are enabled.
 TG4RootDetectorConstruction::ConstructSDandField
 TG4PostDetConstruction::InitializeSDandField
-[01:47:22][WARN] local field: no volume YOUT1; its field parameters are unused
-[01:47:22][WARN] local field: no volume DDIP; its field parameters are unused
-[01:47:22][WARN] local field: no volume YOUT2; its field parameters are unused
+[01:49:21][WARN] local field: no volume YOUT1; its field parameters are unused
+[01:49:21][WARN] local field: no volume DDIP; its field parameters are unused
+[01:49:21][WARN] local field: no volume YOUT2; its field parameters are unused
 ++++  TG4Warning:  ++++
     TG4MediumMap::GetMedium:
     Medium TRD_Gas-mix is not found.
@@ -667,28 +667,28 @@ TG4PostDetConstruction::InitializeSDandField
 INCL++/G4ExcitationHandler could not use its own level-density parameter for fission
 ================================================================================
 
-[01:47:22][INFO] Seeder initializing for TGeant4
-[01:47:22][INFO] FairMCApplication::InitGeometry: 0
-[01:47:22][INFO] Setting special cuts for passive module PIPE
-[01:47:22][INFO] Setting special cuts for FV0
-[01:47:22][INFO] FV0: Initializing O2 detector. Adding sensitive volumes.
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLa0
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLb0
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLa1
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLb1
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLa2
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLb2
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLa3
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLb3
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLa4
-[01:47:22][INFO] FV0: Sensitive volume added: FV0SCINTCELLb4
-[01:47:22][INFO] Simulation RunID: 1794534442
-[01:47:22][INFO] CREATING BRANCH FV0Hit
-[01:47:22][INFO] Creating branch for FV0Hit with address 0x5595580ca098
-[01:47:22][INFO] CREATING BRANCH MCTrack
-[01:47:22][INFO] Creating branch for MCTrack with address 0x559557fa5cf0
-[01:47:22][INFO] CREATING BRANCH TrackRefs
-[01:47:22][INFO] Creating branch for TrackRefs with address 0x559557fa5db0
+[01:49:21][INFO] Seeder initializing for TGeant4
+[01:49:21][INFO] FairMCApplication::InitGeometry: 0
+[01:49:21][INFO] Setting special cuts for passive module PIPE
+[01:49:21][INFO] Setting special cuts for FV0
+[01:49:21][INFO] FV0: Initializing O2 detector. Adding sensitive volumes.
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLa0
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLb0
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLa1
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLb1
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLa2
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLb2
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLa3
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLb3
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLa4
+[01:49:21][INFO] FV0: Sensitive volume added: FV0SCINTCELLb4
+[01:49:21][INFO] Simulation RunID: 1794534561
+[01:49:21][INFO] CREATING BRANCH FV0Hit
+[01:49:21][INFO] Creating branch for FV0Hit with address 0x55995d6befa8
+[01:49:21][INFO] CREATING BRANCH MCTrack
+[01:49:21][INFO] Creating branch for MCTrack with address 0x55995d643740
+[01:49:21][INFO] CREATING BRANCH TrackRefs
+[01:49:21][INFO] Creating branch for TrackRefs with address 0x55995d643800
  G4ChordFinder: stepperDriverId: 2
 Global cached field created with stepper NystromRK4
 ### INFO: TG4RootDetectorConstruction::ConstructSDandField finished
@@ -2393,7 +2393,7 @@ G4Transportation:  Current values for thresholds related to  the killing of loop
 TG4ComposedPhysicsList::ConstructProcess done
 TG4ComposedPhysicsList::SetCuts
 Available UI session types: [ tcsh, csh ]
-[01:47:22][INFO] Initialising primary generator
+[01:49:21][INFO] Initialising primary generator
 Define regions for VMC cuts per materials.
 Number of added regions: 38
 
@@ -2406,9 +2406,9 @@ Number of added regions: 38
             265 sensitive detectors
 **********************************************
 
-[01:47:22][INFO] Monte Carlo Engine Initialisation with: TGeant4
-[01:47:22][INFO] Init: Real time 0.574634 s, CPU time 0.55 s
-[01:47:22][INFO] Init: Memory used 300.219 MB
+[01:49:21][INFO] Monte Carlo Engine Initialisation with: TGeant4
+[01:49:21][INFO] Init: Real time 0.603067 s, CPU time 0.57 s
+[01:49:21][INFO] Init: Memory used 300.352 MB
 =======================================================================
 ======                 Electromagnetic Physics Parameters      ========
 =======================================================================
@@ -3378,31 +3378,24 @@ Index : 37     used in the geometry : Yes
 ThresholdWarningEnergy [MeV] = 100
 ThresholdImportantEnergy [MeV] = 100
 NumberOfThresholdTrials = 10
-[01:47:23][INFO] Mean vertex is biased by: XYZ: 0.0000,0.0000,0.0000 SlopeXY: 0.000e+00,0.000e+00
+[01:49:22][INFO] Mean vertex is biased by: XYZ: 0.0000,0.0000,0.0000 SlopeXY: 0.000e+00,0.000e+00
 >>> Event 0
-[01:47:23][INFO] This event/chunk did 1313 steps
-[01:47:23][INFO] Longest track time is 2.204e-06
-[01:47:23][INFO] Stack: 98 out of 138 stored 
+[01:49:22][INFO] This event/chunk did 1313 steps
+[01:49:22][INFO] Longest track time is 2.204e-06
+[01:49:22][INFO] Stack: 98 out of 138 stored 
 
-[01:47:23][INFO] Found nonconforming detector CAVE
->>> Event 1
-[01:47:23][INFO] This event/chunk did 2993 steps
-[01:47:23][INFO] Longest track time is 1.83304e-06
-[01:47:23][INFO] Stack: 132 out of 334 stored 
-
->>> Event 2
-[01:47:23][INFO] This event/chunk did 2181 steps
-[01:47:23][INFO] Longest track time is 7.76405e-06
-[01:47:23][INFO] Stack: 140 out of 226 stored 
-
->>> Event 3
-[01:47:23][INFO] This event/chunk did 1100 steps
-[01:47:23][INFO] Longest track time is 1.96973e-06
-[01:47:23][INFO] Stack: 98 out of 120 stored 
-
->>> Event 4
-[01:47:23][INFO] This event/chunk did 4392 steps
-[01:47:23][INFO] Longest track time is 1.68414e-06
-[01:47:23][INFO] Stack: 129 out of 538 stored 
-
->>> Event 5
+[01:49:22][INFO] Found nonconforming detector CAVE
+Time of this run:   User=0.040000s Real=0.044569s Sys=0.000000s [Cpu=89.7%]
+Number of events processed: 1
+TG4CachedMagneticField: 
+   Number of calls:        11999
+   Number of evaluations : 7908
+[01:49:23][INFO] Run: Real time 1.13771 s, CPU time 1.13 s
+[01:49:23][INFO] Run: Memory used 340.164 MB
+Executing G4 terminate
+TG4CachedMagneticField: 
+   Number of calls:        11999
+   Number of evaluations : 7908
+Warning in <TGeoMatrix::dtor>: Registered matrix  was removed
+Warning in <TGeoMatrix::dtor>: Registered matrix  was removed
+[01:49:23][INFO] Destructing PrimaryGenerator

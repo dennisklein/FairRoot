@@ -19,6 +19,8 @@ import re
 import sys
 
 LAYERS = [
+    ("VecGeom", re.compile(r"lib(vecgeom|tgeo2vecgeom)\w*\.so")),
+    ("VGM", re.compile(r"lib(BaseVGM|ClhepVGM|Geant4GM|RootGM|XmlVGM)\w*\.so")),
     ("Geant4", re.compile(r"libG4\w+\.so")),
     ("geant4_vmc", re.compile(r"lib(geant4vmc|g4root|mtroot|g4vmc)\w*\.so")),
     ("VMC", re.compile(r"libVMC\w*\.so")),
@@ -40,6 +42,10 @@ def is_plt(key):
 # The layer of a function by its source file. This also works when several
 # layers are linked into one binary (T2b and later).
 FILE_LAYERS = [
+    ("VecGeom", re.compile(r"lib(vecgeom|tgeo2vecgeom)\w*\.so")),
+    ("VGM", re.compile(r"lib(BaseVGM|ClhepVGM|Geant4GM|RootGM|XmlVGM)\w*\.so")),
+    ("VecGeom", re.compile(r"/extern/(vecgeom|veccore|tgeo2vecgeom)/")),
+    ("VGM", re.compile(r"/extern/vgm/")),
     ("geant4_vmc", re.compile(r"/extern/geant4_vmc/")),
     ("Geant4", re.compile(r"/extern/geant4/")),
     ("VMC", re.compile(r"/extern/vmc/")),
@@ -54,7 +60,10 @@ FILE_LAYERS = [
 
 
 def layer_of_key(key, files):
-    """Layer of a function key (object, function): by source file, else by object."""
+    """Layer of a function key (object, function): by namespace for templates of
+    VecGeom (instantiated in the caller's file), then by source file, else by object."""
+    if re.match(r"(?:\S+ )?vecgeom::", key[1] or ""):
+        return "VecGeom"
     f = files.get(key)
     if f:
         for name, pat in FILE_LAYERS:

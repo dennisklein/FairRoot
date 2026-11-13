@@ -1,0 +1,4 @@
+label,cpu_ms_per_event,err,fixed_cpu_s,maxrss_mb,vs_first_pct
+tgeo,21.1,0.271,1.8,351.4,0.0
+g4nav,15.428,0.265,1.897,351.4,-26.9
+vecgeom,11.693,0.249,1.835,351.4,-44.6

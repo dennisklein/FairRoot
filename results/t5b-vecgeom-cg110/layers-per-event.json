@@ -1,0 +1,709 @@
+{
+ "per": 100.0,
+ "total": 90903762.08,
+ "self": {
+  "system": 9695168.7,
+  "ROOT": 710555.91,
+  "support": 8815.46,
+  "Pythia8": 0.0,
+  "other:libGraf3d.so.6.36.10": 0.0,
+  "Geant4": 19856205.63,
+  "geant4_vmc": 2213369.52,
+  "O2": 45474591.51,
+  "FairRoot": 256704.79,
+  "VecGeom": 12396869.34,
+  "VGM": 0.0,
+  "VMC": 0.0,
+  "PLT stubs": 291481.22,
+  "other:libGeomPainter.so.6.36.10": 0.0,
+  "other:libtinfo.so.6.4": 0.0
+ },
+ "crossings": {
+  "system->other:libtinfo.so.6.4": 0.0,
+  "system->ROOT": 344.58,
+  "system->support": 0.0,
+  "system->VecGeom": 0.0,
+  "system->Pythia8": 0.0,
+  "system->other:libGraf3d.so.6.36.10": 0.0,
+  "system->other:libGeomPainter.so.6.36.10": 0.0,
+  "system->Geant4": 2401.14,
+  "system->O2": 316.05,
+  "system->PLT stubs": 23.11,
+  "ROOT->PLT stubs": -11.0,
+  "ROOT->system": 184.4,
+  "support->PLT stubs": 0.0,
+  "Pythia8->system": 0.0,
+  "Pythia8->PLT stubs": 0.0,
+  "ROOT->FairRoot": 0.0,
+  "ROOT->O2": 10.0,
+  "ROOT->other:libGraf3d.so.6.36.10": 0.0,
+  "ROOT->other:libGeomPainter.so.6.36.10": 0.0,
+  "other:libGraf3d.so.6.36.10->PLT stubs": 0.0,
+  "Geant4->PLT stubs": 0.0,
+  "Geant4->system": 34391.86,
+  "Geant4->O2": 66885.27,
+  "Geant4->ROOT": 0.0,
+  "Geant4->geant4_vmc": 35799.34,
+  "geant4_vmc->PLT stubs": 0.0,
+  "O2->system": 50523.27,
+  "O2->support": 6.0,
+  "FairRoot->PLT stubs": -0.05,
+  "FairRoot->O2": 1174.97,
+  "FairRoot->ROOT": 14.0,
+  "FairRoot->geant4_vmc": 2511.52,
+  "O2->PLT stubs": 0.0,
+  "geant4_vmc->O2": 32933.35,
+  "geant4_vmc->Geant4": 10974.39,
+  "FairRoot->system": 77.76,
+  "geant4_vmc->system": 12.54,
+  "VGM->PLT stubs": 0.0,
+  "O2->Geant4": 131.71,
+  "geant4_vmc->ROOT": 81.04,
+  "O2->VecGeom": 9694.38,
+  "O2->FairRoot": 2771.2,
+  "O2->ROOT": 2786.25,
+  "O2->geant4_vmc": 259.69,
+  "Geant4->FairRoot": 0.0,
+  "geant4_vmc->FairRoot": 279.68,
+  "VMC->PLT stubs": 0.0,
+  "VMC->system": 0.0,
+  "FairRoot->support": 0.0,
+  "VecGeom->system": 4068.86,
+  "VMC->O2": 0.0,
+  "FairRoot->VMC": 0.0,
+  "system->VGM": 0.0,
+  "system->geant4_vmc": 0.0,
+  "geant4_vmc->VMC": 0.0,
+  "support->system": 54.0,
+  "support->O2": 0.0,
+  "VecGeom->ROOT": 0.0,
+  "VecGeom->PLT stubs": 0.0,
+  "other:libGeomPainter.so.6.36.10->PLT stubs": 0.0,
+  "system->FairRoot": 0.0
+ },
+ "plt_calls": {
+  "ROOT->system": 181.43,
+  "ROOT->ROOT": 6439.44,
+  "system->system": 48903.35,
+  "Geant4->system": 31470.05,
+  "O2->system": 49964.64,
+  "FairRoot->ROOT": 2.0,
+  "FairRoot->system": 77.76,
+  "geant4_vmc->system": 5.94,
+  "O2->support": 6.0,
+  "geant4_vmc->ROOT": 25.8,
+  "O2->ROOT": 2454.57,
+  "system->ROOT": 85.87,
+  "VMC->system": 0.0,
+  "FairRoot->support": 0.0,
+  "VecGeom->system": 4068.86,
+  "VecGeom->VecGeom": 1977.59,
+  "system->PLT stubs": 23.1,
+  "support->system": 51.0,
+  "support->support": 12.0
+ },
+ "top_pairs": [
+  [
+   "O2",
+   "system",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   "atan2",
+   32890.09
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4NystromRK4::Stepper",
+   "TG4CachedMagneticField::GetFieldValue",
+   20229.62
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4CachedMagneticField::GetFieldValue",
+   "o2::field::MagneticField::Field",
+   17721.09
+  ],
+  [
+   "O2",
+   "system",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   "__sincos_fma",
+   16649.47
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::Ac...",
+   "pow@@GLIBC_2.29",
+   6722.67
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::Ac...",
+   "TG4CachedMagneticField::GetFieldValue",
+   6108.03
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::Ac...",
+   "__memcpy_chk_avx_unaligned_erms",
+   5938.95
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4GEMProbability::CalcProbability",
+   "G4Exp",
+   5801.15
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4EventManager::DoProcessing",
+   "G4TouchableHistory::GetVolume",
+   5187.94
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4StepManager::CurrentVolID",
+   "G4PVReplica::IsMany",
+   5076.02
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4FieldTrack::LoadFromArray",
+   "__memcpy_avx_unaligned_erms",
+   5008.86
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4FieldTrack::LoadFromArray",
+   "__memset_avx2_unaligned_erms",
+   5008.86
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4GEMProbability::CalcProbability",
+   "G4Log",
+   4083.82
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4StepManager::GetCurrentPhysicalVolume",
+   "G4TouchableHistory::GetVolume",
+   2796.69
+  ],
+  [
+   "VecGeom",
+   "system",
+   "void vecgeom::BVHNavigator::CheckDaughterInters...",
+   "nextafter",
+   2671.51
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4WentzelOKandVIxSection::ComputeTransportCross...",
+   "G4Log",
+   2610.52
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SensitiveDetector::UserProcessHits",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   2545.02
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4StepManager::CurrentVolID",
+   "G4PVPlacement::GetCopyNo",
+   2538.01
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::Ad...",
+   "TG4CachedMagneticField::GetFieldValue",
+   2516.36
+  ],
+  [
+   "O2",
+   "FairRoot",
+   "o2::steer::O2MCApplicationBase::Stepping",
+   "FairMCApplication::Stepping",
+   2510.52
+  ],
+  [
+   "FairRoot",
+   "geant4_vmc",
+   "FairMCApplication::Stepping",
+   "TG4StepManager::CurrentVolID",
+   2510.52
+  ],
+  [
+   "O2",
+   "VecGeom",
+   "o2::simsetup::VecGeomG4Navigator::LocateGlobalP...",
+   "vecgeom::NavStateTuple::TopMatrixImpl",
+   2241.82
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4EvaporationProbability::ComputeProbability",
+   "G4Exp",
+   2064.37
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4PropagatorInField::ComputeStep",
+   "o2::simsetup::VecGeomG4Navigator::LocateGlobalP...",
+   1838.58
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4UPiNuclearCrossSection::Interpolate",
+   "G4PhysicsVector::Value",
+   1832.19
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4Transportation::PostStepDoIt",
+   "G4ReferenceCountedHandle<G4TouchableHistory>::o...",
+   1613.6
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4EmParameters::Instance",
+   1519.72
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4HadronicParameters::Instance",
+   1519.72
+  ],
+  [
+   "geant4_vmc",
+   "Geant4",
+   "TG4SteppingAction::ProcessTrackIfGeneralProcess",
+   "G4Gamma::Definition",
+   1519.72
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SteppingAction::UserSteppingAction",
+   "o2::steer::O2MCApplicationBase::TrackingRmax",
+   1519.72
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4SteppingAction::UserSteppingAction",
+   "o2::steer::O2MCApplicationBase::TrackingZmax",
+   1519.72
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4VSensitiveDetector::Hit",
+   "TG4SensitiveDetector::ProcessHits",
+   1519.72
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4EventManager::DoProcessing",
+   "TG4SteppingAction::UserSteppingAction",
+   1519.72
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4Transportation::AlongStepGetPhysicalInteracti...",
+   "G4Track::GetVolume",
+   1517.82
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4WentzelVIModel::SampleScattering",
+   "CLHEP::MixMaxRng::flat",
+   1408.79
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4StepLimiter::PostStepGetPhysicalInteractionLe...",
+   "G4TouchableHistory::GetVolume",
+   1382.46
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4StepLimiter::PostStepGetPhysicalInteractionLe...",
+   "TG4Limits::GetMaxAllowedStep",
+   1382.46
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4Transportation::SetTouchableInformation",
+   "G4TouchableHistory::GetVolume",
+   1382.46
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4Transportation::PostStepDoIt",
+   "o2::simsetup::VecGeomG4Navigator::LocateGlobalP...",
+   1382.46
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4MultiLevelLocator::EstimateIntersectionPoint",
+   "G4FieldTrack::G4FieldTrack",
+   1379.31
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4VIntersectionLocator::IntersectChord",
+   "o2::simsetup::VecGeomG4Navigator::ComputeStep",
+   1377.56
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4PropagatorInField::ComputeStep",
+   "G4FieldTrack::operator=",
+   1355.59
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4AblaRandom::flat",
+   "CLHEP::MixMaxRng::flat",
+   1322.18
+  ],
+  [
+   "O2",
+   "VecGeom",
+   "o2::simsetup::VecGeomG4Navigator::ComputeStep",
+   "vecgeom::cxx::VNavigatorHelper<vecgeom::cxx::BV...",
+   1284.71
+  ],
+  [
+   "geant4_vmc",
+   "O2",
+   "TG4VSpecialCuts::PostStepGetPhysicalInteraction...",
+   "G4TouchableHistory::GetVolume",
+   1268.35
+  ],
+  [
+   "Geant4",
+   "geant4_vmc",
+   "G4EventManager::DoProcessing",
+   "TG4VSpecialCuts::PostStepGetPhysicalInteraction...",
+   1268.35
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4InuclSpecialFunctions::generateWithRandomAngles",
+   "CLHEP::MixMaxRng::flat",
+   1253.86
+  ],
+  [
+   "Geant4",
+   "O2",
+   "G4UrbanMscModel::SampleScattering",
+   "G4Log",
+   1222.71
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4CascadeCheckBalance::collide",
+   "__dynamic_cast",
+   1173.08
+  ],
+  [
+   "Geant4",
+   "system",
+   "G4RKIntegrationDriver<G4MagIntegratorStepper>::...",
+   "pow@@GLIBC_2.29",
+   1170.16
+  ]
+ ],
+ "top_functions": [
+  [
+   "O2",
+   "o2::math_utils::Chebyshev3DCalc::Eval",
+   33070992.68
+  ],
+  [
+   "system",
+   "__ieee754_atan2_fma",
+   4024665.95
+  ],
+  [
+   "O2",
+   "o2::field::MagneticWrapperChebyshev::Field",
+   3230756.46
+  ],
+  [
+   "Geant4",
+   "G4NystromRK4::Stepper",
+   2634527.72
+  ],
+  [
+   "system",
+   "__sincos_fma",
+   2473449.45
+  ],
+  [
+   "O2",
+   "o2::field::MagneticWrapperChebyshev::findSolenoidSegment",
+   2311450.31
+  ],
+  [
+   "geant4_vmc",
+   "TG4CachedMagneticField::GetFieldValue",
+   1428608.34
+  ],
+  [
+   "Geant4",
+   "G4EventManager::DoProcessing",
+   1332103.64
+  ],
+  [
+   "VecGeom",
+   "void vecgeom::BVHNavigator::CheckDaughterIntersectionsImpl<false, vecgeom::BVHNavigator, true, double, double>",
+   1221861.67
+  ],
+  [
+   "O2",
+   "long long TMath::BinarySearch<float>",
+   1129580.3
+  ],
+  [
+   "O2",
+   "o2::field::MagneticField::Field",
+   1013197.68
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::MultiUnionImplementation>::SafetyToIn",
+   909650.42
+  ],
+  [
+   "system",
+   "__ieee754_pow_fma",
+   899581.82
+  ],
+  [
+   "Geant4",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::AccurateAdvance",
+   895185.58
+  ],
+  [
+   "system",
+   "atan2",
+   825996.55
+  ],
+  [
+   "VecGeom",
+   "double vecgeom::BVHNavigator::ComputeBVHSafetyImpl<false, vecgeom::cxx::BVHSafetyEstimator, double>",
+   820596.27
+  ],
+  [
+   "O2",
+   "G4Log",
+   745067.77
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::MultiUnionImplementation>::DistanceToIn",
+   582113.12
+  ],
+  [
+   "O2",
+   "o2::simsetup::VecGeomG4Navigator::LocateGlobalPointAndSetup",
+   542190.75
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::PolyhedronImplementation<",
+   505076.88
+  ],
+  [
+   "Geant4",
+   "G4IntegrationDriver<G4MagIntegratorStepper>::AdvanceChordLimited",
+   476539.9
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::TubeImplementation<vecgeom::cxx::TubeTypes::UniversalTube> >::Inside",
+   451667.69
+  ],
+  [
+   "O2",
+   "o2::simsetup::VecGeomG4Navigator::ComputeStep",
+   449570.45
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::MultiUnionImplementation>::Inside",
+   443365.37
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::TubeImplementation<vecgeom::cxx::TubeTypes::UniversalTube> >::DistanceToIn",
+   426921.12
+  ],
+  [
+   "O2",
+   "G4Exp",
+   423314.04
+  ],
+  [
+   "Geant4",
+   "G4MultiLevelLocator::EstimateIntersectionPoint",
+   395971.88
+  ],
+  [
+   "Geant4",
+   "G4GEMProbability::CalcProbability",
+   379849.87
+  ],
+  [
+   "O2",
+   "CLHEP::MixMaxRng::iterate",
+   366748.7
+  ],
+  [
+   "Geant4",
+   "G4FieldTrack::LoadFromArray",
+   355629.06
+  ],
+  [
+   "VecGeom",
+   "vecgeom::NavStateTuple::TopMatrixImpl",
+   346982.29
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::PolyhedronImplementation<",
+   345378.6
+  ],
+  [
+   "Geant4",
+   "G4PropagatorInField::ComputeStep",
+   337966.71
+  ],
+  [
+   "Geant4",
+   "G4Transportation::AlongStepGetPhysicalInteractionLength",
+   320341.17
+  ],
+  [
+   "Geant4",
+   "G4Mag_UsualEqRhs::EvaluateRhsGivenB",
+   319102.43
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::MultiUnionImplementation>::PlacedDistanceToOut",
+   308215.81
+  ],
+  [
+   "O2",
+   "o2::simsetup::VecGeomG4NavigatorBase::historyFromState",
+   301069.02
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::TBVHLevelLocator<false>::LevelLocateExclVol",
+   293265.54
+  ],
+  [
+   "Geant4",
+   "G4NucleiPropertiesTableAME12::GetIndex",
+   289358.57
+  ],
+  [
+   "Geant4",
+   "G4WentzelOKandVIxSection::SetupTarget",
+   287740.16
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::MultiUnionImplementation>::Contains",
+   285353.74
+  ],
+  [
+   "Geant4",
+   "G4Proton::Definition",
+   276954.12
+  ],
+  [
+   "Geant4",
+   "G4VEnergyLossProcess::PostStepGetPhysicalInteractionLength",
+   259758.5
+  ],
+  [
+   "Geant4",
+   "field_utils::relativeError2",
+   244141.76
+  ],
+  [
+   "FairRoot",
+   "FairMCApplication::Stepping",
+   237088.26
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::UnplacedVolumeImplHelper<vecgeom::cxx::PolyhedronImplementation<",
+   235306.01
+  ],
+  [
+   "VecGeom",
+   "vecgeom::cxx::SpecializedVolImplHelper<vecgeom::cxx::PolyconeImplementation<vecgeom::cxx::ConeTypes::UniversalCone> >::DistanceToIn",
+   235097.65
+  ],
+  [
+   "Geant4",
+   "G4WentzelVIModel::ComputeTransportXSectionPerVolume",
+   226036.64
+  ],
+  [
+   "Geant4",
+   "G4VIntersectionLocator::IntersectChord",
+   225300.14
+  ],
+  [
+   "ROOT",
+   "deflate_fast.lto_priv.0",
+   223441.01
+  ]
+ ]
+}
