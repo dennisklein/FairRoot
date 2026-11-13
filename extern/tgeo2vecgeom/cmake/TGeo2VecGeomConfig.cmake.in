@@ -1,0 +1,20 @@
+get_filename_component(TGeo2VecGeom_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+include(CMakeFindDependencyMacro)
+
+list(APPEND CMAKE_MODULE_PATH ${TGeo2VecGeom_CMAKE_DIR})
+
+# find_dependency, not find_package: it forwards the caller's QUIET/REQUIRED and, when a
+# dependency is missing, sets TGeo2VecGeom_FOUND to FALSE and returns instead of aborting
+# the consumer's configure step. This is what makes
+#   find_package(TGeo2VecGeom CONFIG QUIET)
+# genuinely optional on the consumer side.
+find_dependency(VecGeom)
+find_dependency(ROOT)
+
+list(REMOVE_AT CMAKE_MODULE_PATH -1)
+
+if(NOT TARGET TGeo2VecGeom::TGeo2VecGeom)
+    include("${TGeo2VecGeom_CMAKE_DIR}/TGeo2VecGeomTargets.cmake")
+endif()
+
+set(TGeo2VecGeom_LIBRARIES TGeo2VecGeom::TGeo2VecGeom)

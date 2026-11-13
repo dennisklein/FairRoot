@@ -1,0 +1,230 @@
+// This file is part of VecGeom and is distributed under the
+// conditions in the file LICENSE.txt in the top directory.
+// For the full list of authors see CONTRIBUTORS.txt and `git log`.
+
+/// \brief Declaration of the manager/registry class for VecGeom geometries.
+/// \file management/RootGeoManager.h
+/// \author created by Johannes de Fine Licht, Sandro Wenzel (CERN)
+
+#pragma once
+
+#include "VecGeomCompat.h"
+
+#include "VecGeom/base/Global.h"
+#include "VecGeom/base/TypeMap.h"
+#include "VecGeom/volumes/PlacedVolume.h"
+#include "VecGeom/management/GeoManager.h"
+#include <vector>
+#include <functional>
+
+#include "TGeoNode.h"
+class TGeoVolume;
+class TGeoMatrix;
+class TGeoTrap;
+class TGeoArb8;
+
+namespace vecgeom {
+inline namespace VECGEOM_IMPL_NAMESPACE {
+class LogicalVolume;
+class Transformation3D;
+class UnplacedBox;
+class VUnplacedVolume;
+class UnplacedGenTrap;
+} // namespace VECGEOM_IMPL_NAMESPACE
+} // namespace vecgeom
+
+namespace tgeo2vecgeom {
+
+/// \brief Class allowing to construct a VecGeom geometry from a ROOT/TGeo one
+///        and to lookup VecGeom instances from ROOT ones and vice versa.
+///
+/// \details Allows integration with ROOT geometries for compatibility reasons.
+///          Is not necessary for VecGeom library, and will only have source
+///          compiled if the VECGEOM_ROOT flag is set by the compiler, activated
+///          with -DROOT=ON in CMake. When VecGeom is compiled with specialization
+///          support, the conversion will return runtime-specialized versions.
+class RootGeoManager {
+
+private:
+  /** Remember pointer to generated world from imported ROOT geometry. */
+  vecgeom::VPlacedVolume const *fWorld;
+
+  vecgeom::BidirectionalTypeMap<unsigned int, TGeoNode const *> fPlacedVolumeMap;
+  vecgeom::BidirectionalTypeMap<vecgeom::VUnplacedVolume const *, TGeoShape const *> fUnplacedVolumeMap;
+  vecgeom::BidirectionalTypeMap<vecgeom::LogicalVolume const *, TGeoVolume const *> fLogicalVolumeMap;
+  vecgeom::BidirectionalTypeMap<vecgeom::Transformation3D const *, TGeoMatrix const *> fTransformationMap;
+
+  std::vector<TGeoNode const *> fTGeoNodeVector;
+
+  std::function<void *(TGeoMaterial const *)> fMaterialConversionLambda = [](TGeoMaterial const *) { return nullptr; };
+
+  /// What fMaterialConversionLambda returned for each converted volume, indexed
+  /// by the id() of the VecGeom logical volume. VecGeom 1 also stores this on
+  /// the logical volume itself, but VecGeom 2 dropped that slot, so the
+  /// association is kept here for both.
+  std::vector<void *> fMaterialPtrVector;
+
+  int fVerbose;
+
+  bool fFlattenAssemblies; // flag deciding whether we flatten assemblies (like G4 does)
+
+public:
+  /// Access singleton instance.
+  static RootGeoManager &Instance()
+  {
+    static RootGeoManager instance;
+    return instance;
+  }
+
+  /**
+   * @return Most recently generated world from ROOT geometry. Will return NULL
+   *         if no ROOT geometry has been imported.
+   * @sa LoadRootGeometry()
+   */
+  vecgeom::VPlacedVolume const *world() const { return fWorld; }
+
+  int GetVerboseLevel() const { return fVerbose; }
+
+  void SetFlattenAssemblies(bool b) { fFlattenAssemblies = b; }
+  bool GetFlattenAssemblies() const { return fFlattenAssemblies; }
+
+  /// Returns a TGeoNode corresponding to a given VecGeom placed volume p
+  TGeoNode const *tgeonode(vecgeom::VPlacedVolume const *p) const
+  {
+    if (p == nullptr) return nullptr;
+    return fTGeoNodeVector[p->id()];
+  }
+
+  /// Returns the VecGeom placed volume corresponding to a TGeoNode node
+  vecgeom::VPlacedVolume const *Lookup(TGeoNode const *node) const;
+
+  /// Get placed volume that corresponds to a TGeoNode
+  vecgeom::VPlacedVolume const *GetPlacedVolume(TGeoNode const *n) const
+  {
+    if (n == NULL) return NULL;
+    return (vecgeom::GeoManager::Instance().Convert(fPlacedVolumeMap[n]));
+  }
+
+  /// Returns the name of a VecGeom placed volume by querying the TGeo underlying object
+  char const *GetName(vecgeom::VPlacedVolume const *p) const { return tgeonode(p)->GetName(); }
+
+  /// Print a table of registered TGeoNodes (for debugging purposes)
+  void PrintNodeTable() const;
+
+  /// Sets a verbose level. Currently if > 0 some debug information will be printed.
+  void set_verbose(const int verbose) { fVerbose = verbose; }
+
+  /**
+   * Queries the global ROOT GeoManager for the top volume and recursively
+   * imports and converts to VecGeom geometry.
+   * Will register the imported ROOT geometry as the new world of the VecGeom
+   * GeoManager singleton.
+   *
+   *
+   * Requires an already initialized gGeoManager object in ROOT.
+   */
+  void LoadRootGeometry();
+
+  /**
+   * Same but can take a root file as input.
+   * Initializes gGeoManager object in ROOT at the same time.
+   */
+  void LoadRootGeometry(std::string);
+
+  /**
+   * Exports a VecGeom geometry to a ROOT geometry.
+   */
+  bool ExportToROOTGeometry(vecgeom::VPlacedVolume const *, std::string);
+
+  /**
+   * @brief Deletes the VecGeom geometry generated by this class.
+   */
+  void Clear();
+
+  /// This sets the base units to G4 style (in mm)
+  void EnableG4Units() { fUnitsInMM = true; }
+  /// This sets the base units to TGeo style (in cm)
+  void EnableTGeoUnits() { fUnitsInMM = false; }
+
+  /// Converts a TGeoNode to a VPlacedVolume, recursively converting daughters.
+  /// Will take care not to convert anything twice by checking the birectional
+  /// map between ROOT and VecGeom geometry. Usually all other Convert functions
+  /// are invoked from this one.
+  vecgeom::VPlacedVolume *Convert(TGeoNode const *const node);
+
+  /// Conversion function from a TGeoShape to a corresponding VecGeom VUnplacedVolume.
+  /// Shapes VecGeom cannot represent, and shapes it refuses to build from the
+  /// parameters TGeo gives us, are wrapped in an UnplacedRootVolume instead.
+  vecgeom::VUnplacedVolume *Convert(TGeoShape const *const shape);
+
+  /// Special conversion function from a TGeoVolumeAssembly
+  vecgeom::VUnplacedVolume *ConvertAssembly(TGeoVolume const *const shape);
+
+  /// Conversion function from a TGeoVolume to a corresponding VecGeom LogicalVolume
+  vecgeom::LogicalVolume *Convert(TGeoVolume const *const volume);
+
+  /// Conversion function from a TGeoMatrix to a corresponding VecGeom Transformation3D
+  vecgeom::Transformation3D *Convert(TGeoMatrix const *const trans);
+
+  /**
+   * This function allows to register a callback that is executed
+   * whenever the geometry conversion process encounters a TGeoMaterial.
+   *
+   * We provide this as VecGeom does not have itself a material class, but
+   * when the user still wants to associate a material to a logical volume.
+   */
+  void SetMaterialConversionHook(std::function<void *(TGeoMaterial const *)> &&f) { fMaterialConversionLambda = f; }
+
+  /**
+   * Returns whatever the material conversion hook returned for the ROOT material
+   * of the volume the given VecGeom logical volume was converted from, or
+   * nullptr if that volume did not come out of this converter.
+   *
+   * Use this rather than vecgeom::LogicalVolume::GetMaterialPtr(): the latter
+   * only exists in VecGeom 1.
+   */
+  void *GetMaterialPtr(vecgeom::LogicalVolume const *volume) const;
+
+  /// Conversion function from a VecGeom placed volume to a corresponding TGeoNode
+  TGeoNode *Convert(vecgeom::VPlacedVolume const *const node);
+
+  /// Conversion function from a VecGeom placed volume + logical volume to a corresponding TGeoNode
+  TGeoVolume *Convert(vecgeom::VPlacedVolume const *const, vecgeom::LogicalVolume const *const);
+
+  /// Conversion function from a VecGeom transformation to a corresponding TGeoMatrix
+  TGeoMatrix *Convert(vecgeom::Transformation3D const *const trans);
+
+private:
+  RootGeoManager()
+      : fWorld(NULL), fPlacedVolumeMap(), fUnplacedVolumeMap(), fLogicalVolumeMap(), fTransformationMap(), fVerbose(0),
+        fFlattenAssemblies(false)
+  {
+  }
+  RootGeoManager(RootGeoManager const &);
+  RootGeoManager &operator=(RootGeoManager const &);
+
+  /// The plain TGeoShape -> VUnplacedVolume dispatch behind Convert(TGeoShape).
+  /// Returns nullptr for an unknown shape and may throw for one VecGeom refuses
+  /// to build; Convert() turns both into the UnplacedRootVolume fallback.
+  vecgeom::VUnplacedVolume *ConvertShape(TGeoShape const *const shape);
+
+  // helper function to check TGeo trap for consistency / trap conversion
+  bool TGeoTrapIsDegenerate(TGeoTrap const *);
+  vecgeom::UnplacedGenTrap *ToUnplacedGenTrap(TGeoArb8 const *);
+
+  /// Internal helper function to post-adjust a converted transformation in certain cases
+  bool PostAdjustTransformation(vecgeom::Transformation3D *, TGeoNode const *,
+                                vecgeom::Transformation3D *adjustment) const;
+
+  // for the choice of units
+  bool fUnitsInMM = false;
+  // whether to instantiate VecGeom with mm as units (to be compliant with G4 for instance)
+  // if false, we will use cm (to be compliant with TGeo)
+
+  constexpr static double CMTOMM = 10.;
+
+  // return length unit
+  double LUnit() const { return fUnitsInMM ? CMTOMM : 1.; }
+};
+
+} // namespace tgeo2vecgeom

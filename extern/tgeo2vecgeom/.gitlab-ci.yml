@@ -1,0 +1,111 @@
+# Build TGeo2VecGeom against two VecGeom tags on EL9, using the ROOT and the
+# compiler from ALICE CVMFS. Same image, same ROOT, same flags in both jobs --
+# the only difference is which VecGeom tag is built, so a red job points at the
+# VecGeom tag rather than at the environment.
+
+stages:
+  - build
+
+variables:
+  VECGEOM_REPO: "https://gitlab.cern.ch/VecGeom/VecGeom.git"
+  ALIENV: "/cvmfs/alice.cern.ch/bin/alienv"
+  # ROOT from ALICE CVMFS; it also brings the GCC toolchain it was built with.
+  ROOT_PACKAGE: "ROOT::v6-36-10-alice3-1"
+  # This ROOT is a C++20 build, so both VecGeom and TGeo2VecGeom are built as C++20.
+  CXX_STANDARD: "20"
+  MAKE_JOBS: "8"
+
+.build_against_vecgeom:
+  stage: build
+  tags:
+    - cvmfs
+  image: cern/alma9-base
+  before_script:
+    # libX11 is not cosmetic: without it alienv aborts with
+    # "Unknown distribution release".
+    - dnf install -y environment-modules libX11 cmake make gcc gcc-c++ git which unzip
+    - eval "$($ALIENV printenv $ROOT_PACKAGE)"
+    # The ROOT module exports ROOTSYS and a CMAKE_PREFIX_PATH holding ROOT's own
+    # dependencies, but not ROOT itself -- find_package(ROOT) needs it added.
+    - export CMAKE_PREFIX_PATH="${ROOTSYS}:${CMAKE_PREFIX_PATH}"
+    - cmake --version && g++ --version && root-config --version --cflags
+  script:
+    # VECGEOM_TAG can be set explicitly to pin a job; otherwise take the highest
+    # release tag matching VECGEOM_TAG_FILTER. The regexp keeps plain vX.Y.Z tags
+    # only, which drops the -rc/-dev/-surfacedev pre-releases and the zero-padded
+    # v01.02.10 duplicates of the same commits.
+    - |
+      if [ -z "${VECGEOM_TAG}" ]; then
+        VECGEOM_TAG=$(git ls-remote --tags --refs "$VECGEOM_REPO" \
+          | sed 's:.*refs/tags/::' \
+          | grep -E '^v[1-9][0-9]*\.[0-9]+\.[0-9]+$' \
+          | grep -E "$VECGEOM_TAG_FILTER" \
+          | sort -V | tail -1)
+      fi
+      if [ -z "${VECGEOM_TAG}" ]; then
+        echo "no VecGeom tag matched filter '${VECGEOM_TAG_FILTER}'" >&2
+        exit 1
+      fi
+      export VECGEOM_TAG
+      echo "Building against VecGeom ${VECGEOM_TAG}"
+
+    # VECGEOM_ROOT=OFF on purpose: the in-tree ROOT converter is what this
+    # repository replaced. The Scalar backend drops the Vc dependency; nothing in
+    # TGeo2VecGeom's own sources depends on the backend.
+    - git clone --depth 1 --branch "$VECGEOM_TAG" "$VECGEOM_REPO" "${CI_BUILDS_DIR}/vecgeom-src"
+    - cmake -S "${CI_BUILDS_DIR}/vecgeom-src" -B "${CI_BUILDS_DIR}/vecgeom-build"
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_CXX_STANDARD=${CXX_STANDARD}
+        -DCMAKE_INSTALL_PREFIX="${CI_BUILDS_DIR}/vecgeom-install"
+        -DVECGEOM_BUILTIN_VECCORE=ON
+        -DVECGEOM_BACKEND=Scalar
+        -DVECGEOM_ROOT=OFF
+        -DVECGEOM_GDML=OFF
+        -DBUILD_TESTING=OFF
+    - cmake --build "${CI_BUILDS_DIR}/vecgeom-build" -j${MAKE_JOBS} --target install
+    - export CMAKE_PREFIX_PATH="${CI_BUILDS_DIR}/vecgeom-install:${CMAKE_PREFIX_PATH}"
+
+    - cmake -S . -B build
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DCMAKE_CXX_STANDARD=${CXX_STANDARD}
+        -DCMAKE_INSTALL_PREFIX="${CI_PROJECT_DIR}/install"
+    - cmake --build build -j${MAKE_JOBS}
+    - cmake --install build
+
+    # The installed CMake package must be usable by an outside consumer. This is
+    # what catches a non-relocatable export or a dependency that was not
+    # re-resolved through find_dependency(). Note the include prefix: the headers
+    # install into include/TGeo2VecGeom, so a consumer of the installed package
+    # writes "TGeo2VecGeom/RootGeoManager.h", not the in-tree "RootGeoManager.h".
+    - mkdir -p "${CI_BUILDS_DIR}/consumer"
+    - |
+      cat > "${CI_BUILDS_DIR}/consumer/CMakeLists.txt" <<'EOF'
+      cmake_minimum_required(VERSION 3.16)
+      project(tgeo2vecgeom_consumer CXX)
+      find_package(TGeo2VecGeom CONFIG REQUIRED)
+      add_executable(consumer consumer.cpp)
+      target_link_libraries(consumer PRIVATE TGeo2VecGeom::TGeo2VecGeom)
+      EOF
+    - |
+      cat > "${CI_BUILDS_DIR}/consumer/consumer.cpp" <<'EOF'
+      #include "TGeo2VecGeom/RootGeoManager.h"
+      int main() { return tgeo2vecgeom::RootGeoManager::Instance().world() == nullptr ? 0 : 1; }
+      EOF
+    - export CMAKE_PREFIX_PATH="${CI_PROJECT_DIR}/install:${CMAKE_PREFIX_PATH}"
+    - cmake -S "${CI_BUILDS_DIR}/consumer" -B "${CI_BUILDS_DIR}/consumer-build"
+        -DCMAKE_CXX_STANDARD=${CXX_STANDARD}
+    - cmake --build "${CI_BUILDS_DIR}/consumer-build" -j${MAKE_JOBS}
+    - echo "OK -- built and consumed TGeo2VecGeom against VecGeom ${VECGEOM_TAG}"
+
+# The 1.2 line is what ALICE currently ships on CVMFS.
+build:vecgeom-1.2:
+  extends: .build_against_vecgeom
+  variables:
+    VECGEOM_TAG_FILTER: '^v1\.2\.'
+
+# The newest VecGeom release, resolved at run time: this leg is the canary for a
+# release that breaks the converter.
+build:vecgeom-latest:
+  extends: .build_against_vecgeom
+  variables:
+    VECGEOM_TAG_FILTER: '.'
