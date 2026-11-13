@@ -1,0 +1,30 @@
+image: alpine
+
+variables:
+ BUILD_SITE: "GitLab CI"
+
+before_script:
+  - apk update
+  - apk upgrade
+  - apk add cmake make patch clang g++
+
+.script: &script
+  script:
+    - ctest -VV -S cmake/TestVecCore.cmake,SSE3
+
+stages:
+  - build
+
+g++:
+  stage: build
+  <<: *script
+  variables:
+    CC: gcc
+    CXX: g++
+
+clang:
+  stage: build
+  <<: *script
+  variables:
+    CC: clang
+    CXX: clang++

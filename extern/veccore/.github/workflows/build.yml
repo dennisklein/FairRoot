@@ -1,0 +1,67 @@
+name: GitHub Actions
+
+on: [push, pull_request]
+
+env:
+  BUILD_SITE: "GitHub Actions"
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: true
+      matrix:
+        compiler: [ gcc, clang ]
+        target: [ sse4.2, avx2 ]
+
+    env:
+      CC: ${{ matrix.compiler }}
+      CMAKE_ARGS: -DCMAKE_CXX_STANDARD=20
+
+    steps:
+    - uses: actions/checkout@master
+      with:
+        fetch-depth: 1
+
+    - name: Install dependencies
+      run: |
+        set -e
+        sudo apt-get update -y
+        sudo apt-get install -y cmake pkg-config libgd-dev ${{matrix.compiler}}
+
+    - name: CTest Build
+      run: env CC=${CC} CXX=${CC/g*/g++} ctest -VV -S cmake/TestVecCore.cmake,${{matrix.target}}
+
+  macos:
+    name: MacOS (arm64)
+    runs-on: macos-latest
+
+    env:
+      CMAKE_ARGS: -DCMAKE_CXX_STANDARD=20
+
+    steps:
+    - uses: actions/checkout@master
+      with:
+        fetch-depth: 1
+
+    - name: CTest Build
+      run: ctest -VV -S cmake/TestVecCore.cmake
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [ sse2, avx2 ]
+
+    steps:
+    - uses: actions/checkout@master
+      with:
+        fetch-depth: 1
+
+    - name: CTest Build
+      run: ctest -VV -S cmake/TestVecCore.cmake,${{matrix.target}}
