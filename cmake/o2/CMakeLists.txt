@@ -94,6 +94,20 @@ include(o2libs.cmake)
 # GENERATORS_WITH_TPCLOOPERS stays off: the TPC looper generator needs
 # ONNX Runtime and the CCDB, and the FV0 simulation does not use it.
 target_compile_definitions(O2Generators PUBLIC GENERATORS_WITH_PYTHIA8)
+# VecGeom navigation for Geant4 (G4.navmode=kVecGeom, T5b), as upstream:
+# only when TGeo2VecGeom and a VecGeom with BVHNavigatorV are found.
+find_package(TGeo2VecGeom CONFIG QUIET)
+if(TGeo2VecGeom_FOUND)
+  set(vg "${O2_SOURCE_DIR}/Detectors/gconfig/src")
+  target_sources(O2G4Setup PRIVATE ${vg}/VecGeomG4Map.cxx ${vg}/VecGeomChecks.cxx
+    ${vg}/VecGeomG4NavigatorBase.cxx ${vg}/VecGeomG4Navigator.cxx ${vg}/VecGeomG4PropagatingNavigator.cxx)
+  target_compile_definitions(O2G4Setup PRIVATE O2_WITH_VECGEOM)
+  target_link_libraries(O2G4Setup PRIVATE TGeo2VecGeom::TGeo2VecGeom)
+  message(STATUS "G4.navmode=kVecGeom: built")
+else()
+  message(STATUS "G4.navmode=kVecGeom: not built (no TGeo2VecGeom)")
+endif()
+
 # Upstream compiles the FairRoot copy with warnings off.
 target_compile_options(O2FairRootBase PRIVATE -w)
 

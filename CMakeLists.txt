@@ -121,6 +121,18 @@ flatsim_package(vgm DEPENDS geant4 root ARGS
   ${lib_kind} ${g4_static_hook}
   -DWITH_EXAMPLES=OFF -DINSTALL_EXAMPLES=OFF -DWITH_TEST=OFF)
 
+# VecGeom navigation for Geant4 (G4.navmode=kVecGeom, T5b). As alidist, but with
+# the scalar backend: the Vc backend would need one more package, and Geant4
+# asks VecGeom for one track at a time. VecGeom stays shared also with
+# FLATSIM_STATIC: TGeo2VecGeom is always a shared library, and a second
+# static copy in fv0sim would give two VecGeom geometry managers.
+flatsim_package(veccore ARGS -DBUILD_TESTING=OFF)
+flatsim_package(vecgeom DEPENDS veccore ARGS
+  -DBUILD_SHARED_LIBS=ON
+  -DVECGEOM_BACKEND=scalar -DVECGEOM_BUILTIN_VECCORE=OFF -DVECGEOM_GDML=OFF
+  -DBUILD_TESTING=OFF -DBENCHMARK=OFF)
+flatsim_package(tgeo2vecgeom DEPENDS vecgeom root ARGS -DTGEO2VECGEOM_BUILD_TESTS=OFF)
+
 flatsim_package(geant4_vmc DEPENDS geant4 vmc root vgm ARGS
   ${lib_kind}
   -DGeant4VMC_USE_VGM=ON
@@ -137,7 +149,7 @@ flatsim_package(tbb ARGS
   -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DTBB_STRICT=OFF)
 
 flatsim_package(o2 SOURCE_DIR "${CMAKE_SOURCE_DIR}/cmake/o2"
-  DEPENDS root vmc geant4 geant4_vmc pythia8 fairlogger fmt tbb boost ms_gsl
+  DEPENDS root vmc geant4 geant4_vmc pythia8 fairlogger fmt tbb boost ms_gsl tgeo2vecgeom
   ARGS
   -DO2_SOURCE_DIR=${ext}/o2
   -DFAIRMQ_SOURCE_DIR=${ext}/fairmq
