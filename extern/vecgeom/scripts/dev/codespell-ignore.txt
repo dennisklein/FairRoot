@@ -1,0 +1,14 @@
+CAHC
+CAHR
+Dout
+Gaus
+GaussianRandom
+alph
+GetTIn
+TBE
+aNumber
+adress
+kNo
+nd
+savin
+tht

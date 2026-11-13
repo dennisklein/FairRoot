@@ -1,0 +1,182 @@
+# VecGeomConfig.cmake
+# -------------------
+#
+# Config mode file for the VecGeom includes and libraries
+#
+# IMPORTED Targets
+# ^^^^^^^^^^^^^^^^
+#
+# This module defines the following `IMPORTED` targets:
+#
+# - VecGeom::vecgeom            - VecGeom library
+# - VecGeom::vgdml              - Present if the GDML parser component was built
+# - VecGeom::vecgeomcuda_static - Present if the CUDA backend was built.
+#                                 Static library containing all cuda-related parts of VecGeom with
+#                                 device code that can be linked/device-linked against if client code
+#                                 uses VecGeom device functions/kernels. It automatically provides the
+#                                 dependency to the vecgeom library.
+# - VecGeom::vecgeomcuda        - Present if the CUDA backend was built
+#                                 Shared library with same objects as VecGeom::vecgeomcuda_static and
+#                                 including a device link object. Non-CUDA using clients can link against
+#                                 this directly. CUDA using clients should prefer the static version.
+#
+# Result Variables
+# ^^^^^^^^^^^^^^^^
+#
+# This module defines the following variables either directly, or automatically
+# though CMake's find_package command.
+#
+# - VecGeom_FOUND                 - True if VecGeom was found.
+# - VecGeom_INCLUDE_DIRS          - Location of the VecGeom header files.
+# - VecGeom_LIBRARIES             - The VecGeom libraries
+#                                   Use of the ``IMPORTED`` targets described above should be preferred.
+# - VecGeom_shared_FOUND          - True if the VecGeom C++ library is shared.
+# - VecGeom_static_FOUND          - True if the VecGeom C++ library is static.
+# - VecGeom_GDML_FOUND            - True if the VecGeom GDML parser library is available.
+# - VecGeom_single_precision_FOUND - True if using single-precision floats
+# - VecGeom_CUDA_FOUND            - True if VecGeom was built with CUDA support.
+# - VecGeom_scalar_backend_FOUND  - True if the VecGeom backend is scalar.
+# - VecGeom_vector_backend_FOUND  - True if the VecGeom backend is vector.
+# - VecGeom_vc_backend_FOUND      - True if the VecGeom vector backend is Vc.
+#
+# - VecGeom_BUILTIN_VECCORE       - True if VecGeom was built with an internal version on VecCore.
+# - VecGeom_CXX_STANDARD          - ISO C++ Standard used to compile VecGeom (e.g. "17").
+# - VecGeom_VECTOR_ISA            - String holding the Instruction Set Architecture VecGeom
+#                                   was compiled against (e.g. "sse4.2"). The empty string
+#                                   if no explicit flag was used.
+# - VecGeom_CUDA_STANDARD         - CUDA/C++ Standard used to compile VecGeom's CUDA library (e.g. "17")
+#                                   Unset unless ``VecGeom_CUDA_FOUND`` is ``TRUE``.
+# - VecGeom_CUDA_ARCHITECTURES    - Value of ``CMAKE_CUDA_ARCHITECTURES`` used to compile/link
+#                                   VecGeom's CUDA library. Unset unless ``VecGeom_CUDA_FOUND`` is ``TRUE``.
+#
+# The ``VecGeom_<component>_FOUND`` variables provide support for component arguments
+# to ``find_package``, allowing consumers to require that the found VecGeom supports the component
+# i.e.
+#
+# .. code-block:: cmake
+#
+#   find_package(VecGeom REQUIRED <component1> ... <componentN>)
+#
+
+@PACKAGE_INIT@
+
+# Set up CMAKE paths so that RDC file can be included by downstream libraries
+get_filename_component(VECGEOM_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
+list(APPEND CMAKE_MODULE_PATH
+  "${VECGEOM_CMAKE_DIR}"
+)
+
+# Basic variables
+set_and_check(VECGEOM_INCLUDE_DIR "@PACKAGE_CONF_INCLUDE_DIR@")
+set(VECGEOM_INCLUDE_DIRS ${VECGEOM_INCLUDE_DIR})
+
+# Full version string
+set(VecGeom_VERSION_STRING "@VecGeom_VERSION_STRING@")
+
+@VECGEOM_EXPORT_VARIABLES@
+
+# C++ Standard used in build
+set(VecGeom_CXX_STANDARD "@CMAKE_CXX_STANDARD@")
+
+# Define `COMPONENTS` argument to `find_package` using VECGEOM_EXPORT_VARIABLES
+set(VecGeom_${VecGeom_BACKEND}_backend_FOUND TRUE)
+set(VecGeom_vector_backend_FOUND ${VecGeom_vc_backend_FOUND}) # Compatibility
+set(VecGeom_CUDA_FOUND ${VecGeom_ENABLE_CUDA})
+set(VecGeom_GDML_FOUND ${VecGeom_GDML})
+set(VecGeom_single_precision_FOUND ${VecGeom_SINGLE_PRECISION})
+
+set(VecGeom_shared_FOUND @BUILD_SHARED_LIBS@)
+if(VecGeom_shared_FOUND)
+  set(VecGeom_static_FOUND FALSE)
+else()
+  set(VecGeom_static_FOUND TRUE)
+endif()
+
+# Take default, but clear if it's "empty" as this is an internal "no flag supplied" case
+set(VecGeom_VECTOR_ISA ${VecGeom_VECTOR})
+if(VecGeom_VECTOR_ISA STREQUAL "empty")
+  unset(VecGeom_VECTOR_ISA)
+endif()
+
+# For refinding required dependencies
+include(CMakeFindDependencyMacro)
+
+# Always VecCore
+if(VecGeom_BUILTIN_VECCORE)
+  # Must find our builtin where we expect
+  find_dependency(VecCore @VecCore_VERSION@ NO_DEFAULT_PATH COMPONENTS @VecCore_COMPONENTS@ )
+else()
+  find_dependency(VecCore @VecCore_VERSION@ COMPONENTS @VecCore_COMPONENTS@)
+endif()
+
+# CUDA, if built
+if(VecGeom_CUDA_FOUND)
+  set(VecGeom_CUDA_STANDARD "@CMAKE_CUDA_STANDARD@")
+  set(VecGeom_CUDA_ARCHITECTURES "@CMAKE_CUDA_ARCHITECTURES@")
+  find_dependency(CUDAToolkit REQUIRED)
+endif()
+
+# GDML (Xerces-C), if built
+if(VecGeom_GDML_FOUND)
+  find_dependency(XercesC)
+endif()
+
+# Surface model support, if activated
+set(VecGeom_SURF_FOUND @VECGEOM_USE_SURF@)
+
+# DEPRECATED - ROOT only used for testing/benchmarking
+set(VecGeom_ROOT_FOUND ${VecGeom_ROOT})
+if(VecGeom_ROOT_FOUND)
+  find_dependency(ROOT)
+endif()
+
+# DEPRECATED - Geant4 only used for testing/benchmarking
+set(VecGeom_Geant4_FOUND ${VecGeom_GEANT4})
+if(VecGeom_Geant4_FOUND)
+  find_dependency(Geant4 @Geant4_VERSION@)
+endif()
+
+# Include our target definitions
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24" OR VecGeom_CUDA_FOUND)
+  include("${VECGEOM_CMAKE_DIR}/CudaRdcUtils.cmake")
+else()
+  function(cuda_rdc_add_library)
+    add_library(${ARGV})
+  endfunction()
+  function(cuda_rdc_target_include_directories)
+    target_include_directories(${ARGV})
+  endfunction()
+  function(cuda_rdc_target_link_libraries)
+    target_link_libraries(${ARGV})
+  endfunction()
+  function(cuda_rdc_install)
+    install(${ARGV})
+  endfunction()
+  function(cuda_rdc_set_target_properties)
+    set_target_properties(${ARGV})
+  endfunction()
+  function(cuda_rdc_target_sources)
+    target_sources(${ARGV})
+  endfunction()
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/VecGeomTargets.cmake")
+
+# Setup VECGEOM_LIBRARIES so that it should "work" for consumers
+# _not_ implementing their own kernels/device code.
+set(VECGEOM_LIBRARIES VecGeom::vecgeom)
+if(VecGeom_CUDA_FOUND)
+  if(TARGET VecGeom::vecgeomcuda)
+    list(APPEND VECGEOM_LIBRARIES VecGeom::vecgeomcuda)
+    set(VECGEOM_CUDA_STATIC_LIBRARY VecGeom::vecgeomcuda_static)
+  else()
+    # For backward compatibility
+    add_library(VecGeom::vecgeomcuda ALIAS VecGeom::vecgeom)
+    if(TARGET VecGeom::vecgeom_static)
+      add_library(VecGeom::vecgeomcuda_static ALIAS VecGeom::vecgeom_static)
+    else()
+      add_library(VecGeom::vecgeomcuda_static ALIAS VecGeom::vecgeom)
+    endif()
+  endif()
+endif()
+
+check_required_components(VecGeom)

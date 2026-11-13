@@ -1,0 +1,224 @@
+#ifndef VECGEOM_SURFACE_POLYHEDRONCONVERTER_H_
+#define VECGEOM_SURFACE_POLYHEDRONCONVERTER_H_
+
+#include "VecGeom/surfaces/conv/ConvHelper.h"
+
+#include "VecGeom/volumes/Polyhedron.h"
+
+namespace vgbrep {
+namespace conv {
+
+/// @brief Converter for Polyhedron
+/// @tparam Real_t Precision type
+/// @param upoly Polyhedron solid to be converted
+/// @param logical_id Id of the logical volume
+/// @return Conversion success
+template <typename Real_t>
+bool CreatePolyhedronSurfaces(vecgeom::UnplacedPolyhedron const &upoly, int logical_id, bool intersection = false)
+{
+  using Vector3D = vecgeom::Vector3D<vecgeom::Precision>;
+
+  int isurf;
+  std::vector<Vector3D> vertices;
+  int isurfZlast = -1;
+  LogicExpressionCPU logic; // OR logic: section0 | section1 | ... | sectionN
+  auto const &poly    = upoly.GetStruct();
+  size_t nplanes      = poly.fZPlanes.size();
+  size_t nseg         = nplanes - 1;
+  size_t sideCount    = poly.fSideCount;
+  auto phiStart       = poly.fPhiStart;
+  auto phiDelta       = poly.fPhiDelta;
+  bool smallerPi      = phiDelta < (vecgeom::kPi - vecgeom::kTolerance);
+  auto const &rMin    = poly.fRMin;
+  auto const &rMax    = poly.fRMax;
+  auto const &zPlanes = poly.fZPlanes;
+  vecgeom::Precision csphi, ssphi, cephi, sephi;
+
+  if (sideCount == 1) VECGEOM_VALIDATE(smallerPi, << "Polyhedron with one segment cannot have angle larger than pi!");
+
+  auto sidePhi            = phiDelta / sideCount;
+  auto cosHalfDeltaPhi    = vecgeom::Cos(0.5 * sidePhi);
+  vecgeom::Precision conv = 1. / cosHalfDeltaPhi;
+
+  // lambda to get the phi angle of the current side
+  auto getPhi = [&](size_t side) {
+    if (!poly.fHasPhiCutout && side == sideCount) {
+      side = 0;
+    }
+    return vecgeom::NormalizeAngle(phiStart + side * sidePhi);
+  };
+
+  auto getSinCos = [&](vecgeom::Precision sphi, vecgeom::Precision ephi) {
+    csphi = vecgeom::Cos(sphi);
+    ssphi = vecgeom::Sin(sphi);
+    cephi = vecgeom::Cos(ephi);
+    sephi = vecgeom::Sin(ephi);
+  };
+
+  // lambda to convert a full Z segment
+  auto convertZsegment = [&](size_t iseg) {
+    auto dz             = zPlanes[iseg + 1] - zPlanes[iseg];
+    auto realSeg        = dz > 0;
+    auto drI            = rMin[iseg + 1] - rMin[iseg];
+    auto drO            = rMax[iseg + 1] - rMax[iseg];
+    bool hasInnerRadius = rMin[iseg] > 0 || rMin[iseg + 1] > 0;
+    bool hasOuter       = realSeg || drO != 0;
+    bool hasInner       = hasInnerRadius && (realSeg || drI != 0);
+    bool hasPhi         = poly.fHasPhiCutout && realSeg;
+    if (!hasOuter && !hasInner && !hasPhi) return;
+
+    auto z1 = zPlanes[iseg];
+    auto z2 = zPlanes[iseg + 1];
+
+    if (realSeg) {
+      if (iseg > 0) logic.push_back(lor); // `OR` between sections
+      logic.push_back(lplus);             // '(' begin section logic
+    }
+
+    // Add section Z planes as limiters
+    // the logic is as follows: the first/last segments have a real surface on the bottom/top
+    // only for the middle segments that are real, virtual Z planes as limiters are needed.
+    isurf = isurfZlast;
+    if (realSeg) {
+      if (iseg > 0) {
+        logic.push_back(lnot);
+        logic.push_back(isurf);
+      }
+      if (iseg != (nseg - 1)) {
+        isurf = builder::CreateLocalSurface<Real_t>(
+            builder::CreateUnplacedSurface<Real_t>(SurfaceType::kPlanar), Frame{FrameType::kNoFrame},
+            vecgeom::Transformation3DMP<Precision>(0., 0., zPlanes[iseg + 1], 0., 0., 0.));
+        builder::AddSurfaceToShell<Real_t>(logical_id, isurf);
+        if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+        if (iseg > 0) logic.push_back(land);
+        logic.push_back(isurf);
+        isurfZlast = isurf;
+      }
+    }
+
+    // outer surfaces
+    if (hasOuter) {
+      for (size_t iside = 0; iside < sideCount; iside++) {
+        getSinCos(getPhi(iside), getPhi(iside + 1));
+        // corners of the outer surfaces
+        vertices = {{rMax[iseg] * conv * csphi, rMax[iseg] * conv * ssphi, z1},
+                    {rMax[iseg] * conv * cephi, rMax[iseg] * conv * sephi, z1},
+                    {rMax[iseg + 1] * conv * cephi, rMax[iseg + 1] * conv * sephi, z2},
+                    {rMax[iseg + 1] * conv * csphi, rMax[iseg + 1] * conv * ssphi, z2}};
+        isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+        if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+        if (realSeg) {
+          if (nseg > 1 || iside > 0) logic.push_back(land);
+          logic.push_back(isurf);
+          // Only a concave outer surface is embedding, since this is practically a boolean union.
+          auto is_concave = IsConvexConcave<vecgeom::Precision>(iseg, zPlanes, rMax, /*convex_check=*/0, nseg + 1);
+          if (!(is_concave)) builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+        } else {
+          builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+        }
+      }
+    }
+
+    // inner surfaces
+    if (hasInner) {
+      for (size_t iside = 0; iside < sideCount; iside++) {
+        getSinCos(getPhi(iside), getPhi(iside + 1));
+        vertices = {{rMin[iseg + 1] * conv * csphi, rMin[iseg + 1] * conv * ssphi, z2},
+                    {rMin[iseg + 1] * conv * cephi, rMin[iseg + 1] * conv * sephi, z2},
+                    {rMin[iseg] * conv * cephi, rMin[iseg] * conv * sephi, z1},
+                    {rMin[iseg] * conv * csphi, rMin[iseg] * conv * ssphi, z1}};
+        isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+        if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+        if (realSeg) {
+          if (iside == 0) {
+            logic.push_back(land);
+            logic.push_back(lplus);
+          } else {
+            logic.push_back(lor);
+          }
+          logic.push_back(isurf);
+          if (iside == sideCount - 1) {
+            logic.push_back(lminus);
+          }
+          // Only a convex inner surface is embedding, since this is practically a boolean union.
+          auto is_convex = IsConvexConcave<vecgeom::Precision>(iseg, zPlanes, rMin, /*convex_check=*/1, nseg + 1);
+          if (!(is_convex)) builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+        } else {
+          builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+        }
+      }
+    }
+
+    if (hasPhi) {
+      getSinCos(phiStart, phiStart + phiDelta);
+      vertices = {{rMax[iseg + 1] * conv * csphi, rMax[iseg + 1] * conv * ssphi, z2},
+                  {rMin[iseg + 1] * conv * csphi, rMin[iseg + 1] * conv * ssphi, z2},
+                  {rMin[iseg] * conv * csphi, rMin[iseg] * conv * ssphi, z1},
+                  {rMax[iseg] * conv * csphi, rMax[iseg] * conv * ssphi, z1}};
+      isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+      if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+      builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+      logic.push_back(land);
+      logic.push_back(lplus); // '('
+      logic.push_back(isurf);
+
+      vertices = {{rMax[iseg] * conv * cephi, rMax[iseg] * conv * sephi, z1},
+                  {rMin[iseg] * conv * cephi, rMin[iseg] * conv * sephi, z1},
+                  {rMin[iseg + 1] * conv * cephi, rMin[iseg + 1] * conv * sephi, z2},
+                  {rMax[iseg + 1] * conv * cephi, rMax[iseg + 1] * conv * sephi, z2}};
+      isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+      if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+      builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+      logic.push_back(smallerPi ? land : lor);
+      logic.push_back(isurf);
+      logic.push_back(lminus); // ')'
+    }
+
+    for (size_t iside = 0; iside < sideCount; iside++) {
+      getSinCos(getPhi(iside), getPhi(iside + 1));
+      // Add bottom frames
+      if (iseg == 0) {
+        vertices = {{rMin[iseg] * conv * cephi, rMin[iseg] * conv * sephi, z1},
+                    {rMax[iseg] * conv * cephi, rMax[iseg] * conv * sephi, z1},
+                    {rMax[iseg] * conv * csphi, rMax[iseg] * conv * ssphi, z1},
+                    {rMin[iseg] * conv * csphi, rMin[iseg] * conv * ssphi, z1}};
+        isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+        if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+        // the bottom surface may be degenerated
+        if (isurf >= 0) {
+          builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+          logic.push_back(land);
+          logic.push_back(isurf);
+        }
+      }
+
+      // Add top frames
+      if (iseg == (nseg - 1)) {
+        vertices = {{rMin[iseg + 1] * conv * csphi, rMin[iseg + 1] * conv * ssphi, z2},
+                    {rMax[iseg + 1] * conv * csphi, rMax[iseg + 1] * conv * ssphi, z2},
+                    {rMax[iseg + 1] * conv * cephi, rMax[iseg + 1] * conv * sephi, z2},
+                    {rMin[iseg + 1] * conv * cephi, rMin[iseg + 1] * conv * sephi, z2}};
+        isurf    = builder::CreateLocalSurfaceFromVertices<Real_t>(vertices, logical_id);
+        if (intersection) builder::GetSurface<Real_t>(isurf).fSkipConvexity = true;
+        // the top surface may be degenerated
+        if (isurf >= 0) {
+          builder::GetSurface<Real_t>(isurf).fEmbedding = false;
+          logic.push_back(land);
+          logic.push_back(isurf);
+        }
+      }
+    }
+
+    if (realSeg) logic.push_back(lminus); // ')' end section logic
+  };
+
+  for (size_t i = 0; i < nseg; ++i)
+    convertZsegment(i);
+
+  builder::AddLogicToShell<Real_t>(logical_id, logic);
+  return true;
+}
+
+} // namespace conv
+} // namespace vgbrep
+#endif

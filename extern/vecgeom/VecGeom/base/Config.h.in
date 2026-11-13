@@ -1,0 +1,121 @@
+/* ------------------------------ -*- C -*- --------------------------------*
+ * Copyright VecGeom contributors: see top-level LICENSE file for details
+ * SPDX-License-Identifier: Apache-2.0
+ *--------------------------------------------------------------------------*/
+/*!
+ * \file VecGeom/base/Config.h
+ */
+#ifndef VECGEOM_BASE_CONFIG_H_
+#define VECGEOM_BASE_CONFIG_H_
+
+/*
+ * Define numeric constants suitable for non-preprocessor use.
+ *
+ * These numeric values correspond to the 1-indexed enumerations in the CMakeLists.
+ * Starting with 1 also ensures the values are distinct from an undefined macro
+ * as read by the C preprocessor: `#if VECGEOM_PRECISION == VECGEOM_PRECISION_QUAD`
+ * is always false.
+ */
+#define VECGEOM_NAV_TUPLE 1
+#define VECGEOM_NAV_INDEX 2
+#define VECGEOM_NAV @VECGEOM_NAV_UPPER@
+
+#define VECGEOM_PRECISION_DOUBLE 1
+#define VECGEOM_PRECISION_SINGLE 2
+#define VECGEOM_PRECISION @VECGEOM_PRECISION_UPPER@
+#define VECGEOM_PRECISION_BVH @VECGEOM_PRECISION_BVH_UPPER@
+
+#define VECGEOM_BACKEND_SCALAR 1
+#define VECGEOM_BACKEND_VC 2
+#define VECGEOM_BACKEND @VECGEOM_BACKEND_UPPER@
+#define VECGEOM_ALIGNEDBASE_ALIGNMENT @VECGEOM_ALIGNEDBASE_ALIGNMENT@
+
+/* External library integration */
+#cmakedefine01 VECGEOM_USE_CUDA
+#cmakedefine01 VECGEOM_USE_ROOT
+#cmakedefine01 VECGEOM_USE_GEANT4
+#cmakedefine01 VECGEOM_USE_EMBREE
+#cmakedefine01 VECGEOM_USE_GDML
+
+/* Feature support */
+#cmakedefine01 VECGEOM_BUILD_SURFACE
+
+/* CUDA-related optimizations */
+#cmakedefine VECGEOM_CUDA_VOLUME_SPECIALIZATION
+#cmakedefine VECGEOM_QUADRILATERAL_ACCELERATION
+#cmakedefine VECGEOM_NO_SPECIALIZATION
+
+/* Volume optimizations */
+#cmakedefine VECGEOM_INPLACE_TRANSFORMATIONS
+#cmakedefine VECGEOM_PLANESHELL
+
+/* Navigation optimization and reporting */
+#define VECGEOM_NAVTUPLE_MAXDEPTH @VECGEOM_NAVTUPLE_MAXDEPTH@
+#define VECGEOM_NAVTABLE_WARN_MEMORY_MB @VECGEOM_NAVTABLE_WARN_MEMORY_MB@
+#cmakedefine VECGEOM_NAVTABLE_RECOMMEND
+#cmakedefine VECGEOM_NO_WRONGSIDE_CONV
+
+/* Testing, debugging, and profiling */
+#cmakedefine VECGEOM_DISTANCE_DEBUG
+/* TODO: VECGEOM_TEST_VTUNE does not affect the main source code and should only live in the test directory */
+#cmakedefine VECGEOM_TEST_VTUNE
+
+/*
+ * DEPRECATED feature macro: to be removed in v3.0.
+ * (Do not confuse this with the other VECGEOM_PRECISION_{X} which are numerical values.)
+ */
+#define VECGEOM_PRECISION_NAMESPACE vecgeom
+
+/* Backward compatibility macros: replace in a future MR
+ * and remove in V3.0 */
+#if VECGEOM_NAV == VECGEOM_NAV_INDEX
+#define VECGEOM_USE_NAVINDEX
+#elif VECGEOM_NAV == VECGEOM_NAV_TUPLE
+#define VECGEOM_USE_NAVTUPLE
+#else
+#error "VECGEOM_NAV is undefined"
+#endif
+
+#if VECGEOM_PRECISION == VECGEOM_PRECISION_SINGLE
+#define VECGEOM_SINGLE_PRECISION
+#elif VECGEOM_PRECISION != VECGEOM_PRECISION_DOUBLE
+#error "VECGEOM_PRECISION is undefined"
+#endif
+#if VECGEOM_PRECISION_BVH == VECGEOM_PRECISION_SINGLE
+#define VECGEOM_BVH_SINGLE
+#elif VECGEOM_PRECISION_BVH != VECGEOM_PRECISION_DOUBLE
+#error "VECGEOM_PRECISION_BVH is undefined"
+#endif
+
+#if VECGEOM_BACKEND == VECGEOM_BACKEND_SCALAR
+#define VECGEOM_SCALAR
+#elif VECGEOM_BACKEND == VECGEOM_BACKEND_VC
+#define VECGEOM_VC
+#else
+#error "VECGEOM_BACKEND is undefined"
+#endif
+
+#if VECGEOM_USE_CUDA
+#define VECGEOM_ENABLE_CUDA
+#endif
+#if VECGEOM_USE_ROOT
+#define VECGEOM_ROOT
+#endif
+#if VECGEOM_USE_GEANT4
+#define VECGEOM_GEANT4
+#endif
+#if VECGEOM_USE_EMBREE
+#define VECGEOM_EMBREE
+#endif
+#if VECGEOM_USE_GDML
+#define VECGEOM_GDML
+#endif
+
+#if VECGEOM_BUILD_SURFACE
+#define VECGEOM_USE_SURF
+#endif
+
+/* Since VecGeom 2.2: see https://gitlab.cern.ch/VecGeom/VecGeom/-/merge_requests/1471 */
+#define VECGEOM_NAVIGATION_INDEXED_BVH 1
+
+#endif /* VECGEOM_BASE_CONFIG_H_ */

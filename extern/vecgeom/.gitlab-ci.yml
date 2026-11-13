@@ -1,0 +1,175 @@
+image: registry.cern.ch/docker.io/ubuntu:jammy
+
+variables:
+  GIT_DEPTH: "0"
+  VECGEOM_CANONICAL_REPO: "https://gitlab.cern.ch/VecGeom/VecGeom.git"
+
+.fetch_canonical_tags: &fetch_canonical_tags
+  git fetch --force --prune "$VECGEOM_CANONICAL_REPO" '+refs/tags/*:refs/tags/*'
+
+# The stock ubuntu:jammy image points apt at archive.ubuntu.com/security.ubuntu.com,
+# which is occasionally slow or degraded from CI runners. Canonical's own
+# mirror-selection service (mirror://mirrors.ubuntu.com/mirrors.txt) resolved
+# straight back to archive.ubuntu.com from this network, so pin a verified,
+# full Ubuntu mirror instead: ETH Zurich mirrors jammy/jammy-updates/
+# jammy-security from the same host, and CERN peers well with the Swiss
+# academic network (SWITCH) that carries it.
+.use_ubuntu_mirror_fallback: &use_ubuntu_mirror_fallback
+  sed -i 's|http://archive.ubuntu.com/ubuntu|http://ubuntu.ethz.ch/ubuntu|; s|http://security.ubuntu.com/ubuntu|http://ubuntu.ethz.ch/ubuntu|' /etc/apt/sources.list
+
+stages:
+  - build
+
+precommit_mr:
+  stage: build
+  before_script:
+    - *use_ubuntu_mirror_fallback
+    - apt-get update -y && apt-get upgrade -y
+    - apt-get install -y git python3 python3-pip
+    - python3 -m pip install --no-cache-dir pre-commit
+  script:
+    - |
+      TARGET_BRANCH="${CI_DEFAULT_BRANCH:-master}"
+      git fetch origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"
+      CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT "origin/${TARGET_BRANCH}...${CI_COMMIT_SHA}")
+    - |
+      if [ -z "$CHANGED_FILES" ]; then
+        echo "No changed files in merge request diff."
+        exit 0
+      fi
+    - |
+      if pre-commit run --show-diff-on-failure --color=always --files $CHANGED_FILES ; then
+        echo "Pre-commit checks passed."
+        exit 0
+      fi
+    - |
+      git config --global user.email "noreply@gitlab.cern.ch"
+      git config --global user.name "Gitlab CI"
+      if [ -n "$(git status --porcelain)" ] ; then
+        # Local changes are present: upload as a patch
+        git commit -a --author "$CI_COMMIT_AUTHOR" -m "Apply pre-commit fixes"
+        PATCH_ARGS="--files $CHANGED_FILES --fixes-patch precommit-fixes.patch"
+      else
+        git commit --allow-empty -m "No autofix available"
+        PATCH_ARGS=""
+      fi
+    - git format-patch -1 --stdout > precommit-fixes.patch
+    - python3 scripts/process-precommit-mr.py $PATCH_ARGS
+    - exit 1
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - precommit-fixes.patch
+
+# performing the static analysis code check using a custom docker image with the llvm installation we need
+code_checks:
+  stage: build
+  before_script:
+    - *use_ubuntu_mirror_fallback
+    - apt update -y && apt-get upgrade -y
+    - apt install -y software-properties-common wget clang-14 libclang-14-dev clang-tidy-14 python3 python-is-python3 cmake git
+    - *fetch_canonical_tags
+  script:
+    - mkdir build && cd build
+    - CXX=clang++-14 cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_ROOT=OFF -DVECGEOM_GDML=OFF -DVECGEOM_TEST_STATIC_ANALYSIS=ON -DVECGEOM_BACKEND=Scalar
+    - make -j8
+    - ctest -j8 -V
+
+# normal build against a recent ROOT; using the ALICE software stack
+# Solid model with navigation index
+NOSURF_NAVINDEX_ROOT:
+   tags:
+     - cvmfs
+   image: cern/alma9-base
+   stage: build
+   before_script:
+     - yum install -y environment-modules libX11 cmake
+     - yum install -y unzip autoconf automake make gcc git harfbuzz-icu
+     - *fetch_canonical_tags
+     - eval $(/cvmfs/alice.cern.ch/bin/alienv printenv ROOT::v6-28-02-1)
+     - export VC_PATH=/cvmfs/alice.cern.ch/el9-x86_64/Packages/Vc/1.4.1-13
+     - export CMAKE_PREFIX_PATH=${VC_PATH}:${CMAKE_PREFIX_PATH}
+   script:
+     - mkdir build && cd build
+     - cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_BACKEND=Vc -DVECGEOM_USE_SURF=OFF -DVECGEOM_NAV="index" -DVECGEOM_ROOT=ON -DVECGEOM_GDML=OFF
+       # for the moment exclude the E03 test since downloading E03 root geometry has problems on the CI machine
+     - make -j8 VERBOSE=ON && ctest --output-on-failure -j8 -E E03
+
+# Solid model with navigation tuple
+NOSURF_NAVTUPLE_ROOT_GDML:
+   tags:
+     - cvmfs
+   image: cern/alma9-base
+   stage: build
+   before_script:
+     - dnf install -y epel-release
+     - yum install -y environment-modules libX11 cmake
+     - yum install -y unzip autoconf automake make gcc git harfbuzz-icu xerces-c-devel
+     - *fetch_canonical_tags
+     - eval $(/cvmfs/alice.cern.ch/bin/alienv printenv ROOT::v6-28-02-1)
+     - export VC_PATH=/cvmfs/alice.cern.ch/el9-x86_64/Packages/Vc/1.4.1-13
+     - export CMAKE_PREFIX_PATH=${VC_PATH}:${CMAKE_PREFIX_PATH}
+   script:
+     - mkdir build && cd build
+     - cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_BACKEND=Vc -DVECGEOM_USE_SURF=OFF -DVECGEOM_NAV="tuple" -DVECGEOM_ROOT=ON -DVECGEOM_GDML=ON
+       # for the moment exclude the E03 test since downloading E03 root geometry has problems on the CI machine
+     - make -j8 VERBOSE=ON && ctest --output-on-failure -j8 -E E03
+
+# build for VECGEOM_GDML=ON (using the cvmfs ALICE software stack: TODO: convert to project/sft...)
+NOSURF_NAVINDEX_ROOT_GDML:
+   tags:
+     - cvmfs
+   image: cern/alma9-base
+   stage: build
+   before_script:
+     - dnf install -y epel-release
+     - yum install -y environment-modules libX11 cmake
+     - yum install -y unzip autoconf automake make gcc git harfbuzz-icu xerces-c-devel
+     - *fetch_canonical_tags
+     - eval $(/cvmfs/alice.cern.ch/bin/alienv printenv ROOT::v6-28-02-1)
+     - export VC_PATH=/cvmfs/alice.cern.ch/el9-x86_64/Packages/Vc/1.4.1-13
+     - export CMAKE_PREFIX_PATH=${VC_PATH}:${CMAKE_PREFIX_PATH}
+   script:
+     - mkdir build && cd build
+     - cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_BACKEND=Vc -DVECGEOM_USE_SURF=OFF -DVECGEOM_NAV="index" -DVECGEOM_ROOT=ON -DVECGEOM_GDML=ON
+       # for the moment exclude the E03 test since downloading E03 root geometry has problems on the CI machine
+     - make -j8 VERBOSE=ON && ctest --output-on-failure -j8 -E E03
+
+# build for USING_NAVINDEX=ON and VECGEOM_GDML=ON (using the cvmfs ALICE software stack: TODO: convert to project/sft...)
+SURF_NAVINDEX_ROOT_GDML_BENCH_COVERAGE:
+   tags:
+     - cvmfs
+   image: cern/alma9-base
+   stage: build
+   before_script:
+     - dnf install -y epel-release
+     - yum install -y environment-modules libX11 cmake
+     - yum install -y unzip autoconf automake make gcc git harfbuzz-icu xerces-c-devel
+     - *fetch_canonical_tags
+     - eval $(/cvmfs/alice.cern.ch/bin/alienv printenv ROOT::v6-28-02-1)
+     - export VC_PATH=/cvmfs/alice.cern.ch/el9-x86_64/Packages/Vc/1.4.1-13
+     - export CMAKE_PREFIX_PATH=${VC_PATH}:${CMAKE_PREFIX_PATH}
+   script:
+     - mkdir build && cd build
+     - cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_BACKEND=Scalar -DVECGEOM_USE_SURF=ON -DVECGEOM_NAV="index" -DVECGEOM_ROOT=ON -DVECGEOM_GDML=ON -DVECGEOM_TEST_BENCHMARK=ON -DVECGEOM_TEST_COVERAGE=ON
+       # for the moment exclude the E03 test since downloading E03 root geometry has problems on the CI machine
+     - make -j8 VERBOSE=ON && ctest --output-on-failure -j8 -E E03
+
+# build for VECGEOM_USE_SURF=ON  VECGEOM_USE_NAVTUPLE=ON  VECGEOM_NAVTUPLE_MAXDEPTH=4 and VECGEOM_GDML=ON
+SURF_NAVTUPLE4_GDML_BENCH_COVERAGE:
+   tags:
+     - cvmfs
+   image: cern/alma9-base
+   stage: build
+   before_script:
+     - dnf install -y epel-release
+     - yum install -y environment-modules libX11 cmake
+     - yum install -y unzip autoconf automake make gcc git harfbuzz-icu xerces-c-devel
+     - *fetch_canonical_tags
+     - eval $(/cvmfs/alice.cern.ch/bin/alienv printenv ROOT::v6-28-02-1)
+   script:
+     - mkdir build && cd build
+     - cmake .. -DVECGEOM_BUILTIN_VECCORE=ON -DVECGEOM_BACKEND=Scalar -DVECGEOM_USE_SURF=ON -DVECGEOM_NAV="tuple" -DVECGEOM_NAVTUPLE_MAXDEPTH=4 -DVECGEOM_GDML=ON -DVECGEOM_TEST_BENCHMARK=ON -DVECGEOM_TEST_COVERAGE=ON
+       # for the moment exclude the E03 test since downloading E03 root geometry has problems on the CI machine
+     - make -j8 VERBOSE=ON && ctest --output-on-failure -j8 -E E03

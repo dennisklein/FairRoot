@@ -1,0 +1,299 @@
+// This file is part of VecGeom and is distributed under the
+// conditions in the file LICENSE.txt in the top directory.
+// For the full list of authors see CONTRIBUTORS.txt and `git log`.
+
+/// @file source/UnplacedTet.cpp
+/// @author Raman Sehgal, Evgueni Tcherniaev
+
+#include "VecGeom/volumes/UnplacedTet.h"
+#include "VecGeom/management/VolumeFactory.h"
+#include "VecGeom/volumes/SpecializedTet.h"
+#include "VecGeom/base/RNG.h"
+#ifndef VECCORE_CUDA
+#include "VecGeom/volumes/utilities/BoundingEnvelope.h"
+#endif
+#include <stdio.h>
+namespace vecgeom {
+inline namespace VECGEOM_IMPL_NAMESPACE {
+
+#ifndef VECCORE_CUDA
+namespace {
+
+/// Add the exact tetrahedron as one convex envelope piece.
+void AddTetEnvelope(BoundingEnvelope &envelope, Vector3D<Precision> const *vertices)
+{
+  constexpr int face_counts[]    = {3, 3, 3, 3};
+  constexpr int face_indices[]   = {0, 1, 2, 0, 3, 1, 0, 2, 3, 1, 3, 2};
+  constexpr int face_index_count = sizeof(face_indices) / sizeof(face_indices[0]);
+  envelope.AddLocalConvexPolyhedron(vertices, 4, face_indices, face_index_count, face_counts, 4);
+}
+
+} // namespace
+#endif
+
+VECCORE_ATT_HOST_DEVICE
+UnplacedTet::UnplacedTet()
+{
+  // default constructor
+  fGlobalConvexity = true;
+  ComputeBBox();
+}
+
+VECCORE_ATT_HOST_DEVICE
+UnplacedTet::UnplacedTet(const Vector3D<Precision> &p0, const Vector3D<Precision> &p1, const Vector3D<Precision> &p2,
+                         const Vector3D<Precision> &p3)
+    : fTet(p0, p1, p2, p3)
+{
+  fGlobalConvexity = true;
+  ComputeBBox();
+}
+
+VECCORE_ATT_HOST_DEVICE
+void UnplacedTet::Extent(Vector3D<Precision> &aMin, Vector3D<Precision> &aMax) const
+{
+  /* Returns the full 3D cartesian extent of the solid.
+  ** TODO : Logic to calculate the extent of Tet and assign it to aMin and aMax
+  */
+  aMin = aMax = fTet.fVertex[0];
+  for (int i = 1; i < 4; ++i) {
+    aMin.x() = Min(aMin.x(), fTet.fVertex[i].x());
+    aMin.y() = Min(aMin.y(), fTet.fVertex[i].y());
+    aMin.z() = Min(aMin.z(), fTet.fVertex[i].z());
+
+    aMax.x() = Max(aMax.x(), fTet.fVertex[i].x());
+    aMax.y() = Max(aMax.y(), fTet.fVertex[i].y());
+    aMax.z() = Max(aMax.z(), fTet.fVertex[i].z());
+  }
+}
+
+#ifndef VECCORE_CUDA
+bool UnplacedTet::CalculateClippedExtent(Axis axis, VoxelLimits const &limits, Transformation3D const &transform,
+                                         Precision &min, Precision &max) const
+{
+  BoundingEnvelope envelope;
+  AddTetEnvelope(envelope, fTet.fVertex);
+  return envelope.CalculateExtent(axis, limits, transform, min, max);
+}
+#endif
+
+Vector3D<Precision> UnplacedTet::SamplePointOnSurface() const
+{
+  /* TODO : Logic to sample point on the surface of Tet
+  **
+  ** Return the sample Vector3D<Precision> point
+  **
+  ** Vector3D<Precision> point = <Logic to sample point on the surface of Tet>
+  **
+  ** return point
+  */
+  // Set areas
+  //
+  Precision sface[4];
+  for (int i = 0; i < 4; ++i) {
+    int i0   = (i + 0) % 4;
+    int i1   = (i + 1) % 4;
+    int i2   = (i + 2) % 4;
+    sface[i] = 0.5 * ((fTet.fVertex[i1] - fTet.fVertex[i0]).Cross(fTet.fVertex[i2] - fTet.fVertex[i0])).Mag();
+  }
+  for (int i = 1; i < 4; ++i) {
+    sface[i] += sface[i - 1];
+  }
+
+  // Select face
+  //
+  Precision select = sface[3] * RNG::Instance().uniform(); // G4UniformRand();
+  int k            = 3;
+  if (select <= sface[2]) k = 2;
+  if (select <= sface[1]) k = 1;
+  if (select <= sface[0]) k = 0;
+
+  // Generate point
+  //
+  int i0      = (k + 0) % 4;
+  int i1      = (k + 1) % 4;
+  int i2      = (k + 2) % 4;
+  Precision u = RNG::Instance().uniform();
+  Precision v = RNG::Instance().uniform();
+  if (u + v > 1.) {
+    u = 1. - u;
+    v = 1. - v;
+  }
+  return (1. - u - v) * fTet.fVertex[i0] + u * fTet.fVertex[i1] + v * fTet.fVertex[i2];
+}
+
+std::string UnplacedTet::GetEntityType() const { return "Tet\n"; }
+
+VECCORE_ATT_HOST_DEVICE
+void UnplacedTet::GetParametersList(int, Precision *aArray) const
+{
+  // TODO : Set the aArray elements
+}
+
+// VECCORE_ATT_HOST_DEVICE
+std::ostream &UnplacedTet::StreamInfo(std::ostream &os) const
+// Definition taken from UTet
+{
+  int oldprc = os.precision(16);
+  os << "-----------------------------------------------------------\n"
+     //  << "     *** Dump for solid - " << GetName() << " ***\n"
+     //  << "     ===================================================\n"
+
+     << " Solid type: UTet\n"
+     << " Parameters: \n"
+
+     //    << "       Anchor Point: " << fTet.fAnchor << " mm \n"
+     //    << "       Point P2: " << fTet.fP2 << " mm \n"
+     //    << "       Point P3: " << fTet.fP3 << " mm \n"
+     //    << "       Point P4: " << fTet.fP4 << " mm \n"
+     << "-----------------------------------------------------------\n";
+  os.precision(oldprc);
+
+  return os;
+}
+
+VECCORE_ATT_HOST_DEVICE
+void UnplacedTet::Print() const
+{
+  auto const &vtx = fTet.fVertex;
+  printf("UnplacedTet {V0=(%.2f, %.2f, %.2f), V1=(%.2f, %.2f, %.2f), V2=(%.2f, %.2f, %.2f), V3=(%.2f, %.2f, %.2f)}\n",
+         vtx[0].x(), vtx[0].y(), vtx[0].z(), vtx[1].x(), vtx[1].y(), vtx[1].z(), vtx[2].x(), vtx[2].y(), vtx[2].z(),
+         vtx[3].x(), vtx[3].y(), vtx[3].z());
+}
+
+void UnplacedTet::Print(std::ostream &os) const
+{
+  auto const &vtx = fTet.fVertex;
+  os << "UnplacedTet {"
+     << "V0=(" << vtx[0].x() << "; " << vtx[0].y() << "; " << vtx[0].z() << "), "
+     << "V1=(" << vtx[1].x() << "; " << vtx[1].y() << "; " << vtx[1].z() << "), "
+     << "V2=(" << vtx[2].x() << "; " << vtx[2].y() << "; " << vtx[2].z() << "), "
+     << "V3=(" << vtx[3].x() << "; " << vtx[3].y() << "; " << vtx[3].z() << ") }\n";
+}
+
+#ifndef VECCORE_CUDA
+SolidMesh *UnplacedTet::CreateMesh3D(Transformation3D const &trans, const size_t nFaces) const
+{
+  SolidMesh *sm = new SolidMesh();
+  sm->ResetMesh(4, 4);
+  sm->SetVertices(fTet.fVertex, 4);
+  sm->TransformVertices(trans);
+
+  Vector3D<Precision> n0 =
+      (sm->GetVertices()[1] - sm->GetVertices()[0]).Cross(sm->GetVertices()[2] - sm->GetVertices()[0]);
+  Vector3D<Precision> n1 =
+      (sm->GetVertices()[2] - sm->GetVertices()[1]).Cross(sm->GetVertices()[3] - sm->GetVertices()[1]);
+  Vector3D<Precision> n2 =
+      (sm->GetVertices()[3] - sm->GetVertices()[2]).Cross(sm->GetVertices()[0] - sm->GetVertices()[2]);
+  Vector3D<Precision> n3 =
+      (sm->GetVertices()[0] - sm->GetVertices()[3]).Cross(sm->GetVertices()[1] - sm->GetVertices()[3]);
+
+  if (n0.Dot(sm->GetVertices()[3] - sm->GetVertices()[0]) > 0) {
+    sm->AddPolygon(3, {1, 0, 2}, true);
+  } else {
+    sm->AddPolygon(3, {0, 1, 2}, true);
+  }
+
+  if (n1.Dot(sm->GetVertices()[0] - sm->GetVertices()[1]) > 0) {
+    sm->AddPolygon(3, {2, 1, 3}, true);
+  } else {
+    sm->AddPolygon(3, {1, 2, 3}, true);
+  }
+  if (n2.Dot(sm->GetVertices()[1] - sm->GetVertices()[2]) > 0) {
+    sm->AddPolygon(3, {3, 2, 0}, true);
+  } else {
+    sm->AddPolygon(3, {2, 3, 0}, true);
+  }
+  if (n3.Dot(sm->GetVertices()[2] - sm->GetVertices()[3]) > 0) {
+    sm->AddPolygon(3, {0, 3, 1}, true);
+  } else {
+    sm->AddPolygon(3, {3, 0, 1}, true);
+  }
+
+  return sm;
+}
+#endif
+
+#ifndef VECCORE_CUDA
+VPlacedVolume *UnplacedTet::Create(LogicalVolume const *const logical_volume,
+                                   Transformation3D const *const transformation, VPlacedVolume *const placement)
+{
+  if (placement) {
+    new (placement) SpecializedTet(logical_volume, transformation);
+    return placement;
+  }
+  return new SpecializedTet(logical_volume, transformation);
+}
+
+VPlacedVolume *UnplacedTet::SpecializedVolume(LogicalVolume const *const volume,
+                                              Transformation3D const *const transformation,
+                                              VPlacedVolume *const placement) const
+{
+  return VolumeFactory::CreateByTransformation<UnplacedTet>(volume, transformation, placement);
+}
+#else
+
+VECCORE_ATT_DEVICE
+VPlacedVolume *UnplacedTet::Create(LogicalVolume const *const logical_volume,
+                                   Transformation3D const *const transformation, const int id, const int copy_no,
+                                   const int child_id, VPlacedVolume *const placement)
+{
+  if (placement) {
+    new (placement) SpecializedTet(logical_volume, transformation, id, copy_no, child_id);
+    return placement;
+  }
+  return new SpecializedTet(logical_volume, transformation, id, copy_no, child_id);
+}
+
+VECCORE_ATT_DEVICE
+VPlacedVolume *UnplacedTet::SpecializedVolume(LogicalVolume const *const volume,
+                                              Transformation3D const *const transformation, const int id,
+                                              const int copy_no, const int child_id,
+                                              VPlacedVolume *const placement) const
+{
+  return VolumeFactory::CreateByTransformation<UnplacedTet>(volume, transformation, id, copy_no, child_id, placement);
+}
+
+#endif
+
+#ifdef VECGEOM_CUDA_INTERFACE
+
+DevicePtr<cuda::VUnplacedVolume> UnplacedTet::CopyToGpu(DevicePtr<cuda::VUnplacedVolume> const in_gpu_ptr) const
+{
+  // Copy vertices on GPU, then create the object
+
+  Precision *p0 = AllocateOnGpu<Precision>(3 * sizeof(Precision));
+  Precision *p1 = AllocateOnGpu<Precision>(3 * sizeof(Precision));
+  Precision *p2 = AllocateOnGpu<Precision>(3 * sizeof(Precision));
+  Precision *p3 = AllocateOnGpu<Precision>(3 * sizeof(Precision));
+
+  vecgeom::CopyToGpu(&fTet.fVertex[0].x(), p0, 3 * sizeof(Precision));
+  vecgeom::CopyToGpu(&fTet.fVertex[1].x(), p1, 3 * sizeof(Precision));
+  vecgeom::CopyToGpu(&fTet.fVertex[2].x(), p2, 3 * sizeof(Precision));
+  vecgeom::CopyToGpu(&fTet.fVertex[3].x(), p3, 3 * sizeof(Precision));
+
+  DevicePtr<cuda::VUnplacedVolume> gpugentet = CopyToGpuImpl<UnplacedTet>(in_gpu_ptr, p0, p1, p2, p3);
+  FreeFromGpu(p0);
+  FreeFromGpu(p1);
+  FreeFromGpu(p2);
+  FreeFromGpu(p3);
+
+  return gpugentet;
+}
+
+DevicePtr<cuda::VUnplacedVolume> UnplacedTet::CopyToGpu() const { return CopyToGpuImpl<UnplacedTet>(); }
+
+#endif // VECGEOM_CUDA_INTERFACE
+
+} // namespace VECGEOM_IMPL_NAMESPACE
+
+#ifdef VECCORE_CUDA
+
+namespace cxx {
+
+template size_t DevicePtr<cuda::UnplacedTet>::SizeOf();
+template void DevicePtr<cuda::UnplacedTet>::Construct(Precision *, Precision *, Precision *, Precision *) const;
+
+} // namespace cxx
+
+#endif
+} // namespace vecgeom

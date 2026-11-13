@@ -1,0 +1,295 @@
+#ifndef VECGEOM_SURFACE_SOLIDCONVERTER_H_
+#define VECGEOM_SURFACE_SOLIDCONVERTER_H_
+
+#include "VecGeom/surfaces/Model.h"
+
+#include "VecGeom/surfaces/conv/BoxConverter.h"
+#include "VecGeom/surfaces/conv/TubeConverter.h"
+#include "VecGeom/surfaces/conv/CutTubeConverter.h"
+#include "VecGeom/surfaces/conv/EllipticalTubeConverter.h"
+#include "VecGeom/surfaces/conv/ParallelepipedConverter.h"
+#include "VecGeom/surfaces/conv/ConeConverter.h"
+#include "VecGeom/surfaces/conv/PolyconeConverter.h"
+#include "VecGeom/surfaces/conv/TorusConverter.h"
+#include "VecGeom/surfaces/conv/SExtrudedConverter.h"
+#include "VecGeom/surfaces/conv/TrdConverter.h"
+#include "VecGeom/surfaces/conv/TrapezoidConverter.h"
+#include "VecGeom/surfaces/conv/GenTrapConverter.h"
+#include "VecGeom/surfaces/conv/PolyhedronConverter.h"
+#include "VecGeom/surfaces/conv/BooleanConverter.h"
+#include "VecGeom/surfaces/conv/ScaledConverter.h"
+#include "VecGeom/surfaces/conv/TetConverter.h"
+#include "VecGeom/surfaces/conv/SphereConverter.h"
+#include "VecGeom/volumes/ScaledShape.h"
+
+namespace vgbrep {
+namespace conv {
+
+/// @brief Dispatcher to different solid converters
+/// @tparam Real_t Precision type
+/// @param solid Unplaced solid to be converted
+/// @param volId Logical volume id
+/// @param localtrans Local transformation, used only for Boolean volumes
+/// @return Conversion success
+template <typename Real_t>
+bool CreateSolidSurfaces(vecgeom::VUnplacedVolume const *solid, int volId,
+                         TransformationMP<Real_t> *localtrans = nullptr, bool intersection = false)
+{
+  bool success{true};
+  auto &cpudata     = CPUsurfData<Real_t>::Instance();
+  auto const &shell = cpudata.fShells[volId];
+  auto isurf_first  = shell.fSurfaces.size();
+
+  auto createSurfacesLocal = [](vecgeom::VUnplacedVolume const *solid, int volId, bool intersection = false) {
+    auto box = dynamic_cast<vecgeom::UnplacedBox const *>(solid);
+    if (box) return conv::CreateBoxSurfaces<Real_t>(*box, volId, intersection);
+
+    auto tube = dynamic_cast<vecgeom::UnplacedTube const *>(solid);
+    if (tube) return conv::CreateTubeSurfaces<Real_t>(*tube, volId, intersection);
+
+    auto etube = dynamic_cast<vecgeom::UnplacedEllipticalTube const *>(solid);
+    if (etube) return conv::CreateEllipticalTubeSurfaces<Real_t>(*etube, volId, intersection);
+
+    auto cuttube = dynamic_cast<vecgeom::UnplacedCutTube const *>(solid);
+    if (cuttube) return conv::CreateTubeSurfaces<Real_t>(*cuttube, volId, intersection);
+
+    auto para = dynamic_cast<vecgeom::UnplacedParallelepiped const *>(solid);
+    if (para) return conv::CreateParallelepipedSurfaces<Real_t>(*para, volId, intersection);
+
+    auto cone = dynamic_cast<vecgeom::UnplacedCone const *>(solid);
+    if (cone) return conv::CreateConeSurfaces<Real_t>(*cone, volId, intersection);
+
+    auto polycone = dynamic_cast<vecgeom::UnplacedPolycone const *>(solid);
+    if (polycone) return conv::CreatePolyconeSurfaces<Real_t>(*polycone, volId, intersection);
+
+    auto torus = dynamic_cast<vecgeom::UnplacedTorus2 const *>(solid);
+    if (torus) return conv::CreateTorusSurfaces<Real_t>(*torus, volId, intersection);
+
+    auto xtru = dynamic_cast<vecgeom::UnplacedSExtruVolume const *>(solid);
+    if (xtru) return conv::CreateSExtrudedSurfaces<Real_t>(*xtru, volId, intersection);
+
+    auto trd = dynamic_cast<vecgeom::UnplacedTrd const *>(solid);
+    if (trd) return conv::CreateTrdSurfaces<Real_t>(*trd, volId, intersection);
+
+    auto trap = dynamic_cast<vecgeom::UnplacedTrapezoid const *>(solid);
+    if (trap) return conv::CreateTrapezoidSurfaces<Real_t>(*trap, volId, intersection);
+
+    auto gentrap = dynamic_cast<vecgeom::UnplacedGenTrap const *>(solid);
+    if (gentrap) return conv::CreateGenTrapSurfaces<Real_t>(*gentrap, volId);
+
+    auto tet = dynamic_cast<vecgeom::UnplacedTet const *>(solid);
+    if (tet) return conv::CreateTetSurfaces<Real_t>(*tet, volId, intersection);
+
+    auto polyhedron = dynamic_cast<vecgeom::UnplacedPolyhedron const *>(solid);
+    if (polyhedron) return conv::CreatePolyhedronSurfaces<Real_t>(*polyhedron, volId, intersection);
+
+    auto scaled = dynamic_cast<vecgeom::UnplacedScaledShape const *>(solid);
+    if (scaled) return conv::CreateScaledSurfaces<Real_t>(*scaled, volId, intersection);
+
+    auto bstruct = vecgeom::BooleanHelper::GetBooleanStruct(solid);
+    if (bstruct) return conv::CreateBooleanSurfaces<Real_t>(*bstruct, volId, intersection);
+
+    auto multi = dynamic_cast<vecgeom::UnplacedMultiUnion const *>(solid);
+    if (multi) return conv::CreateMultiUnionSurfaces<Real_t>(*multi, volId, intersection);
+
+    auto sphere = dynamic_cast<vecgeom::UnplacedSphere const *>(solid);
+    if (sphere) return conv::CreateSphereSurfaces<Real_t>(*sphere, volId, intersection);
+
+    auto orb = dynamic_cast<vecgeom::UnplacedOrb const *>(solid);
+    if (orb) return conv::CreateSphereSurfaces<Real_t>(*orb, volId, intersection);
+
+    // Create a placeholder solid to allow execution to continue
+    double capacity = solid->Capacity();
+    VECGEOM_LOG(error) << "CreateSolidSurfaces: solid type not supported " << *solid
+                       << " replacing with sphere with equal capacity " << capacity;
+    double radius = std::cbrt(capacity / (4.0 / 3.0 * 3.14159265358979323846));
+    vecgeom::UnplacedOrb temp_orb(radius);
+    conv::CreateSphereSurfaces<Real_t>(temp_orb, volId, intersection);
+
+    return false;
+  };
+
+  success = createSurfacesLocal(solid, volId, intersection);
+
+  // If there is a local transformation, apply it to all surfaces
+  if (success && localtrans) {
+    auto isurf_last = shell.fSurfaces.size();
+    for (size_t i = isurf_first; i < isurf_last; ++i) {
+      auto &surf = cpudata.fLocalSurfaces[shell.fSurfaces[i]];
+      TransformationMP<Real_t> trans(*localtrans);
+      if (!surf.fTrans.IsIdentity()) {
+        trans.MultiplyFromRight(surf.fTrans);
+      }
+      surf.fTrans = trans;
+    }
+  }
+  return success;
+}
+
+/// @brief Converter for scaled solids
+/// @tparam Real_t Precision type
+/// @param scaled Scaled solid to be converted
+/// @param logical_id Id of the logical volume
+/// @return Conversion success
+template <typename Real_t>
+bool CreateScaledSurfaces(vecgeom::UnplacedScaledShape const &scaled, int logical_id, bool intersection)
+{
+  auto const &vec_scale = scaled.GetScale().Scale();
+  if (!ApproxEqualVector(vec_scale, vecgeom::Vector3D<vecgeom::Precision>{1, 1, -1})) {
+    VECGEOM_LOG(error) << "UnplacedScaledShape having scale " << vec_scale << " not supported";
+    return false;
+  }
+  auto success = CreateSolidSurfaces<Real_t>(scaled.UnscaledShape(), logical_id, /*localtrans=*/nullptr, intersection);
+  // Reflect all framed surfaces held by the shell
+  auto &cpudata     = CPUsurfData<Real_t>::Instance();
+  auto const &shell = cpudata.fShells[logical_id];
+  for (int lsurf_id : shell.fSurfaces) {
+    FramedSurface<Precision, TransformationMP<Precision>> &lsurf = cpudata.fLocalSurfaces[lsurf_id];
+    auto const &trans                                            = lsurf.fTrans;
+    // Reflect the framed surface
+    TransformationMP<Precision> scalez(0, 0, 0, 0, 0, 0, 1, 1, -1);
+    TransformationMP<Precision> refl_trans = trans * scalez;
+    lsurf.fTrans                           = refl_trans;
+  }
+  return success;
+}
+
+// Finalize the entire Boolean expression once, after all constituents have
+// appended their surfaces and logic (including nested MultiUnions).
+template <typename Real_t>
+void FinalizeBooleanLogic(int logical_id)
+{
+  auto &cpudata = CPUsurfData<Real_t>::Instance();
+  // Finalize logic expression
+  auto &crtlogic = cpudata.fShells[logical_id].fLogic;
+  vgbrep::logichelper::LogicExpressionConstruct lc(crtlogic);
+  lc.Simplify(crtlogic);
+
+  // Assign logic id to each surface
+  for (auto id : cpudata.fShells[logical_id].fSurfaces) {
+    cpudata.fLocalSurfaces[id].fEmbedding = false;
+    // Set the logic id for Boolean surfaces
+    if (logichelper::is_negated(id, crtlogic))
+      cpudata.fLocalSurfaces[id].fLogicId = -id;
+    else
+      cpudata.fLocalSurfaces[id].fLogicId = id;
+  }
+
+  vgbrep::logichelper::insert_jumps(crtlogic);
+  cpudata.fShells[logical_id].fSimplified = true;
+}
+
+/// @brief Convert a Boolean solid, then finalize its surface logic.
+/// @tparam Real_t Precision type.
+/// @param bstruct Boolean structure to convert.
+/// @param logical_id Destination logical volume id.
+/// @param intersection Whether the solid belongs to an intersection.
+/// @return False if a constituent cannot be converted.
+template <typename Real_t>
+bool CreateBooleanSurfaces(vecgeom::BooleanStruct const &bstruct, int logical_id, bool intersection)
+{
+  if (!AppendLogicTo<Real_t>(bstruct, TransformationMP<Real_t>(), logical_id, intersection)) return false;
+  FinalizeBooleanLogic<Real_t>(logical_id);
+  return true;
+}
+
+/// @brief Convert a MultiUnion as the union of its transformed component surfaces.
+/// @tparam Real_t Precision type.
+/// @param multi MultiUnion to convert.
+/// @param logical_id Destination logical volume id.
+/// @param intersection Whether the solid belongs to an intersection.
+/// @return False for an empty union or an unsupported constituent.
+template <typename Real_t>
+bool CreateMultiUnionSurfaces(vecgeom::UnplacedMultiUnion const &multi, int logical_id, bool intersection)
+{
+  if (!AppendLogicTo<Real_t>(multi, TransformationMP<Real_t>(), logical_id, intersection)) return false;
+  FinalizeBooleanLogic<Real_t>(logical_id);
+  return true;
+}
+
+template <typename Real_t>
+bool AppendLogicTo(vecgeom::UnplacedMultiUnion const &multi, TransformationMP<Real_t> const &trans, int logical_id,
+                   bool intersection)
+{
+  auto &logic = CPUsurfData<Real_t>::Instance().fShells[logical_id].fLogic;
+  for (size_t i = 0; i < multi.GetNumberOfSolids(); ++i) {
+    if (i) logic.push_back(lor);
+    logic.push_back(lplus);
+    auto const *placed = multi.GetNode(i);
+    TransformationMP<Real_t> frame(trans);
+    frame.MultiplyFromRight(*placed->GetTransformation());
+    auto const *solid = placed->GetUnplacedVolume();
+    bool success;
+    if (auto const *boolean = vecgeom::BooleanHelper::GetBooleanStruct(solid))
+      success = AppendLogicTo<Real_t>(*boolean, frame, logical_id, intersection);
+    else if (auto const *nested = dynamic_cast<vecgeom::UnplacedMultiUnion const *>(solid))
+      success = AppendLogicTo<Real_t>(*nested, frame, logical_id, intersection);
+    else
+      success = CreateSolidSurfaces<Real_t>(solid, logical_id, &frame, intersection);
+    if (!success) return false;
+    logic.push_back(lminus);
+  }
+  return multi.GetNumberOfSolids() != 0;
+}
+
+template <typename Real_t>
+bool AppendLogicTo(vecgeom::BooleanStruct const &bstruct, TransformationMP<Real_t> const &trans, int logical_id,
+                   bool intersection)
+{
+  bool success  = true;
+  auto &cpudata = CPUsurfData<Real_t>::Instance();
+  auto &logic   = cpudata.fShells[logical_id].fLogic;
+  intersection |= bstruct.fOp == vecgeom::kIntersection;
+  // left node
+  // open parenthesis
+  logic.push_back(lplus);
+  vecgeom::Transformation3DMP<Real_t> tr_left(trans);
+  tr_left.MultiplyFromRight(*bstruct.fLeftVolume->GetTransformation());
+  auto const unplaced_left = bstruct.fLeftVolume->GetUnplacedVolume();
+  auto bstruct_left        = vecgeom::BooleanHelper::GetBooleanStruct(unplaced_left);
+  if (bstruct_left)
+    success = AppendLogicTo<Real_t>(*bstruct_left, tr_left, logical_id);
+  else if (auto const *multi = dynamic_cast<vecgeom::UnplacedMultiUnion const *>(unplaced_left))
+    success = AppendLogicTo<Real_t>(*multi, tr_left, logical_id, intersection);
+  else
+    success = CreateSolidSurfaces<Real_t>(unplaced_left, logical_id, &tr_left, intersection);
+  if (!success) return false;
+  // close parenthesis
+  logic.push_back(lminus);
+
+  // operator
+  switch (bstruct.fOp) {
+  case vecgeom::kUnion:
+    logic.push_back(lor);
+    break;
+  case vecgeom::kIntersection:
+    logic.push_back(land);
+    break;
+  case vecgeom::kSubtraction:
+    logic.push_back(land);
+    logic.push_back(lnot);
+    break;
+  };
+
+  // right node
+  // open parenthesis
+  logic.push_back(lplus);
+  vecgeom::Transformation3DMP<Real_t> tr_right(trans);
+  tr_right.MultiplyFromRight(*bstruct.fRightVolume->GetTransformation());
+  auto const unplaced_right = bstruct.fRightVolume->GetUnplacedVolume();
+  auto bstruct_right        = vecgeom::BooleanHelper::GetBooleanStruct(unplaced_right);
+  if (bstruct_right)
+    success = AppendLogicTo<Real_t>(*bstruct_right, tr_right, logical_id);
+  else if (auto const *multi = dynamic_cast<vecgeom::UnplacedMultiUnion const *>(unplaced_right))
+    success = AppendLogicTo<Real_t>(*multi, tr_right, logical_id, intersection);
+  else
+    success = CreateSolidSurfaces<Real_t>(unplaced_right, logical_id, &tr_right, intersection);
+  if (!success) return false;
+  // close parenthesis
+  logic.push_back(lminus);
+  return true;
+}
+
+} // namespace conv
+} // namespace vgbrep
+#endif
