@@ -1,0 +1,3 @@
+label,cpu_ms_per_event,err,fixed_cpu_s,maxrss_mb,vs_first_pct
+baseline,24.516,0.392,2.135,356.6,0.0
+t2b-vecgeom,11.29,0.16,1.777,356.6,-53.9
