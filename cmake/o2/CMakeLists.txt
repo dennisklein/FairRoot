@@ -103,6 +103,12 @@ if(TGeo2VecGeom_FOUND)
     ${vg}/VecGeomG4NavigatorBase.cxx ${vg}/VecGeomG4Navigator.cxx ${vg}/VecGeomG4PropagatingNavigator.cxx)
   target_compile_definitions(O2G4Setup PRIVATE O2_WITH_VECGEOM)
   target_link_libraries(O2G4Setup PRIVATE TGeo2VecGeom::TGeo2VecGeom)
+  # The VecGeom geometry itself is built by DetectorsBase (GeometryManager).
+  # The TGeo-only simulation does not need GeometryManager.cxx, so it is in
+  # the closure only with VecGeom.
+  target_sources(O2DetectorsBase PRIVATE "${O2_SOURCE_DIR}/Detectors/Base/src/GeometryManager.cxx")
+  target_compile_definitions(O2DetectorsBase PRIVATE O2_WITH_VECGEOM)
+  target_link_libraries(O2DetectorsBase PRIVATE TGeo2VecGeom::TGeo2VecGeom)
   message(STATUS "G4.navmode=kVecGeom: built")
 else()
   message(STATUS "G4.navmode=kVecGeom: not built (no TGeo2VecGeom)")

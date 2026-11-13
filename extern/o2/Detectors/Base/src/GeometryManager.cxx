@@ -1,0 +1,826 @@
+// Copyright 2019-2020 CERN and copyright holders of ALICE O2.
+// See https://alice-o2.web.cern.ch/copyright for details of the copyright holders.
+// All rights not expressly granted are reserved.
+//
+// This software is distributed under the terms of the GNU General Public
+// License v3 (GPL Version 3), copied verbatim in the file "COPYING".
+//
+// In applying this license CERN does not waive the privileges and immunities
+// granted to it by virtue of its status as an Intergovernmental Organization
+// or submit itself to any jurisdiction.
+
+/// \file GeometryManager.cxx
+/// \brief Implementation of the GeometryManager class
+
+#include <fairlogger/Logger.h> // for LOG
+#include <TCollection.h>       // for TIter
+#include <TFile.h>
+#include <TGeoMatrix.h>       // for TGeoHMatrix
+#include <TGeoNavigator.h>    // for TGeoNavigator
+#include <TGeoNode.h>         // for TGeoNode
+#include <TGeoPhysicalNode.h> // for TGeoPhysicalNode, TGeoPNEntry
+#include <string>
+#include <cassert>
+#include <cstddef> // for NULL
+#include <numeric>
+
+#include "DetectorsBase/GeometryManager.h"
+#include "DetectorsBase/GeometryManagerParam.h"
+#include "DetectorsCommonDataFormats/AlignParam.h"
+#include "CommonUtils/NameConf.h"
+#include "DetectorsBase/Aligner.h"
+
+#ifdef O2_WITH_VECGEOM
+#include "TGeo2VecGeom/RootGeoManager.h"
+#include <VecGeom/base/Version.h>
+#include <VecGeom/management/GeoManager.h>
+#include <VecGeom/management/ABBoxManager.h>
+#include <VecGeom/management/BVHManager.h>
+#include <VecGeom/navigation/GlobalLocator.h>
+#include <VecGeom/navigation/NavigationState.h>
+#include <VecGeom/navigation/NewSimpleNavigator.h>
+#include <VecGeom/navigation/BVHNavigator.h>
+#include <VecGeom/navigation/SimpleLevelLocator.h>
+#if VECGEOM_VERSION >= 0x020000
+#include <VecGeom/navigation/SimpleABBoxLevelLocator.h>
+#else
+#include <VecGeom/navigation/BVHLevelLocator.h>
+#endif
+#include <VecGeom/navigation/VNavigator.h>
+#include <VecGeom/volumes/LogicalVolume.h>
+#include <mutex>
+// The BVH navigator of the VNavigator family, which Geant4 navigation needs on every volume.
+#if __has_include(<VecGeom/navigation/BVHNavigatorV.h>)
+#define O2_VECGEOM_HAS_BVH_VNAVIGATOR
+#include <VecGeom/navigation/BVHNavigatorV.h>
+#include <VecGeom/navigation/BVHLevelLocator.h>
+#include <VecGeom/navigation/BVHSafetyEstimator.h>
+#include <VecGeom/navigation/SimpleSafetyEstimator.h>
+#endif
+#endif
+
+using namespace o2::detectors;
+using namespace o2::base;
+
+/// Implementation of GeometryManager, the geometry manager class which interfaces to TGeo and
+/// the look-up table mapping unique volume indices to symbolic volume names. For that, it
+/// collects several static methods
+std::mutex GeometryManager::sTGMutex;
+
+//______________________________________________________________________
+Bool_t GeometryManager::getOriginalMatrix(const char* symname, TGeoHMatrix& m)
+{
+  m.Clear();
+  if (!gGeoManager || !gGeoManager->IsClosed()) {
+    LOG(error) << "No active geometry or geometry not yet closed!";
+    ;
+    return kFALSE;
+  }
+  std::lock_guard<std::mutex> guard(sTGMutex);
+  if (!gGeoManager->GetListOfPhysicalNodes()) {
+    LOG(warning) << "gGeoManager doesn't contain any aligned nodes!";
+
+    if (!gGeoManager->cd(symname)) {
+      LOG(error) << "Volume path " << symname << " not valid!";
+      return kFALSE;
+    } else {
+      m = *gGeoManager->GetCurrentMatrix();
+      return kTRUE;
+    }
+  }
+
+  TGeoPNEntry* pne = gGeoManager->GetAlignableEntry(symname);
+  const char* path = nullptr;
+
+  if (pne) {
+    m = *pne->GetGlobalOrig();
+    return kTRUE;
+  } else {
+    LOG(warning) << "The symbolic volume name " << symname
+                 << "does not correspond to a physical entry. Using it as a volume path!";
+    path = symname;
+  }
+
+  return getOriginalMatrixFromPath(path, m);
+}
+
+//______________________________________________________________________
+Bool_t GeometryManager::getOriginalMatrixFromPath(const char* path, TGeoHMatrix& m)
+{
+  m.Clear();
+
+  if (!gGeoManager || !gGeoManager->IsClosed()) {
+    LOG(error) << "Can't get the original global matrix! gGeoManager doesn't exist or it is still opened!";
+    return kFALSE;
+  }
+  std::lock_guard<std::mutex> guard(sTGMutex);
+  if (!gGeoManager->CheckPath(path)) {
+    LOG(error) << "Volume path " << path << " not valid!";
+    return kFALSE;
+  }
+
+  TIter next(gGeoManager->GetListOfPhysicalNodes());
+  gGeoManager->cd(path);
+
+  while (gGeoManager->GetLevel()) {
+    TGeoPhysicalNode* physNode = nullptr;
+    next.Reset();
+    TGeoNode* node = gGeoManager->GetCurrentNode();
+
+    while ((physNode = (TGeoPhysicalNode*)next())) {
+      if (physNode->GetNode() == node) {
+        break;
+      }
+    }
+
+    TGeoMatrix* lm = nullptr;
+    if (physNode) {
+      lm = physNode->GetOriginalMatrix();
+      if (!lm) {
+        lm = node->GetMatrix();
+      }
+    } else {
+      lm = node->GetMatrix();
+    }
+
+    m.MultiplyLeft(lm);
+
+    gGeoManager->CdUp();
+  }
+  return kTRUE;
+}
+
+//______________________________________________________________________
+TGeoHMatrix* GeometryManager::getMatrix(TGeoPNEntry* pne)
+{
+  // Get the global transformation matrix for a given PNEntry
+  // by quering the TGeoManager
+
+  if (!gGeoManager || !gGeoManager->IsClosed()) {
+    LOG(error) << "Can't get the global matrix! gGeoManager doesn't exist or it is still opened!";
+    return nullptr;
+  }
+
+  // if matrix already known --> return it
+  TGeoPhysicalNode* pnode = pne->GetPhysicalNode();
+  if (pnode) {
+    return pnode->GetMatrix();
+  }
+
+  // otherwise calculate it from title and attach via TGeoPhysicalNode
+  pne->SetPhysicalNode(new TGeoPhysicalNode(pne->GetTitle()));
+  return pne->GetPhysicalNode()->GetMatrix();
+}
+
+//______________________________________________________________________
+TGeoHMatrix* GeometryManager::getMatrix(const char* symname)
+{
+  // Get the global transformation matrix for a given alignable volume
+  //  identified by its symbolic name 'symname' by quering the TGeoManager
+
+  if (!gGeoManager || !gGeoManager->IsClosed()) {
+    LOG(error) << "No active geometry or geometry not yet closed!";
+    return nullptr;
+  }
+
+  TGeoPNEntry* pne = gGeoManager->GetAlignableEntry(symname);
+  if (!pne) {
+    return nullptr;
+  }
+
+  return getMatrix(pne);
+}
+
+//______________________________________________________________________
+const char* GeometryManager::getSymbolicName(DetID detid, int sensid)
+{
+  /**
+   * Get symoblic name of sensitive volume sensid of detector detid
+   **/
+  int id = getSensID(detid, sensid);
+  TGeoPNEntry* pne = gGeoManager->GetAlignableEntryByUID(id);
+  if (!pne) {
+    LOG(error) << "Failed to find alignable entry with index " << id << ": Det" << detid << " Sens.Vol:" << sensid << ") !";
+    return nullptr;
+  }
+  return pne->GetName();
+}
+
+TGeoPNEntry* GeometryManager::getPNEntry(DetID detid, Int_t sensid)
+{
+  /**
+   * Get PN Entry of sensitive volume sensid of detector detid
+   **/
+  int id = getSensID(detid, sensid);
+  TGeoPNEntry* pne = gGeoManager->GetAlignableEntryByUID(id);
+  if (!pne) {
+    LOG(error) << "The sens.vol " << sensid << " of det " << detid << " does not correspond to a physical entry!";
+  }
+  return pne;
+}
+
+//______________________________________________________________________
+TGeoHMatrix* GeometryManager::getMatrix(DetID detid, Int_t sensid)
+{
+  /**
+   * Get position matrix (aligned) of sensitive volume sensid of detector detid. Slow
+   **/
+  static TGeoHMatrix matTmp;
+  TGeoPNEntry* pne = getPNEntry(detid, sensid);
+  if (!pne) {
+    return nullptr;
+  }
+
+  TGeoPhysicalNode* pnode = pne->GetPhysicalNode();
+  if (pnode) {
+    return pnode->GetMatrix();
+  }
+
+  const char* path = pne->GetTitle();
+  gGeoManager->PushPath(); // Preserve the modeler state.
+  if (!gGeoManager->cd(path)) {
+    gGeoManager->PopPath();
+    LOG(error) << "Volume path " << path << " not valid!";
+    return nullptr;
+  }
+  matTmp = *gGeoManager->GetCurrentMatrix();
+  gGeoManager->PopPath();
+  return &matTmp;
+}
+
+//______________________________________________________________________
+Bool_t GeometryManager::getOriginalMatrix(DetID detid, int sensid, TGeoHMatrix& m)
+{
+  /**
+   * Get position matrix (original) of sensitive volume sensid of detector detid. Slow
+   **/
+  m.Clear();
+
+  const char* symname = getSymbolicName(detid, sensid);
+  if (!symname) {
+    return kFALSE;
+  }
+
+  return getOriginalMatrix(symname, m);
+}
+
+//______________________________________________________________________
+bool GeometryManager::applyAlignment(const std::vector<const std::vector<o2::detectors::AlignParam>*> algPars)
+{
+  /// misalign geometry with alignment objects from the array, optionaly check overlaps
+  for (auto dv : algPars) {
+    if (dv && !applyAlignment(*dv)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+//______________________________________________________________________
+bool GeometryManager::applyAlignment(const std::vector<o2::detectors::AlignParam>& algPars)
+{
+  /// misalign geometry with alignment objects from the array, optionaly check overlaps
+  int nvols = algPars.size();
+  std::vector<int> ord(nvols);
+  std::iota(std::begin(ord), std::end(ord), 0); // sort to apply alignment in correct hierarchy
+  std::sort(std::begin(ord), std::end(ord), [&algPars](int a, int b) { return algPars[a].getLevel() < algPars[b].getLevel(); });
+
+  bool res = true;
+  for (int i = 0; i < nvols; i++) {
+    if (!algPars[ord[i]].applyToGeometry(GeometryManagerParam::Instance().printLevel)) {
+      res = false;
+      LOG(error) << "Error applying alignment object for volume" << algPars[ord[i]].getSymName();
+    }
+  }
+  return res;
+}
+
+// ================= methods for nested MatBudgetExt class ================
+
+//______________________________________________________________________
+void GeometryManager::MatBudgetExt::normalize(double step)
+{
+  double nrm = 1. / step;
+  meanRho *= nrm;
+  meanA *= nrm;
+  meanZ *= nrm;
+  meanZ2A *= nrm;
+  if (nrm > 0.) {
+    length = step;
+  }
+}
+
+//______________________________________________________________________
+void GeometryManager::accountMaterial(const TGeoMaterial* material, GeometryManager::MatBudgetExt& bd)
+{
+  bd.meanRho = material->GetDensity();
+  bd.meanX2X0 = material->GetRadLen();
+  bd.meanA = material->GetA();
+  bd.meanZ = material->GetZ();
+  if (material->IsMixture()) {
+    TGeoMixture* mixture = (TGeoMixture*)material;
+    Double_t norm = 0.;
+    bd.meanZ2A = 0.;
+    for (Int_t iel = 0; iel < mixture->GetNelements(); iel++) {
+      norm += mixture->GetWmixt()[iel];
+      bd.meanZ2A += mixture->GetZmixt()[iel] * mixture->GetWmixt()[iel] / mixture->GetAmixt()[iel];
+    }
+    bd.meanZ2A /= norm;
+  } else {
+    bd.meanZ2A = bd.meanZ / bd.meanA;
+  }
+}
+
+//_____________________________________________________________________________________
+GeometryManager::MatBudgetExt GeometryManager::meanMaterialBudgetExt(float x0, float y0, float z0, float x1, float y1, float z1)
+{
+  //
+  // TODO? It seems there is no real nead for extended material budget, consider eliminating it
+  //
+  // Calculate mean material budget and material properties (extended version) between
+  //    the points "0" and "1".
+  //
+  // see MatBudgetExt data members for provided information
+  //
+  //  Origin:  Marian Ivanov, Marian.Ivanov@cern.ch
+  //
+  //  Corrections and improvements by
+  //        Andrea Dainese, Andrea.Dainese@lnl.infn.it,
+  //        Andrei Gheata,  Andrei.Gheata@cern.ch
+  //
+  //  Ported to O2: ruben.shahoyan@cern.ch
+  //
+  if (!gGeoManager) {
+    throw std::runtime_error("meanMaterialBudgetExt requires geometry loaded");
+  }
+  double length, startD[3] = {x0, y0, z0};
+  double dir[3] = {x1 - x0, y1 - y0, z1 - z0};
+  if ((length = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]) < TGeoShape::Tolerance() * TGeoShape::Tolerance()) {
+    return MatBudgetExt(); // return empty struct
+  }
+  length = TMath::Sqrt(length);
+  double invlen = 1. / length;
+  for (int i = 3; i--;) {
+    dir[i] *= invlen;
+  }
+  std::lock_guard<std::mutex> guard(sTGMutex);
+  // Initialize start point and direction
+  TGeoNode* currentnode = gGeoManager->InitTrack(startD, dir);
+  if (!currentnode) {
+    LOG(error) << "start point out of geometry: " << x0 << ':' << y0 << ':' << z0;
+    return MatBudgetExt(); // return empty struct
+  }
+
+  MatBudgetExt budTotal, budStep;
+  accountMaterial(currentnode->GetVolume()->GetMedium()->GetMaterial(), budStep);
+  budStep.length = length;
+
+  // Locate next boundary within length without computing safety.
+  // Propagate either with length (if no boundary found) or just cross boundary
+  gGeoManager->FindNextBoundaryAndStep(length, kFALSE);
+  Double_t stepTot = 0.0; // Step made
+  Double_t step = gGeoManager->GetStep();
+  // If no boundary within proposed length, return current step data
+  if (!gGeoManager->IsOnBoundary()) {
+    budStep.meanX2X0 = budStep.length / budStep.meanX2X0;
+    return MatBudgetExt(budStep);
+  }
+  // Try to cross the boundary and see what is next
+  Int_t nzero = 0;
+  while (length > TGeoShape::Tolerance()) {
+    if (step < 2. * TGeoShape::Tolerance()) {
+      nzero++;
+    } else {
+      nzero = 0;
+    }
+    if (nzero > 3) {
+      // This means navigation has problems on one boundary
+      // Try to cross by making a small step
+      const double* curPos = gGeoManager->GetCurrentPoint();
+      LOG(warning) << "Cannot cross boundary at (" << curPos[0] << ',' << curPos[1] << ',' << curPos[2] << ')';
+      budTotal.normalize(stepTot);
+      budTotal.nCross = -1; // flag failed navigation
+      return MatBudgetExt(budTotal);
+    }
+    stepTot += step;
+
+    budTotal.meanRho += step * budStep.meanRho;
+    budTotal.meanX2X0 += step / budStep.meanX2X0;
+    budTotal.meanA += step * budStep.meanA;
+    budTotal.meanZ += step * budStep.meanZ;
+    budTotal.meanZ2A += step * budStep.meanZ2A;
+    budTotal.nCross++;
+
+    if (step >= length) {
+      break;
+    }
+    currentnode = gGeoManager->GetCurrentNode();
+    if (!currentnode) {
+      break;
+    }
+    length -= step;
+    accountMaterial(currentnode->GetVolume()->GetMedium()->GetMaterial(), budStep);
+    gGeoManager->FindNextBoundaryAndStep(length, kFALSE);
+    step = gGeoManager->GetStep();
+  }
+  budTotal.normalize(stepTot);
+  return MatBudgetExt(budTotal);
+}
+
+//_____________________________________________________________________________________
+o2::base::MatBudget GeometryManager::meanMaterialBudget(float x0, float y0, float z0, float x1, float y1, float z1,
+                                                        TGeoNavigator* nav)
+{
+  //
+  // Calculate mean material budget and material properties between
+  //    the points "0" and "1".
+  //
+  //  see MatBudget data members for provided information
+  //
+  //  Origin:  Marian Ivanov, Marian.Ivanov@cern.ch
+  //
+  //  Corrections and improvements by
+  //        Andrea Dainese, Andrea.Dainese@lnl.infn.it,
+  //        Andrei Gheata,  Andrei.Gheata@cern.ch
+  //
+  //  Ported to O2: ruben.shahoyan@cern.ch
+  //
+  //  Multi-threaded execution: pass a navigator owned by the calling thread.
+  //
+
+  double length, startD[3] = {x0, y0, z0};
+  double dir[3] = {x1 - x0, y1 - y0, z1 - z0};
+  if ((length = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]) < TGeoShape::Tolerance() * TGeoShape::Tolerance()) {
+    return o2::base::MatBudget(); // return empty struct
+  }
+  length = TMath::Sqrt(length);
+  double invlen = 1. / length;
+  for (int i = 3; i--;) {
+    dir[i] *= invlen;
+  }
+  // A caller that passes its own navigator owns it exclusively, so no locking is needed. A caller
+  // that passes none shares gGeoManager's current navigator and must still serialize. Deciding
+  // this from the argument keeps the choice local: it does not depend on -- and cannot be broken
+  // by -- process-global state such as TGeoManager::GetMaxThreads().
+  std::unique_lock<std::mutex> guard(sTGMutex, std::defer_lock);
+  if (!nav) {
+    guard.lock();
+    nav = gGeoManager->GetCurrentNavigator();
+  }
+  // Initialize start point and direction
+  TGeoNode* currentnode = nav->InitTrack(startD, dir);
+  if (!currentnode) {
+    LOG(error) << "start point out of geometry: " << x0 << ':' << y0 << ':' << z0;
+    return o2::base::MatBudget(); // return empty struct
+  }
+
+  o2::base::MatBudget budTotal, budStep;
+  accountMaterial(currentnode->GetVolume()->GetMedium()->GetMaterial(), budStep);
+  budStep.length = length;
+
+  // Locate next boundary within length without computing safety.
+  // Propagate either with length (if no boundary found) or just cross boundary
+  nav->FindNextBoundaryAndStep(length, kFALSE);
+  Double_t stepTot = 0.0; // Step made
+  Double_t step = nav->GetStep();
+  // If no boundary within proposed length, return current step data
+  if (!nav->IsOnBoundary()) {
+    budStep.meanX2X0 = budStep.length / budStep.meanX2X0;
+    return o2::base::MatBudget(budStep);
+  }
+  // Try to cross the boundary and see what is next
+  Int_t nzero = 0;
+  while (length > TGeoShape::Tolerance()) {
+    if (step < 2. * TGeoShape::Tolerance()) {
+      nzero++;
+    } else {
+      nzero = 0;
+    }
+    if (nzero > 3) {
+      // This means navigation has problems on one boundary
+      // Try to cross by making a small step
+      const double* curPos = nav->GetCurrentPoint();
+      LOG(warning) << "Cannot cross boundary at (" << curPos[0] << ',' << curPos[1] << ',' << curPos[2] << ')';
+      budTotal.meanRho /= stepTot;
+      budTotal.length = stepTot;
+      return o2::base::MatBudget(budTotal);
+    }
+    stepTot += step;
+
+    budTotal.meanRho += step * budStep.meanRho;
+    budTotal.meanX2X0 += step / budStep.meanX2X0;
+
+    if (step >= length) {
+      break;
+    }
+    currentnode = nav->GetCurrentNode();
+    if (!currentnode) {
+      break;
+    }
+    length -= step;
+    accountMaterial(currentnode->GetVolume()->GetMedium()->GetMaterial(), budStep);
+    nav->FindNextBoundaryAndStep(length, kFALSE);
+    step = nav->GetStep();
+  }
+  budTotal.meanRho /= stepTot;
+  budTotal.length = stepTot;
+  return o2::base::MatBudget(budTotal);
+}
+
+//_________________________________
+void GeometryManager::applyMisalignent(bool applyMisalignment)
+{
+  ///< load geometry from file
+  if (!isGeometryLoaded()) {
+    LOG(fatal) << "geometry is not loaded";
+  }
+  if (applyMisalignment) {
+    auto& aligner = Aligner::Instance();
+    aligner.applyAlignment();
+  }
+}
+
+//_________________________________
+void GeometryManager::loadGeometry(std::string_view simPrefix, bool applyMisalignment, bool preferAlignedFile)
+{
+  auto loadGeom = [](const std::string_view fname) {
+    LOG(info) << "Loading geometry from " << fname;
+    TFile flGeom(fname.data());
+    if (flGeom.IsZombie()) {
+      LOG(fatal) << "Failed to open file " << fname;
+    }
+    // try under the standard CCDB name
+    if (!flGeom.Get(std::string(o2::base::NameConf::CCDBOBJECT).c_str()) &&
+        !flGeom.Get(std::string(o2::base::NameConf::GEOMOBJECTNAME_FAIR).c_str())) {
+      LOG(fatal) << "Did not find geometry named " << o2::base::NameConf::CCDBOBJECT << " or " << o2::base::NameConf::GEOMOBJECTNAME_FAIR;
+    }
+  };
+
+  if (preferAlignedFile) {
+    ///< load directly from aligned file and apply alignment on top
+    loadGeom(o2::base::NameConf::getAlignedGeomFileName(simPrefix));
+  } else {
+    ///< load geometry from unaligned file and apply alignment on top
+    loadGeom(o2::base::NameConf::getGeomFileName(simPrefix));
+    applyMisalignent(applyMisalignment);
+  }
+}
+
+#ifdef O2_WITH_VECGEOM
+
+namespace
+{
+/// Volumes with very few daughters are cheaper to brute-force than to accelerate. Defined once
+/// because two places must agree on it: where the navigators and locators are attached below,
+/// and where vecGeomMaterialBudget() decides how to take a step.
+bool usesBvhAcceleration(vecgeom::LogicalVolume const* vol)
+{
+  return vol->GetDaughtersp()->size() > 2;
+}
+
+/// Converts the currently loaded TGeo geometry to VecGeom and sets up navigators, once per
+/// process, the first time the VecGeom backend is requested. Not part of loadGeometry(),
+/// which every job calls regardless of whether it ever uses the VecGeom backend.
+void ensureVecGeomWorldBuilt()
+{
+  GeometryManager::buildVecGeomGeometry(true);
+}
+} // namespace
+
+void GeometryManager::buildVecGeomGeometry(bool flattenAssemblies, int booleanThreshold)
+{
+  static std::once_flag onceFlag;
+  std::call_once(onceFlag, [flattenAssemblies, booleanThreshold]() {
+    if (!gGeoManager) {
+      LOG(fatal) << "Cannot build VecGeom geometry: no TGeo geometry loaded (call GeometryManager::loadGeometry() first)";
+    }
+    // Translate geometry and material pointers, then build acceleration structures.
+    tgeo2vecgeom::RootGeoManager::Instance().SetMaterialConversionHook([](TGeoMaterial const* m) { return (void*)m; });
+    LOG(info) << "VecGeom conversion: flattenAssemblies=" << flattenAssemblies;
+    tgeo2vecgeom::RootGeoManager::Instance().SetFlattenAssemblies(flattenAssemblies);
+#if __has_include(<VecGeom/management/BooleanFactory.h>)
+    // Applied when the conversion closes the geometry.
+    LOG(info) << "VecGeom conversion: booleanThreshold=" << booleanThreshold;
+    vecgeom::GeoManager::Instance().SetBooleanOptimizationThreshold(booleanThreshold > 0 ? booleanThreshold : 0);
+#else
+    if (booleanThreshold > 0) {
+      LOG(warning) << "VecGeom without BooleanFactory: Boolean solids are kept as converted";
+    }
+#endif
+    tgeo2vecgeom::RootGeoManager::Instance().LoadRootGeometry();
+
+    // Acceleration structures must be built before the navigators/locators reference them.
+#if VECGEOM_VERSION < 0x020000
+    // VecGeom 2 has no ABBoxManager: the BVH below is built directly.
+    vecgeom::ABBoxManager::Instance().InitABBoxesForCompleteGeometry();
+#endif
+    // Builds a BVH per logical volume.
+    vecgeom::BVHManager::Init();
+
+    // For each logical volume, set a navigator (used for ComputeStep), a matched level locator
+    // (used for point relocation after a boundary crossing via GlobalLocator) and, where the
+    // VNavigator family is complete, the safety estimator LogicalVolume::GetSafetyEstimator()
+    // hands out, which is separate from the one a navigator uses internally.
+    for (auto& lvol : vecgeom::GeoManager::Instance().GetLogicalVolumesMap()) {
+      auto* vol = lvol.second;
+      if (!usesBvhAcceleration(vol)) {
+        vol->SetNavigator(vecgeom::NewSimpleNavigator<>::Instance());
+#ifdef O2_VECGEOM_HAS_BVH_VNAVIGATOR
+        vol->SetLevelLocator(vol->ContainsAssembly() ? vecgeom::SimpleAssemblyLevelLocator::GetInstance()
+                                                     : vecgeom::SimpleLevelLocator::GetInstance());
+        vol->SetSafetyEstimator(vecgeom::SimpleSafetyEstimator::Instance());
+#else
+        vol->SetLevelLocator(vecgeom::SimpleLevelLocator::GetInstance());
+#endif
+      } else {
+#if defined(O2_VECGEOM_HAS_BVH_VNAVIGATOR)
+        vol->SetNavigator(vecgeom::BVHNavigatorV<>::Instance());
+        vol->SetLevelLocator(vol->ContainsAssembly() ? vecgeom::BVHAssemblyAwareLevelLocator::GetInstance()
+                                                     : vecgeom::BVHLevelLocator::GetInstance());
+        vol->SetSafetyEstimator(vecgeom::BVHSafetyEstimator::Instance());
+#elif VECGEOM_VERSION >= 0x020000
+        // VecGeom 2 turned BVHNavigator into a plain class with static entry points instead of a
+        // VNavigator singleton, so there is nothing to attach: vecGeomMaterialBudget() calls it
+        // directly.
+        //
+        // The locator changes too, and not by choice. BVHLevelLocator does not compile in 2.1.0 or
+        // 2.1.1 -- the header is byte-identical in both -- because its four LevelLocate() calls
+        // have no match among the single templated BVH::LevelLocate(int exclude_item_id, ...) that
+        // v2 ships. It survived two releases because nothing in VecGeom includes that header
+        // except itself, so upstream CI never compiles it; O2 appears to be its only consumer.
+        //
+        // SimpleABBoxLevelLocator is the accelerated stand-in, using the ABBoxes built just above.
+        // Three of the four methods could be rebuilt on the templated API (the idiom is in
+        // BVHNavigator itself: bvh->LevelInside<BVHNavigator>(exclude_id, point, id, dlp)), but
+        // the direction-aware LevelLocateExclVol has no v2 counterpart at all, so this stays a
+        // fallback rather than a reimplementation. Revert to BVHLevelLocator once upstream fixes
+        // or removes it, and measure: whether ABBox location costs anything real here is unknown.
+        vol->SetLevelLocator(vecgeom::SimpleABBoxLevelLocator::GetInstance());
+#else
+        vol->SetNavigator(vecgeom::BVHNavigator<>::Instance());
+        vol->SetLevelLocator(vecgeom::BVHLevelLocator::GetInstance());
+#endif
+      }
+    }
+  });
+}
+
+//_____________________________________________________________________________________
+o2::base::MatBudget GeometryManager::vecGeomMaterialBudget(float x0, float y0, float z0, float x1, float y1, float z1)
+{
+  // Mean material budget between "0" and "1" via VecGeom's BVH-accelerated ray/boundary
+  // intersection, instead of TGeo.
+  ensureVecGeomWorldBuilt();
+
+  using Vector3D = vecgeom::Vector3D<vecgeom::Precision>;
+
+  double length, start[3] = {x0, y0, z0};
+  double dir[3] = {x1 - x0, y1 - y0, z1 - z0};
+  if ((length = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]) < TGeoShape::Tolerance() * TGeoShape::Tolerance()) {
+    return o2::base::MatBudget(); // return empty struct
+  }
+  length = std::sqrt(length);
+  double invlen = 1. / length;
+  for (int i = 3; i--;) {
+    dir[i] *= invlen;
+  }
+
+  // Only the allocation differs between VecGeom versions; everything below works on pointers in
+  // both, which also keeps the std::swap() at the end of the loop a pointer swap rather than a
+  // copy of the state itself.
+  //
+  // VecGeom 1 builds NavigationState as NavStatePath, a variable-size object that must be told the
+  // maximum depth at construction and can only be made through MakeInstance(). VecGeom 2 dropped
+  // NavStatePath and MakeInstance with it: NavigationState is NavStateIndex or NavStateTuple, both
+  // fixed-size value types, so a thread_local object is the direct equivalent.
+#if VECGEOM_VERSION >= 0x020000
+  thread_local static vecgeom::NavigationState newnavstateStorage, currnavstateStorage, startCacheStorage;
+  thread_local static vecgeom::NavigationState* newnavstate = &newnavstateStorage;
+  thread_local static vecgeom::NavigationState* currnavstate = &currnavstateStorage;
+  thread_local static vecgeom::NavigationState* startCache = &startCacheStorage;
+#else
+  thread_local static vecgeom::NavigationState* newnavstate = vecgeom::NavigationState::MakeInstance(vecgeom::GeoManager::Instance().getMaxDepth());
+  thread_local static vecgeom::NavigationState* currnavstate = vecgeom::NavigationState::MakeInstance(vecgeom::GeoManager::Instance().getMaxDepth());
+  thread_local static vecgeom::NavigationState* startCache = vecgeom::NavigationState::MakeInstance(vecgeom::GeoManager::Instance().getMaxDepth());
+#endif
+  thread_local static bool startCacheValid = false;
+
+  Vector3D currPoint(x0, y0, z0);
+  Vector3D dirr(dir[0], dir[1], dir[2]);
+  constexpr double kPush = 1.E-6; // mimick the nudging of TGeo's FindNextBoundaryAndStep
+  auto world = vecgeom::GeoManager::Instance().GetWorld();
+  o2::base::MatBudget budTot, budStep;
+  budStep.length = length;
+
+  // Locate the starting volume, reusing the path from the previous call when still valid.
+  if (startCacheValid && !startCache->IsOutside()) {
+    startCache->CopyTo(currnavstate);
+    vecgeom::Transformation3D m;
+    currnavstate->TopMatrix(m);
+    vecgeom::GlobalLocator::RelocatePointFromPath(m.Transform(currPoint), *currnavstate);
+  } else {
+    currnavstate->Clear();
+    vecgeom::GlobalLocator::LocateGlobalPoint(world, currPoint, *currnavstate, true);
+  }
+  if (currnavstate->IsOutside() || currnavstate->Top() == nullptr) {
+    LOG(error) << "start point out of geometry: " << x0 << ':' << y0 << ':' << z0;
+    startCacheValid = false;
+    return o2::base::MatBudget();
+  }
+  currnavstate->CopyTo(startCache);
+  startCacheValid = true;
+
+  double stepTot = 0.;
+  double remainingDist = length;
+  Int_t nzero = 0;
+  while (remainingDist > 1.E-10) {
+    auto* lvol = currnavstate->Top()->GetLogicalVolume();
+    // Not LogicalVolume::GetMaterialPtr(): VecGeom 2 dropped the material slot from the logical
+    // volume. TGeo2VecGeom keeps what its conversion hook returned, indexed by logical volume id,
+    // and serves it for both VecGeom versions.
+    accountMaterial(static_cast<TGeoMaterial*>(tgeo2vecgeom::RootGeoManager::Instance().GetMaterialPtr(lvol)), budStep);
+#if VECGEOM_VERSION >= 0x020000
+    const double step =
+      usesBvhAcceleration(lvol)
+        ? static_cast<double>(vecgeom::BVHNavigator::ComputeStepAndPropagatedState(currPoint, dirr, remainingDist, *currnavstate, *newnavstate))
+        : static_cast<double>(lvol->GetNavigator()->ComputeStepAndPropagatedState(currPoint, dirr, remainingDist, *currnavstate, *newnavstate));
+#else
+    const double step = static_cast<double>(lvol->GetNavigator()->ComputeStepAndPropagatedState(currPoint, dirr, remainingDist, *currnavstate, *newnavstate));
+#endif
+    if (step < 2.E-10) {
+      nzero++;
+    } else {
+      nzero = 0;
+    }
+    if (nzero > 3) {
+      // This means navigation has problems on one boundary
+      LOG(warning) << "Cannot cross boundary at (" << currPoint[0] << ',' << currPoint[1] << ',' << currPoint[2] << ')';
+      budTot.meanRho /= stepTot;
+      budTot.length = stepTot;
+      return o2::base::MatBudget(budTot);
+    }
+
+    remainingDist -= step;
+    stepTot += step;
+    budTot.meanRho += step * budStep.meanRho;
+    budTot.meanX2X0 += step / budStep.meanX2X0;
+    currPoint = currPoint + (step + kPush) * dirr;
+    std::swap(currnavstate, newnavstate);
+  }
+  budTot.meanRho /= stepTot;
+  budTot.length = stepTot;
+  return o2::base::MatBudget(budTot);
+}
+
+#endif // O2_WITH_VECGEOM
+
+//_____________________________________________________________________________________
+bool GeometryManager::ensureVecGeomWorld()
+{
+#ifdef O2_WITH_VECGEOM
+  ensureVecGeomWorldBuilt();
+  return true;
+#else
+  return false;
+#endif
+}
+
+//_____________________________________________________________________________________
+bool GeometryManager::vecGeomLocate(double x, double y, double z, std::vector<TGeoNode*>& chain)
+{
+  chain.clear();
+#ifdef O2_WITH_VECGEOM
+  ensureVecGeomWorldBuilt();
+  // One state per thread, as for the material budget above, and allocated the
+  // same way: see the comment there on NavStatePath vs NavStateIndex.
+#if VECGEOM_VERSION >= 0x020000
+  thread_local vecgeom::NavigationState stateStorage;
+  thread_local vecgeom::NavigationState* state = &stateStorage;
+#else
+  thread_local vecgeom::NavigationState* state =
+    vecgeom::NavigationState::MakeInstance(vecgeom::GeoManager::Instance().getMaxDepth());
+#endif
+  state->Clear();
+  const vecgeom::Vector3D<vecgeom::Precision> point(x, y, z);
+  if (vecgeom::GlobalLocator::LocateGlobalPoint(vecgeom::GeoManager::Instance().GetWorld(), point, *state, true) ==
+      nullptr) {
+    return false;
+  }
+  auto const& converter = tgeo2vecgeom::RootGeoManager::Instance();
+  for (int level = 0; level < (int)state->GetCurrentLevel(); ++level) {
+    auto const* placed = state->At(level);
+    auto const* node = placed != nullptr ? converter.tgeonode(placed) : nullptr;
+    if (node == nullptr) {
+      chain.clear();
+      return false;
+    }
+    chain.push_back(const_cast<TGeoNode*>(node));
+  }
+  return !chain.empty();
+#else
+  (void)x;
+  (void)y;
+  (void)z;
+  return false;
+#endif
+}
