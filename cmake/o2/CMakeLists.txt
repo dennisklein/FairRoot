@@ -101,10 +101,13 @@ if(FLATSIM_STATIC)
   # Nothing references the ROOT dictionaries in the archives, so the linker
   # would drop them. WHOLE_ARCHIVE keeps them, and their static
   # initializers register the classes with ROOT.
+  # The archives come in again as normal dependencies, so CMake's
+  # WHOLE_ARCHIVE feature is not allowed; explicit linker options are.
+  set(whole_archives ${o2_targets} VMCLibrary ${Geant4VMC_LIBRARIES})
+  list(TRANSFORM whole_archives REPLACE "(.+)" "$<TARGET_FILE:\\1>")
   target_compile_definitions(fv0sim PRIVATE FLATSIM_STATIC)
-  target_link_libraries(fv0sim PRIVATE
-    "$<LINK_LIBRARY:WHOLE_ARCHIVE,${o2_targets}>"
-    "$<LINK_LIBRARY:WHOLE_ARCHIVE,VMCLibrary;${Geant4VMC_LIBRARIES}>")
+  target_link_options(fv0sim PRIVATE LINKER:--whole-archive ${whole_archives} LINKER:--no-whole-archive)
+  target_link_libraries(fv0sim PRIVATE ${o2_targets})
 else()
   list(REMOVE_ITEM o2_targets O2G4Setup)
   target_link_libraries(fv0sim PRIVATE ${o2_targets})
@@ -114,11 +117,28 @@ install(TARGETS fv0sim RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Harness tool: reads the simulation output through ROOT I/O only.
 add_executable(fv0dump "${FLATSIM_HARNESS_DIR}/fv0dump.cxx")
 if(FLATSIM_STATIC)
-  target_link_libraries(fv0dump PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${o2_targets}>")
+  target_link_options(fv0dump PRIVATE LINKER:--whole-archive ${whole_archives} LINKER:--no-whole-archive)
+  target_link_libraries(fv0dump PRIVATE ${o2_targets})
 else()
   target_link_libraries(fv0dump PRIVATE DataFormatsFV0 SimulationDataFormat)
 endif()
 install(TARGETS fv0dump RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(FLATSIM_STATIC)
+  # A dictionary linked into a program looks for its PCM file next to the
+  # program, not in lib/. Link the PCM files of the static libraries there.
+  install(CODE [[
+    file(GLOB pcms "${CMAKE_INSTALL_PREFIX}/lib/libO2*_rdict.pcm"
+                   "${CMAKE_INSTALL_PREFIX}/lib/libVMCLibrary_rdict.pcm"
+                   "${CMAKE_INSTALL_PREFIX}/lib/libgeant4vmc_rdict.pcm"
+                   "${CMAKE_INSTALL_PREFIX}/lib/libg4root_rdict.pcm"
+                   "${CMAKE_INSTALL_PREFIX}/lib/libmtroot_rdict.pcm")
+    foreach(pcm IN LISTS pcms)
+      get_filename_component(name "${pcm}" NAME)
+      file(CREATE_LINK "../lib/${name}" "${CMAKE_INSTALL_PREFIX}/bin/${name}" SYMBOLIC)
+    endforeach()
+  ]])
+endif()
 
 # Run time data, at the same place below share/ as in an O2 installation.
 set(share "${CMAKE_INSTALL_DATADIR}")

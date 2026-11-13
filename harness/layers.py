@@ -37,6 +37,32 @@ def is_plt(key):
     return (ob or "???") == "???" or (fn or "").startswith("0x")
 
 
+# The layer of a function by its source file. This also works when several
+# layers are linked into one binary (T2b and later).
+FILE_LAYERS = [
+    ("geant4_vmc", re.compile(r"/extern/geant4_vmc/")),
+    ("Geant4", re.compile(r"/extern/geant4/")),
+    ("VMC", re.compile(r"/extern/vmc/")),
+    ("FairRoot", re.compile(r"/extern/o2/Detectors/3rdparty/FairRootBase/")),
+    ("O2", re.compile(r"/extern/o2/|/app/")),
+    ("ROOT", re.compile(r"/extern/root/")),
+    ("Pythia8", re.compile(r"/extern/pythia8/")),
+    ("support", re.compile(r"/extern/(tbb|boost|fmt|fairlogger)/")),
+    # Inline code of the C++ standard library, compiled into the caller's object.
+    ("system", re.compile(r"^/usr/(include|lib/gcc)/")),
+]
+
+
+def layer_of_key(key, files):
+    """Layer of a function key (object, function): by source file, else by object."""
+    f = files.get(key)
+    if f:
+        for name, pat in FILE_LAYERS:
+            if pat.search(f):
+                return name
+    return layer_of(key[0])
+
+
 def layer_of(obj):
     base = obj or "???"
     if base == "???":
@@ -52,7 +78,8 @@ def parse(path):
     names = {}
     self_cost = collections.Counter()
     calls = collections.Counter()
-    ob = fn = cob = cfn = None
+    files = {}
+    ob = fn = cob = cfn = fl = None
     pending_call = None
     events = None
 
@@ -72,8 +99,15 @@ def parse(path):
                 ob = resolve("ob", line[3:].strip())
             elif line.startswith("cob="):
                 cob = resolve("ob", line[4:].strip())
+            elif line.startswith("fl="):
+                fl = resolve("fl", line[3:].strip())
+            elif line.startswith(("fi=", "fe=")):
+                resolve("fl", line[3:].strip())
+            elif line.startswith("cfi=") or line.startswith("cfl="):
+                resolve("fl", line[4:].strip())
             elif line.startswith("fn="):
                 fn = resolve("fn", line[3:].strip())
+                files.setdefault((ob, fn), fl)
                 cob = cfn = None
             elif line.startswith("cfn="):
                 cfn = resolve("fn", line[4:].strip())
@@ -87,7 +121,7 @@ def parse(path):
                 else:
                     parts = line.split()
                     self_cost[(ob, fn)] += int(parts[1]) if len(parts) > 1 else 0
-    return self_cost, calls, (events or ["Ir"])[0]
+    return self_cost, calls, files, (events or ["Ir"])[0]
 
 
 def short(fn, width=70):
@@ -104,10 +138,12 @@ def main():
     ap.add_argument("--json")
     args = ap.parse_args()
 
-    self_cost, calls, event = parse(args.profile)
+    self_cost, calls, files, event = parse(args.profile)
     label = os.path.basename(args.profile)
     if args.minus:
-        s2, c2, _ = parse(args.minus)
+        s2, c2, f2, _ = parse(args.minus)
+        for k, v in f2.items():
+            files.setdefault(k, v)
         self_cost.subtract(s2)
         calls.subtract(c2)
         label += " minus " + os.path.basename(args.minus)
@@ -115,7 +151,7 @@ def main():
 
     layer_cost = collections.Counter()
     for (ob, fn), c in self_cost.items():
-        layer_cost[layer_of(ob)] += c
+        layer_cost[layer_of_key((ob, fn), files)] += c
     # Look through PLT stubs: a call to a stub counts as calls to the targets of the stub.
     plt_targets = collections.defaultdict(collections.Counter)
     for (caller, callee), n in calls.items():
@@ -131,14 +167,14 @@ def main():
             total_out = sum(out.values())
             for target, m in out.items():
                 resolved[(caller, target)] += n * m / total_out
-                plt_calls[(layer_of(caller[0]), layer_of(target[0]))] += n * m / total_out
+                plt_calls[(layer_of_key(caller, files), layer_of_key(target, files))] += n * m / total_out
         else:
             resolved[(caller, callee)] += n
 
     crossings = collections.Counter()
     pair_calls = collections.Counter()
     for ((ob, fn), (cob, cfn)), n in resolved.items():
-        a, b = layer_of(ob), layer_of(cob)
+        a, b = layer_of_key((ob, fn), files), layer_of_key((cob, cfn), files)
         if a != b:
             crossings[(a, b)] += n
             pair_calls[(a, b, short(fn, 50), short(cfn, 50))] += n
@@ -151,7 +187,7 @@ def main():
     print(f"  {'total':22s} {total / per:16,.0f}")
     print(f"top {args.top} functions by self cost")
     for (ob, fn), c in self_cost.most_common(args.top):
-        print(f"  {100 * c / total:6.2f} %  {layer_of(ob):10s} {short(fn)}")
+        print(f"  {100 * c / total:6.2f} %  {layer_of_key((ob, fn), files):10s} {short(fn)}")
     print("calls across layer boundaries (caller -> callee)")
     for (a, b), n in crossings.most_common(args.top):
         if n / per >= 1:
@@ -170,7 +206,7 @@ def main():
                        "crossings": {f"{a}->{b}": n / per for (a, b), n in crossings.items()},
                        "plt_calls": {f"{a}->{b}": n / per for (a, b), n in plt_calls.items()},
                        "top_pairs": [[a, b, f1, f2, n / per] for (a, b, f1, f2), n in pair_calls.most_common(50)],
-                       "top_functions": [[layer_of(ob), short(fn, 200), c / per] for (ob, fn), c in self_cost.most_common(50)]},
+                       "top_functions": [[layer_of_key((ob, fn), files), short(fn, 200), c / per] for (ob, fn), c in self_cost.most_common(50)]},
                       f, indent=1)
 
 

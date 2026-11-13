@@ -83,6 +83,17 @@ svg .muted { fill: var(--muted); }
   <p><b>T1b</b> removes 3 % of the instructions, but it is 5.5 % slower than T1a (about 2 standard errors). LTO works only inside one shared library. Calls between functions of the same library still go through the PLT when the function is exported, because the dynamic linker may replace an exported function at run time (symbol interposition). The PLT calls inside Geant4 drop only from 316 k to 254 k per event, and inside ROOT from 242 k to 206 k. The library boundary, not the compiler, limits LTO here. T2 removes this boundary.</p>
   <p><b>T2a</b> lets the compiler and the linker bind calls inside one library directly. The PLT calls inside Geant4 drop from 254 k to 93 k per event, and inside ROOT from 206 k to 34 k. T2a is 4.6 % faster than T1b, but only as fast as T1a. So LTO in shared libraries gains nothing here, also when interposition is off. The fixed cost drops from 1.80 s to 1.53 s, because the dynamic linker resolves fewer symbols.</p>
   <p>T2a has one side effect. At start-up, ROOT reads a <code>TObject</code> after <code>delete</code>, to see if <code>delete</code> changes the memory (<code>CheckingDeleteSideEffects</code> in <code>TObject.cxx</code>). Reading freed memory is undefined behaviour. Without interposition, the compiler optimizes this probe, and ROOT prints an error and turns off its deleted-object detection. The physics is not affected, but ROOT depends on code that a compiler may legally break.</p>
+  <h3>T2b: static link with whole-program LTO</h3>
+  <p>T2b links Geant4, VMC, geant4_vmc and all O2 libraries statically into <code>fv0sim</code>, with LTO over the whole program. ROOT stays shared, because Cling and the I/O need its libraries. A second interleaved series measured it with the earlier builds. The machine was slower in this session, so the absolute numbers are higher; only the ratios count.</p>
+  <div class="box"><table>
+    <tr><th>Series 2</th><th class="num">CPU ms / event</th><th class="num">vs baseline</th><th class="num">Fixed cost</th><th>Gate</th></tr>
+    <tr><td>Baseline</td><td class="num">25.39 ± 0.64</td><td class="num">–</td><td class="num">2.13 s</td><td>reference</td></tr>
+    <tr><td>T1a</td><td class="num">22.27 ± 0.71</td><td class="num">−12.3 %</td><td class="num">1.81 s</td><td class="pass">pass</td></tr>
+    <tr><td>T2a</td><td class="num">21.54 ± 0.52</td><td class="num">−15.1 %</td><td class="num">1.78 s</td><td class="pass">pass</td></tr>
+    <tr><td>T2b: static Geant4, VMC, geant4_vmc, O2; whole-program LTO</td><td class="num">21.20 ± 0.19</td><td class="num">−16.5 %</td><td class="num">1.72 s</td><td class="pass">pass</td></tr>
+  </table></div>
+  <p>T2b is 1.6 % faster than T2a, which is within the noise. The calls between the layers now go direct: no PLT call remains between Geant4, geant4_vmc and O2. But these calls were few, about 0.2 M per event. The cost per event stays in TGeo navigation (56 %) and in the field map (24 %), and both are inside one layer.</p>
+  <p>Two practical findings. ROOT looks for the dictionary file (<code>_rdict.pcm</code>) of a dictionary next to the program, not in <code>lib/</code>, when the dictionary is linked statically. And the linker drops dictionaries that nothing references, so the archives must be linked whole.</p>
 </section>
 
 <section>
@@ -184,7 +195,7 @@ svg .muted { fill: var(--muted); }
     <tr><td>T1a</td><td>Target ISA with FMA</td><td>Done: −12.9 %</td></tr>
     <tr><td>T1b</td><td>LTO in all packages</td><td>Done: slower than T1a</td></tr>
     <tr><td>T2a</td><td>No symbol interposition inside a library</td><td>Done: as fast as T1a, lower fixed cost</td></tr>
-    <tr><td>T2b</td><td>Static link of Geant4, VMC, geant4_vmc and O2 (ROOT stays shared)</td><td>PLT between layers, whole-program LTO</td></tr>
+    <tr><td>T2b</td><td>Static link of Geant4, VMC, geant4_vmc and O2 (ROOT stays shared)</td><td>Done: −1.6 % vs T2a, within the noise</td></tr>
     <tr><td>T3</td><td>Devirtualize <code>TVirtualMC</code></td><td>Small for FV0</td></tr>
     <tr><td>T4</td><td>Remove the FairRoot dispatch layer</td><td>Small for FV0</td></tr>
     <tr><td>T5</td><td>Compile-time geometry, native Geant4 geometry</td><td>Large: TGeo navigation is half of the cost</td></tr>
